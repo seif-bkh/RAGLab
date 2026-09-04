@@ -59,6 +59,7 @@ jobs:
         working-directory: raglab
 
       - name: Check API key secret and write .env (values never logged)
+        working-directory: raglab   # .env must be next to config.py, not repo root
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}

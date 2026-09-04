@@ -194,7 +194,16 @@ def run_main() -> None:
     """Wrapper: any crash in run_steps is captured to the artifact."""
     try:
         run_steps()
-    except SystemExit:
+    except SystemExit as exc:
+        # Missing key/SDK raise SystemExit WITH a message string; capture it so
+        # the CI artifact explains the failure. Integer exits (0/1) are ours.
+        message = exc.code if isinstance(exc.code, str) else ""
+        if message:
+            progress(f"[ci] CLEAN EXIT in step {CURRENT_STEP}: {message}")
+            with open(ERROR_FILE, "a", encoding="utf-8") as fh:
+                fh.write(f"[SystemExit] step={CURRENT_STEP}\n{message}\n")
+            annotate_error([f"RAGLab CI exited at step {CURRENT_STEP}: {message[:180]}",
+                            "  details: artifact raglab-eval-results / ci_test_error.txt"])
         raise
     except BaseException as exc:  # noqa: BLE001 — CI diagnostics: keep the cause
         progress(f"[ci] CRASH in step {CURRENT_STEP}: {type(exc).__name__}: {exc}")
