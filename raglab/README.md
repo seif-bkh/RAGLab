@@ -74,8 +74,10 @@ call; not recommended).
 1. **compile-offline** — installs deps, byte-compiles every module, and runs
    `python main.py inspect` (load + chunk only, no API calls, no key needed).
 2. **integration-gemini** — needs the repository secret **`GEMINI_API_KEY`**
-   (Settings → Secrets and variables → Actions). The workflow writes it to
-   `.env` (gitignored, never logged) and runs `raglab/ci_test.py`, which drives
+   (`GOOGLE_API_KEY` is accepted as an alias, as in `.env`). Create it at
+   Settings → Secrets and variables → Actions, scoped to the repository (not
+   an environment, not a variable), with the exact name. The workflow writes
+   it to `.env` (gitignored, never logged) and runs `raglab/ci_test.py`, which drives
    the real pipeline: sanity check → `ingest --reset` → vector + hybrid
    `query` → `evaluate` — asserting mechanics (dimension, chunk counts,
    metadata fields, results JSON shape). Retrieval *quality* is not a test

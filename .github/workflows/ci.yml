@@ -57,23 +57,26 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
         working-directory: raglab
 
-      - name: Fail clearly if the API key secret is missing
+      - name: Check API key secret and write .env (values never logged)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          if [ -z "$GEMINI_API_KEY" ]; then
-            echo "::error::Secret GEMINI_API_KEY is empty or not configured. Add it in:"
-            echo "::error::Settings -> Secrets and variables -> Actions -> New repository secret"
-            echo "::error::(this workflow expects the exact name GEMINI_API_KEY)"
+          if [ -n "$GEMINI_API_KEY" ]; then
+            KEY="$GEMINI_API_KEY"; SRC="GEMINI_API_KEY"
+          elif [ -n "$GOOGLE_API_KEY" ]; then
+            KEY="$GOOGLE_API_KEY"; SRC="GOOGLE_API_KEY"
+          else
+            echo "::error::No API key secret reached this workflow."
+            echo "::error::Checked: GEMINI_API_KEY, GOOGLE_API_KEY (both empty)."
+            echo "::error::Fix: Settings -> Secrets and variables -> Actions ->"
+            echo "::error::      'New repository secret' named exactly 'GEMINI_API_KEY',"
+            echo "::error::      scoped to this repository (not an environment, not a variable)."
+            echo "::error::Then re-run this workflow (Actions tab -> Run workflow)."
             exit 1
           fi
-
-      - name: Write .env from secret (never logged; .env is gitignored)
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          printf 'GEMINI_API_KEY=%s\n' "$GEMINI_API_KEY" > .env
-          echo "wrote .env from GEMINI_API_KEY secret"
+          printf 'GEMINI_API_KEY=%s\n' "$KEY" > .env
+          echo "wrote .env from repository secret: $SRC"
 
       - name: Run full pipeline integration test
         run: python ci_test.py
