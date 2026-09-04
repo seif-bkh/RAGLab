@@ -217,7 +217,10 @@ def run_steps() -> None:
                     f"{h.get('language') or '?'} h='{heading[:20]}' "
                     f"txt='{snippet}...'"
                 )
-            notify(f"evaluation: MISS {q['id']} expected={q.get('expected')} -> "
+            any_lang = q.get("correct_any_lang_rank")
+            note = f" [answer found ANY-lang at rank {any_lang} -> language-routing] " \
+                if any_lang else " [no any-language hit in top-k] "
+            notify(f"evaluation: MISS {q['id']}{note} expected={q.get('expected')} -> "
                    + " | ".join(parts))
 
     # --- 6. Answer stub exists (regression guard) ------------------------------

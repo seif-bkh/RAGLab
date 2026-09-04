@@ -96,10 +96,25 @@ def is_correct_hit(case: dict, hit: dict) -> bool:
     return False
 
 
+def is_correct_any_lang(case: dict, hit: dict) -> bool:
+    """Like is_correct_hit but ignoring the expected_lang constraint — used to
+    tell apart a retrieval failure from a language-routing observation."""
+    relaxed = {k: v for k, v in case.items() if k != "expected_lang"}
+    return is_correct_hit(relaxed, hit)
+
+
 def find_correct_hit(case: dict, hits: list) -> dict | None:
     """First (highest-ranked) hit that satisfies the case expectation."""
     for hit in hits:
         if is_correct_hit(case, hit):
+            return hit
+    return None
+
+
+def find_correct_any_lang(case: dict, hits: list) -> dict | None:
+    """First hit matching the expectation regardless of language."""
+    for hit in hits:
+        if is_correct_any_lang(case, hit):
             return hit
     return None
 
@@ -128,6 +143,7 @@ def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool, top_k: 
 
         is_oos = case["category"] == "out-of-scope"
         correct_hit = None if is_oos else find_correct_hit(case, hits)
+        any_lang_hit = None if is_oos else find_correct_any_lang(case, hits)
 
         # "score" is the metric that determined the ranking in this mode:
         # cosine similarity for vector-only, RRF score for hybrid.
@@ -161,6 +177,10 @@ def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool, top_k: 
             "correct_rank": correct_hit["rank"] if correct_hit else None,
             "correct_score": score_of(correct_hit) if correct_hit else None,
             "correct_id": correct_hit["id"] if correct_hit else None,
+            # Where the answer sits when language is NOT constrained: separates
+            # retrieval failure from language-routing behavior on strict cases.
+            "correct_any_lang_rank": any_lang_hit["rank"] if any_lang_hit else None,
+            "correct_any_lang_id": any_lang_hit["id"] if any_lang_hit else None,
             "hit_at_1": bool(correct_hit and correct_hit["rank"] <= 1),
             "hit_at_3": bool(correct_hit and correct_hit["rank"] <= 3),
             "hit_at_5": bool(correct_hit and correct_hit["rank"] <= 5),
@@ -317,9 +337,14 @@ def print_report(run: dict):
         print("\n--- MISSES (flagged) ---")
         for q in misses:
             print(f"!! {q['id']} [{q['language']} / {q['category']}] "
-                  f"correct chunk NOT in top {conf['retrieval_top_k']}")
+                  f"correct chunk NOT in top {conf['retrieval_top_k']} "
+                  f"(strict expected_lang)")
             print(f"   question : {q['question']}")
             print(f"   expected : {q['expected']}")
+            if q.get("correct_any_lang_rank") is not None:
+                print(f"   note     : the answer WAS retrieved (any language) at "
+                      f"rank {q['correct_any_lang_rank']} — this is a LANGUAGE-"
+                      f"ROUTING observation, not a chunking/retrieval failure.")
             if q["hits"]:
                 top = q["hits"][0]
                 print(f"   top hit  : rank {top['rank']} (top score "

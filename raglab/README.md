@@ -233,6 +233,7 @@ The harness embeds every question, records top-k results, and reports:
 | **hit rate by query language** | per-language asymmetry (cross-lingual) |
 | **mean correct vs best-incorrect score** | *separation*: is the right chunk meaningfully closer, or just ranked first? A small/negative gap = the model is not actually discriminating. Scores are cosine similarity in vector-only mode and RRF scores in `--hybrid` mode |
 | **max score on out-of-scope** | what an irrelevant question still retrieves; pick a refusal threshold above this value |
+| **any-language hit on a miss** | for a strict `expected_lang` case that missed, the rank at which a chunk containing the expected fact was found *in another language* — a miss tagged this way is a **language-routing** observation (the answer exists in the corpus, the query just clustered on its own language), not a chunking/retrieval failure |
 
 It prints a per-question table (question, language, category, hit/no, rank of
 the correct chunk, its score), **flags every miss**, and saves the full run to
