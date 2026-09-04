@@ -21,8 +21,9 @@ from embedder import build_embedder
 from evaluate import (load_question_set, prepare_query_text, print_report,
                       run_evaluation, save_run)
 from loader import load_all
-from store import (get_collection, keyword_search, query_vector, rrf_merge,
-                   store_chunks)
+from store import (best_variant_merge, collection_languages, get_collection,
+                   keyword_search, query_vector, rrf_merge, store_chunks)
+from translate import QueryTranslator, detect_language
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +49,25 @@ def make_embedder(skip_sanity: bool = False):
     return embedder
 
 
+def make_translator(quiet: bool = False):
+    """Build the query translator when enabled, else None (original queries).
+
+    Never raises: an unavailable/failing translator simply means the lab runs
+    without query translation (and records it in the evaluation run config).
+    """
+    if not bool(getattr(cfg, "QUERY_TRANSLATION_ENABLED", False)):
+        if not quiet:
+            print("[translate] QUERY_TRANSLATION_ENABLED=False — original queries only")
+        return None
+    try:
+        return QueryTranslator(cfg)
+    except SystemExit:
+        raise  # missing SDK: let the actionable message propagate
+    except Exception as exc:  # noqa: BLE001 — degrade, never block retrieval
+        print(f"[translate] WARNING: disabled ({exc})")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # inspect
 # ---------------------------------------------------------------------------
@@ -64,6 +84,10 @@ def cmd_inspect(args) -> int:
           f"overlap={cfg.CHUNK_OVERLAP_TOKENS} tokens | "
           f"split_on_headings_first={cfg.SPLIT_ON_HEADINGS_FIRST} | "
           f"sentence_aware_overlap={cfg.CHUNK_OVERLAP_SENTENCE_AWARE}")
+    print(f"[inspect] query translation: enabled="
+          f"{cfg.QUERY_TRANSLATION_ENABLED} | model="
+          f"{cfg.QUERY_TRANSLATION_MODEL} | fusion=best_variant_max_score | "
+          f"cache={cfg.QUERY_TRANSLATION_CACHE_PATH.name}")
     chunks = chunk_all(docs, cfg)
     print(f"\n[inspect] {len(chunks)} chunk(s) across {len(docs)} document(s)\n")
 
@@ -163,25 +187,58 @@ def cmd_query(args) -> int:
 
     k = args.k
     lang = args.lang
-    print(f"[query] k={k} | lang_filter={lang or 'none'} | hybrid={args.hybrid}")
+    translator = None if args.no_translation else make_translator()
+    print(f"[query] k={k} | lang_filter={lang or 'none'} | hybrid={args.hybrid} | "
+          f"translation={'on' if translator else 'off'}")
 
-    q_embedding = embedder.embed_query(q_text)
-    print(f"[query] question embedding dimension={len(q_embedding)}")
-
-    vector_hits = query_vector(collection, q_embedding, k=k, lang=lang)
-    if args.hybrid:
-        kw_hits = keyword_search(collection, q_text, k=k)
-        hits = rrf_merge(vector_hits, kw_hits, k=cfg.RRF_RANK_CONSTANT)[:k]
-        print(f"[query] vector hits={len(vector_hits)} | keyword hits={len(kw_hits)} | "
-              f"fused hits={len(hits)}")
+    # Original query + translations into each corpus language (best-score
+    # fusion across variants), so cross-lingual questions see both language
+    # halves of the corpus.
+    qlang = args.query_lang or detect_language(q_text)
+    print(f"[query] detected query language: {qlang}")
+    if translator:
+        variants = translator.build_variants(q_text, qlang,
+                                             collection_languages(collection))
+        for v in variants:
+            tag = "original" if not v["translated"] else "translated"
+            print(f"[query] variant [{v['label']}] ({tag}): {v['text']}")
     else:
-        hits = vector_hits
+        variants = [{
+            "label": f"{qlang}(original)", "lang": qlang,
+            "translated": False, "text": q_text,
+        }]
+
+    variant_hit_lists = []
+    for variant in variants:
+        q_embedding = embedder.embed_query(variant["text"])
+        print(f"[query] embedded variant {variant['label']} "
+              f"dimension={len(q_embedding)}")
+        v_hits = query_vector(collection, q_embedding, k=k, lang=lang)
+        if args.hybrid:
+            kw_hits = keyword_search(collection, variant["text"], k=k)
+            v_hits = rrf_merge(v_hits, kw_hits, k=cfg.RRF_RANK_CONSTANT)[:k]
+        variant_hit_lists.append(v_hits)
+
+    if len(variant_hit_lists) > 1:
+        score_key = "rrf_score" if args.hybrid else "similarity"
+        hits = best_variant_merge(
+            variant_hit_lists, score_key=score_key,
+            labels=[v["label"] for v in variants])[:k]
+        print(f"[query] fused {len(hits)} hit(s) from {len(variants)} "
+              f"variant(s) (best-score fusion)")
+    else:
+        hits = variant_hit_lists[0]
         print(f"[query] retrieved {len(hits)} hit(s)")
 
     for hit in hits:
         meta = hit.get("metadata") or {}
         print("-" * 78)
         print(f"rank       : {hit['rank']}")
+        if hit.get("from_variant") is not None:
+            print(f"best variant: {hit['from_variant']}")
+            ranks = hit.get("variant_ranks") or {}
+            if ranks:
+                print(f"variant ranks: {ranks}")
         if hit.get("similarity") is not None:
             print(f"similarity : {hit['similarity']:+.4f}  (cosine, 1 - distance)")
         if hit.get("keyword_score") is not None:
@@ -220,8 +277,10 @@ def cmd_evaluate(args) -> int:
         return 1
 
     embedder = make_embedder(skip_sanity=args.skip_sanity_check)
+    translator = None if args.no_translation else make_translator()
     run = run_evaluation(cfg, embedder, collection, cases,
-                         hybrid=args.hybrid, top_k=args.top_k)
+                         hybrid=args.hybrid, top_k=args.top_k,
+                         translator=translator)
     print_report(run)
     save_run(run, cfg.RESULTS_DIR)
     return 0
@@ -256,8 +315,14 @@ def build_parser() -> argparse.ArgumentParser:
                          help=f"number of results (default {cfg.RETRIEVAL_TOP_K})")
     p_query.add_argument("--lang", choices=["en", "fr", "ar"], default=None,
                          help="filter stored chunks by language")
+    p_query.add_argument("--query-lang", choices=["en", "fr", "ar"], default=None,
+                         dest="query_lang",
+                         help="language of the question (default: auto-detected)")
     p_query.add_argument("--hybrid", action="store_true", default=False,
                          help="merge BM25 keyword search with vector search by RRF")
+    p_query.add_argument("--no-translation", action="store_true", default=False,
+                         dest="no_translation",
+                         help="disable query translation (original query only)")
     p_query.add_argument("--skip-sanity-check", action="store_true", default=False,
                          dest="skip_sanity_check",
                          help="skip the default 3-language sanity check")
@@ -268,6 +333,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="use vector + BM25 RRF fusion for evaluation")
     p_eval.add_argument("--top-k", type=int, default=cfg.EVAL_TOP_K,
                         help=f"hits recorded per question (default {cfg.EVAL_TOP_K})")
+    p_eval.add_argument("--no-translation", action="store_true", default=False,
+                        dest="no_translation",
+                        help="disable query translation (baseline comparison)")
     p_eval.add_argument("--skip-sanity-check", action="store_true", default=False,
                         dest="skip_sanity_check",
                         help="skip the default 3-language sanity check")

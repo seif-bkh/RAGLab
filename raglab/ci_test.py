@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 
 import config as cfg
 import main
+from evaluate import load_question_set
 from store import get_collection
 
 failures: list[str] = []
@@ -130,7 +131,41 @@ def run_steps() -> None:
 
     # --- 4. Query: vector-only + hybrid with language filter -------------------
     CURRENT_STEP = "query"
-    progress("\n[ci] STEP 4/6 — query (vector + hybrid + lang filter)")
+    progress("\n[ci] STEP 4/6 — query (vector + hybrid + lang filter + translation)")
+
+    # 4a. Query translation plumbing (cross-lingual experiment). Two batched
+    # calls warm the cache; `evaluate` below then reuses it, so the API cost
+    # stays tiny. Quality stays a reported finding; PLUMBING is asserted.
+    translator = None
+    if getattr(cfg, "QUERY_TRANSLATION_ENABLED", False):
+        progress("[ci] query translation ENABLED — plumbing check "
+                 "(2 batched calls, evaluation reuses the cache)")
+        translator = main.make_translator()
+        check("query translator constructed", translator is not None)
+        if translator is not None:
+            samples = [c for c in load_question_set(cfg.QUESTIONS_FILE)
+                       if c.get("category") == "cross-lingual"]
+            for target in ("ar", "fr"):
+                texts = [c["question"] for c in samples
+                         if c.get("language") != target]
+                if texts:
+                    translator.translate_many(texts, target)
+            check("translation API calls succeeded",
+                  translator.api_calls >= 1 and translator.failures == 0,
+                  f"calls={translator.api_calls} failures={translator.failures} "
+                  f"cache_hits={translator.cache_hits}")
+            sample = next((c for c in samples if c.get("language") == "ar"
+                           and c.get("expected_lang") == "fr"), None)
+            example = ""
+            if sample:
+                tr = translator.translate_one(sample["question"], "fr")
+                if tr:
+                    example = f" | e.g. {sample['id']} ar->fr: {tr!r}"
+            notify(f"query-translation: enabled=True model={translator.model} "
+                   f"api_calls={translator.api_calls} "
+                   f"cache_hits={translator.cache_hits} "
+                   f"failures={translator.failures}{example}")
+
     rc = main.main(["query",
                     "Quel est le frais mensuel du Compte Courant Atlas ?",
                     "--k", "5", "--skip-sanity-check"])
@@ -157,9 +192,14 @@ def run_steps() -> None:
         check("run config records model + chunking params",
               run["config"].get("embedding_model") == cfg.EMBEDDING_MODEL
               and "chunk_size_tokens" in run["config"])
+        check("run config records query translation status",
+              "query_translation_enabled" in run["config"])
         check("per-question records include hits",
               bool(run.get("questions"))
               and all("hits" in q and "category" in q for q in run["questions"]))
+        check("per-question records include query variants",
+              bool(run.get("questions"))
+              and all("query_variants" in q for q in run["questions"]))
         # Printable conclusions for the log.
         overall = metrics["overall"]
         sep = metrics["separation"]
@@ -167,6 +207,18 @@ def run_steps() -> None:
         progress(f"\n[ci] CONCLUSION — overall hit rates:"
                  f"  hit@1={overall['hit@1']:.3f}  hit@3={overall['hit@3']:.3f}"
                  f"  hit@5={overall['hit@5']:.3f}  (n={overall['n']})")
+        xl = [q for q in run.get("questions", [])
+              if q.get("category") == "cross-lingual"]
+        if xl:
+            progress("[ci]   cross-lingual detail (translation variants):")
+            for q in xl:
+                progress(f"[ci]     {q['id']} {q.get('language')}"
+                         f"->{q.get('expected_lang')} "
+                         f"correct_rank={q.get('correct_rank')} "
+                         f"correct_variant={q.get('correct_variant')} "
+                         f"top_variant={q.get('top_variant')} "
+                         f"variants="
+                         f"{[v['label'] for v in q.get('query_variants', [])]}")
         notify(f"evaluation: overall hit@1={overall['hit@1']:.3f} "
                f"hit@3={overall['hit@3']:.3f} hit@5={overall['hit@5']:.3f} "
                f"(n={overall['n']})")
@@ -214,7 +266,8 @@ def run_steps() -> None:
                 snippet = (h.get("text") or "").replace("\n", " ")[:42]
                 parts.append(
                     f"#{h['rank']} {sid} sim={score_s} "
-                    f"{h.get('language') or '?'} h='{heading[:20]}' "
+                    f"{h.get('language') or '?'} "
+                    f"v={h.get('variant') or '?'} h='{heading[:20]}' "
                     f"txt='{snippet}...'"
                 )
             any_lang = q.get("correct_any_lang_rank")

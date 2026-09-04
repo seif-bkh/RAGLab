@@ -91,3 +91,28 @@ STORE_BATCH_SIZE = 64          # records per chroma add() call
 RETRIEVAL_TOP_K = 5            # default for `query`
 RRF_RANK_CONSTANT = 60         # k used in reciprocal rank fusion: 1 / (k + rank)
 EVAL_TOP_K = 20                # how many hits evaluation records per question
+
+# ---------------------------------------------------------------------------
+# Query translation (cross-lingual retrieval) — EXPERIMENTAL
+# ---------------------------------------------------------------------------
+# The remaining retrieval failures are language routing: an Arabic question
+# clusters on Arabic chunks even though the fact also exists in the French
+# document. When enabled, every query is translated into each corpus language
+# (translate.py) and each chunk is ranked by its best score across variants
+# (store.best_variant_merge). Translation uses the SAME Google AI Studio key
+# and google-genai SDK as the embedder — no new dependency, no new secret —
+# and is retrieval-side only (answer.py remains a stub).
+#
+# Costs: 1-2 batched translation calls per run + 1 extra embedding per
+# translated variant per question. Translations are cached in
+# QUERY_TRANSLATION_CACHE_PATH. On any failure the lab degrades to the
+# original query and records it — translation is an enhancement, never a
+# blocker. Set False (or `--no-translation` on query/evaluate) for baseline
+# comparisons.
+QUERY_TRANSLATION_ENABLED = os.getenv(
+    "QUERY_TRANSLATION_ENABLED", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+QUERY_TRANSLATION_MODEL = os.getenv(
+    "QUERY_TRANSLATION_MODEL", "gemini-2.5-flash"
+)  # free AI Studio tier: 2.5 Flash / 2.5 Flash-Lite family
+QUERY_TRANSLATION_CACHE_PATH = PROJECT_DIR / "translations_cache.json"

@@ -1,0 +1,11 @@
+# Generated / local artifacts — never commit these
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# RAGLab generated data
+raglab/chroma_db/
+raglab/results/
+raglab/embeddings_cache.json
+raglab/translations_cache.json

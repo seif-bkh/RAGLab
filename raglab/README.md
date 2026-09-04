@@ -216,6 +216,40 @@ printed warning rather than mixed in.
   over stored chunk texts alongside the vector search and merges the two
   rankings by **reciprocal rank fusion** (`1/(k + rank)` per list, summed).
 
+### Query translation — cross-lingual retrieval (experimental, `translate.py`)
+
+The harness diagnostics showed the remaining failures are **language
+routing**: an Arabic question clusters on Arabic chunks even though the same
+fact exists in the French document (and vice-versa). Chunking cannot fix
+that, so by default (`QUERY_TRANSLATION_ENABLED = True`) every query is also
+translated into each corpus language and retrieval runs **per variant**:
+
+1. `translate.py` translates each question with `QUERY_TRANSLATION_MODEL`
+   (default `gemini-2.5-flash`) — **the same Google AI Studio key and
+   google-genai SDK as the embedder**: no new dependency, no new secret.
+   Whole batches go in a single numbered-lines request (at most 2 API calls
+   per run), and translations are cached in `translations_cache.json`
+   (sha256 of model + target + text).
+2. Each variant is embedded and retrieved like any other query.
+3. `store.best_variant_merge` fuses the variant rankings by **best-score
+   fusion**: every chunk keeps its highest similarity (or RRF score) across
+   variants *and the variant that produced it*, so a French chunk can win for
+   an Arabic question based on its French-variant score.
+
+Transparency: `query` prints every variant and, per hit, the `best variant`
+and all `variant ranks`; `evaluate` records `query_variants`, `top_variant`
+and `correct_variant` per question in the results JSON — you can see exactly
+which language of the query found the chunk.
+
+Notes:
+- **Retrieval-side only** — nothing generates answers; `answer.py` stays a
+  stub.
+- On any translation failure the lab **degrades to the original query** and
+  records it (never a blocker); use `--no-translation` (or
+  `QUERY_TRANSLATION_ENABLED = False`) for baseline comparisons.
+- Cost: a few translation calls (cached) + one extra embedding per translated
+  variant per question. Re-ingest is NOT needed — this is query-side only.
+
 ### Evaluation (`evaluate.py`)
 
 `questions.json` holds the test cases. Each case: `question`, `language`,
@@ -251,6 +285,8 @@ provider, model and top-k so runs are comparable after you change settings.
 | Change Gemini model / dimensions | edit `EMBEDDING_MODEL` / `GEMINI_OUTPUT_DIMENSIONALITY`, then `ingest --reset` (embedding spaces are incompatible) |
 | A/B task prompts on `gemini-embedding-2` | flip `GEMINI_USE_TASK_PROMPTS`, then `ingest --reset` |
 | Tune retrieval | `RETRIEVAL_TOP_K`, `RRF_RANK_CONSTANT`, `EVAL_TOP_K` in `config.py` |
+| Toggle query translation | `QUERY_TRANSLATION_ENABLED` in `config.py`, or `--no-translation` on `query` / `evaluate` |
+| Change translation model | edit `QUERY_TRANSLATION_MODEL` (e.g. `gemini-2.5-flash-lite`) |
 
 Typical iteration loop: `inspect` → tweak chunking → `inspect` again →
 `ingest --reset` (cached embeddings make re-ingest free) → `query` →
@@ -269,12 +305,14 @@ raglab/
 ├── embedder.py           # provider interface + cache
 ├── store.py              # ChromaDB + BM25 + RRF
 ├── evaluate.py           # metrics + results JSON
+├── translate.py          # query translation (cross-lingual experiment)
 ├── answer.py             # STUB (no generation)
 ├── questions.json        # 17 evaluation cases
 ├── data/                 # FICTIONAL sample documents (FR + AR)
 ├── chroma_db/            # local ChromaDB (gitignored, generated)
 ├── results/              # evaluation runs (gitignored, generated)
-└── embeddings_cache.json # embedding cache (gitignored, generated)
+├── embeddings_cache.json # embedding cache (gitignored, generated)
+└── translations_cache.json # query translations (gitignored, generated)
 ```
 
 ## 5.5 Troubleshooting

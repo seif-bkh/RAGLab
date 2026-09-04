@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from loader import normalize_arabic, normalize_text
-from store import keyword_search, query_vector, rrf_merge
+from store import (best_variant_merge, collection_languages, keyword_search,
+                   query_vector, rrf_merge)
 
 VALID_CATEGORIES = {"verbatim", "paraphrase", "cross-lingual", "out-of-scope"}
 
@@ -124,22 +125,57 @@ def find_correct_any_lang(case: dict, hits: list) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool, top_k: int) -> dict:
-    """Embed every question, retrieve, decide hit/miss, build the full run dict."""
+def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool,
+                   top_k: int, translator=None) -> dict:
+    """Embed every question, retrieve, decide hit/miss, build the full run dict.
+
+    When translator is not None, each query is also translated into every
+    corpus language (query variants); results are fused per chunk by their
+    best score across variants (store.best_variant_merge), so a chunk wins on
+    the language in which it matches best.
+    """
+    corpus_langs = collection_languages(collection)
+    translation_enabled = bool(
+        translator is not None and getattr(cfg, "QUERY_TRANSLATION_ENABLED", False)
+    )
+    if translation_enabled:
+        print(f"[evaluate] query translation ENABLED | model={translator.model} "
+              f"| corpus languages={corpus_langs}")
+    else:
+        print("[evaluate] query translation disabled (original queries only)")
     print(f"[evaluate] running {len(cases)} question(s) | "
           f"hybrid={hybrid} | recording top_k={top_k}")
 
     per_question = []
     for case in cases:
         q_text = prepare_query_text(case["question"])
-        q_embedding = embedder.embed_query(q_text)
-
-        vector_hits = query_vector(collection, q_embedding, k=top_k)
-        if hybrid:
-            kw_hits = keyword_search(collection, q_text, k=top_k)
-            hits = rrf_merge(vector_hits, kw_hits, k=cfg.RRF_RANK_CONSTANT)[:top_k]
+        if translation_enabled:
+            variants = translator.build_variants(
+                q_text, case.get("language"), corpus_langs)
         else:
-            hits = vector_hits
+            variants = [{
+                "label": f"{case.get('language') or '?'}(original)",
+                "lang": case.get("language"),
+                "translated": False,
+                "text": q_text,
+            }]
+
+        variant_hit_lists = []
+        for variant in variants:
+            q_embedding = embedder.embed_query(variant["text"])
+            vector_hits = query_vector(collection, q_embedding, k=top_k)
+            if hybrid:
+                kw_hits = keyword_search(collection, variant["text"], k=top_k)
+                variant_hit_lists.append(
+                    rrf_merge(vector_hits, kw_hits,
+                              k=cfg.RRF_RANK_CONSTANT)[:top_k])
+            else:
+                variant_hit_lists.append(vector_hits)
+
+        score_key = "rrf_score" if hybrid else "similarity"
+        fused = best_variant_merge(variant_hit_lists, score_key=score_key,
+                                   labels=[v["label"] for v in variants])
+        hits = fused[:top_k]
 
         is_oos = case["category"] == "out-of-scope"
         correct_hit = None if is_oos else find_correct_hit(case, hits)
@@ -162,12 +198,19 @@ def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool, top_k: 
             "expected": {k: v for k, v in case.items()
                          if k.startswith("expected") and v is not None},
             "is_out_of_scope": is_oos,
+            "query_variants": [{
+                "label": v["label"], "lang": v.get("lang"),
+                "translated": v["translated"], "text": v["text"],
+            } for v in variants],
+            "top_variant": hits[0].get("from_variant") if hits else None,
             "hits": [{
                 "rank": h["rank"],
                 "id": h["id"],
                 "heading": (h.get("metadata") or {}).get("heading"),
                 "language": (h.get("metadata") or {}).get("language"),
                 "document": (h.get("metadata") or {}).get("document"),
+                "variant": h.get("from_variant"),
+                "variant_ranks": h.get("variant_ranks"),
                 "similarity": h.get("similarity"),
                 "keyword_score": h.get("keyword_score"),
                 "rrf_score": h.get("rrf_score"),
@@ -177,6 +220,7 @@ def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool, top_k: 
             "correct_rank": correct_hit["rank"] if correct_hit else None,
             "correct_score": score_of(correct_hit) if correct_hit else None,
             "correct_id": correct_hit["id"] if correct_hit else None,
+            "correct_variant": correct_hit.get("from_variant") if correct_hit else None,
             # Where the answer sits when language is NOT constrained: separates
             # retrieval failure from language-routing behavior on strict cases.
             "correct_any_lang_rank": any_lang_hit["rank"] if any_lang_hit else None,
@@ -198,6 +242,10 @@ def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool, top_k: 
             "split_on_headings_first": cfg.SPLIT_ON_HEADINGS_FIRST,
             "retrieval_top_k": top_k,
             "hybrid": hybrid,
+            "query_translation_enabled": translation_enabled,
+            "query_translation_model": translator.model if translation_enabled else None,
+            "query_translation_fusion": "best_variant_max_score",
+            "query_translation_languages": corpus_langs,
             "rrf_rank_constant": cfg.RRF_RANK_CONSTANT,
         },
         "metrics": metrics,

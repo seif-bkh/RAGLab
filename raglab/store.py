@@ -243,6 +243,66 @@ def keyword_search(collection, query: str, k: int) -> list:
     return hits
 
 
+def collection_languages(collection) -> list[str]:
+    """Distinct chunk languages in the collection (drives translation targets)."""
+    metas = collection.get(include=["metadatas"])["metadatas"] or []
+    return sorted({m.get("language") for m in metas if m.get("language")})
+
+
+def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
+                       labels: list = None) -> list:
+    """Best-score fusion across query-language variants.
+
+    Each chunk keeps its BEST score across variants — the language in which it
+    matches best — plus the variant that produced it and every (variant, rank)
+    pair, so retrieval stays transparent. This is what makes a French chunk
+    winnable for an Arabic question: it is ranked by its French-variant score,
+    not by the Arabic-variant score of the Arabic chunks around it.
+
+    score_key selects the comparable score: "similarity" (cosine) for
+    vector-only retrieval, "rrf_score" for hybrid (both variants used the
+    same fusion constant, so the values are comparable).
+    """
+    if not variant_hit_lists:
+        return []
+    labels = [str(l) for l in (labels or range(len(variant_hit_lists)))]
+    fused: dict[str, dict] = {}
+    for v_idx, (label, hits) in enumerate(zip(labels, variant_hit_lists)):
+        for hit in hits:
+            entry = fused.setdefault(hit["id"], {
+                "id": hit["id"],
+                "text": hit["text"],
+                "metadata": hit["metadata"],
+                "similarity": None,
+                "rrf_score": None,
+                "keyword_score": None,
+                "best_score": None,
+                "from_variant": None,
+                "variant_ranks": {},
+                "_variant_order": v_idx,
+            })
+            entry["variant_ranks"][label] = hit["rank"]
+            # Keep the best value of EACH score type so hybrid entries stay
+            # recognizably hybrid; the selected score is best_score.
+            for key in ("similarity", "rrf_score", "keyword_score"):
+                val = hit.get(key)
+                if val is not None and (entry[key] is None or val > entry[key]):
+                    entry[key] = val
+            val = hit.get(score_key)
+            if val is not None and (entry["best_score"] is None
+                                    or val > entry["best_score"]):
+                entry["best_score"] = val
+                entry["from_variant"] = label
+                entry["_variant_order"] = v_idx
+
+    merged = [e for e in fused.values() if e["best_score"] is not None]
+    merged.sort(key=lambda e: (-e["best_score"], e["_variant_order"]))
+    for rank, entry in enumerate(merged, start=1):
+        entry["rank"] = rank
+        entry.pop("_variant_order", None)
+    return merged
+
+
 def rrf_merge(vector_hits: list, keyword_hits: list, k: int = 60) -> list:
     """Reciprocal rank fusion: 1/(k + rank) per list, summed, then re-ranked."""
     fused: dict[str, dict] = {}
