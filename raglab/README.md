@@ -67,6 +67,26 @@ similarities, so you can verify immediately that all three languages live in
 a shared space. Pass `--skip-sanity-check` to skip it (saves one small API
 call; not recommended).
 
+## 2. Continuous integration (GitHub Actions)
+
+`.github/workflows/ci.yml` runs automatically on push/PR. It has two jobs:
+
+1. **compile-offline** — installs deps, byte-compiles every module, and runs
+   `python main.py inspect` (load + chunk only, no API calls, no key needed).
+2. **integration-gemini** — needs the repository secret **`GEMINI_API_KEY`**
+   (Settings → Secrets and variables → Actions). The workflow writes it to
+   `.env` (gitignored, never logged) and runs `raglab/ci_test.py`, which drives
+   the real pipeline: sanity check → `ingest --reset` → vector + hybrid
+   `query` → `evaluate` — asserting mechanics (dimension, chunk counts,
+   metadata fields, results JSON shape). Retrieval *quality* is not a test
+   failure criterion: the evaluation metrics (hit rates, separation,
+   out-of-scope max) are printed to the log as the report, and the results
+   JSON is uploaded as a build artifact. Trigger it at any time with
+   **Run workflow** (Actions tab).
+
+To skip the API-backed job locally or on a fork, just don't configure the
+secret — the workflow fails with a clear message naming the expected secret.
+
 ## 3. What each module does
 
 | file | purpose |
