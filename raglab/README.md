@@ -225,7 +225,7 @@ that, so by default (`QUERY_TRANSLATION_ENABLED = True`) every query is also
 translated into each corpus language and retrieval runs **per variant**:
 
 1. `translate.py` translates each question with `QUERY_TRANSLATION_MODEL`
-   (default `gemini-2.5-flash`) — **the same Google AI Studio key and
+   (default `gemini-3.5-flash-lite`) — **the same Google AI Studio key and
    google-genai SDK as the embedder**: no new dependency, no new secret.
    Whole batches go in a single numbered-lines request (at most 2 API calls
    per run), and translations are cached in `translations_cache.json`
@@ -286,7 +286,7 @@ provider, model and top-k so runs are comparable after you change settings.
 | A/B task prompts on `gemini-embedding-2` | flip `GEMINI_USE_TASK_PROMPTS`, then `ingest --reset` |
 | Tune retrieval | `RETRIEVAL_TOP_K`, `RRF_RANK_CONSTANT`, `EVAL_TOP_K` in `config.py` |
 | Toggle query translation | `QUERY_TRANSLATION_ENABLED` in `config.py`, or `--no-translation` on `query` / `evaluate` |
-| Change translation model | edit `QUERY_TRANSLATION_MODEL` (e.g. `gemini-2.5-flash-lite`); `QUERY_TRANSLATION_FALLBACK_MODELS` is tried in order when the primary errors |
+| Change translation model | edit `QUERY_TRANSLATION_MODEL` (e.g. `gemini-3.6-flash`); `QUERY_TRANSLATION_FALLBACK_MODELS` is tried in order when the primary errors |
 
 Typical iteration loop: `inspect` → tweak chunking → `inspect` again →
 `ingest --reset` (cached embeddings make re-ingest free) → `query` →

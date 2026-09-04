@@ -12,7 +12,7 @@ Implementation notes:
 - Uses the SAME Google AI Studio key (GEMINI_API_KEY / GOOGLE_API_KEY) and the
   SAME google-genai SDK as the embedder — no new dependency, no new secret.
 - Translation model configurable: QUERY_TRANSLATION_MODEL, default
-  `gemini-2.5-flash` (free tier, 1500 RPD / 15 RPM — we need at most 2 calls
+  `gemini-3.5-flash-lite` (GA flash family, free tier — we need at most 2 calls
   per run because whole batches are translated in a single numbered-lines
   request).
 - Results cached in translations_cache.json (sha256(model + target + text)),
@@ -113,7 +113,7 @@ class QueryTranslator:
     """
 
     def __init__(self, cfg):
-        self.model = str(getattr(cfg, "QUERY_TRANSLATION_MODEL", "gemini-2.5-flash"))
+        self.model = str(getattr(cfg, "QUERY_TRANSLATION_MODEL", "gemini-3.5-flash-lite"))
         # If the primary model is unavailable for this key/project, fall back
         # to other free-tier flash models; the switch is loud and recorded.
         self.fallback_models = [
