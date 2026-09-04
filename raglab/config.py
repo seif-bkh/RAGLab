@@ -68,6 +68,10 @@ EMBEDDING_CACHE_PATH = PROJECT_DIR / "embeddings_cache.json"
 CHUNK_SIZE_TOKENS = 220
 CHUNK_OVERLAP_TOKENS = 40
 SPLIT_ON_HEADINGS_FIRST = True
+# Overlap is applied at SENTENCE boundaries (never mid-sentence): the tail of
+# a chunk is a list of whole trailing sentences, so the next chunk never opens
+# with an unreadable fragment. Set False to fall back to word-level overlap.
+CHUNK_OVERLAP_SENTENCE_AWARE = True
 
 # Tokenizer used by the chunker for counting ("cl100k_base" is the standard
 # choice for text-embedding-3-large; it handles Arabic, French and English).
@@ -77,6 +81,12 @@ TOKENIZER_MODEL = "cl100k_base"
 # ---------------------------------------------------------------------------
 # Storage / retrieval
 # ---------------------------------------------------------------------------
+# Boilerplate sections (document front-matter/title and legal/conditions
+# sections, tagged section_type by chunker.py) are retrieval magnets — they
+# mention product names, "fees", "rates" etc. without answering anything.
+# When True they are chunked (visible in `inspect`) but NOT stored, so they
+# cannot outrank real content. Set False to index everything.
+INDEX_EXCLUDE_BOILERPLATE = True
 STORE_BATCH_SIZE = 64          # records per chroma add() call
 RETRIEVAL_TOP_K = 5            # default for `query`
 RRF_RANK_CONSTANT = 60         # k used in reciprocal rank fusion: 1 / (k + rank)

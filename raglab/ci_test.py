@@ -107,13 +107,26 @@ def run_steps() -> None:
     check("both FR and AR documents stored", {"fr", "ar"} <= langs, str(sorted(langs)))
 
     required_fields = {"document", "language", "heading", "chunk_index", "source",
-                       "origin", "ingested_at", "embedding_model", "token_count"}
+                       "origin", "section_type", "ingested_at", "embedding_model",
+                       "token_count"}
     check("every record carries required metadata",
           bool(metas) and required_fields <= set(metas[0]),
           str(sorted(metas[0]) if metas else []))
     check("metadata embedding model matches config",
           bool(metas) and metas[0].get("embedding_model") == cfg.EMBEDDING_MODEL,
           metas[0].get("embedding_model") if metas else "none")
+
+    # v2 chunking strategy: boilerplate/front-matter chunks are chunked but
+    # not indexed, so they cannot act as retrieval magnets.
+    exclude = bool(getattr(cfg, "INDEX_EXCLUDE_BOILERPLATE", False))
+    types_seen = {m.get("section_type") for m in metas}
+    if exclude:
+        check("boilerplate chunks excluded from the index",
+              types_seen == {"content"}, f"stored types={sorted(types_seen)}")
+    notify(f"chunking: stored={count} chunks, section_types={sorted(types_seen)}, "
+           f"exclude_boilerplate={exclude} "
+           f"(size={cfg.CHUNK_SIZE_TOKENS} overlap={cfg.CHUNK_OVERLAP_TOKENS} "
+           f"sentence_overlap={getattr(cfg, 'CHUNK_OVERLAP_SENTENCE_AWARE', True)})")
 
     # --- 4. Query: vector-only + hybrid with language filter -------------------
     CURRENT_STEP = "query"
@@ -187,8 +200,25 @@ def run_steps() -> None:
             progress(f"[ci]   MISS  {q['id']} [{q['language']}/{q['category']}] "
                      f"not in top {run['config']['retrieval_top_k']} — "
                      f"{q['question'][:70]}")
-            notify(f"evaluation: MISS {q['id']} [{q['language']}/{q['category']}] "
-                   f"not in top {run['config']['retrieval_top_k']}")
+            # What DID come back instead? Top 3 hits, one compact notice each,
+            # so the diagnosis (retrieval noise vs chunking) is visible.
+            top = q["hits"][:3]
+            parts = []
+            for h in top:
+                sid = h.get("id", "?")
+                if "::" in sid:
+                    sid = sid.split("::", 1)[1]
+                score = h.get("score")
+                score_s = f"{score:.4f}" if isinstance(score, (int, float)) else "?"
+                heading = (h.get("heading") or "").replace("\n", " ")
+                snippet = (h.get("text") or "").replace("\n", " ")[:42]
+                parts.append(
+                    f"#{h['rank']} {sid} sim={score_s} "
+                    f"{h.get('language') or '?'} h='{heading[:20]}' "
+                    f"txt='{snippet}...'"
+                )
+            notify(f"evaluation: MISS {q['id']} expected={q.get('expected')} -> "
+                   + " | ".join(parts))
 
     # --- 6. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"

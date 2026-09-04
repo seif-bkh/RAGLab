@@ -68,17 +68,40 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
     """Add (chunk, embedding) pairs to the collection in small batches.
 
     chunks_with_embeddings: list of (Chunk, list[float]) tuples.
-    Returns the number of records added.
+    When cfg.INDEX_EXCLUDE_BOILERPLATE is True, chunks tagged
+    section_type != "content" are skipped (loudly) — they would otherwise
+    act as retrieval magnets. Returns the number of records stored.
     """
     if not chunks_with_embeddings:
         print("[store] nothing to store")
         return 0
 
+    exclude = bool(getattr(cfg, "INDEX_EXCLUDE_BOILERPLATE", False))
+    kept, skipped = [], []
+    for chunk, embedding in chunks_with_embeddings:
+        if exclude and getattr(chunk, "section_type", "content") != "content":
+            skipped.append(chunk)
+            continue
+        kept.append((chunk, embedding))
+
+    if skipped:
+        print(f"[store] excluding {len(skipped)} boilerplate chunk(s) "
+              f"(INDEX_EXCLUDE_BOILERPLATE=True):")
+        for chunk in skipped:
+            print(f"[store]   skip {chunk.source}::chunk_{chunk.index:04d} "
+                  f"[{chunk.section_type}] heading={chunk.heading[:50]!r}")
+    elif exclude:
+        print("[store] no boilerplate chunks to exclude")
+
+    if not kept:
+        print("[store] nothing kept after boilerplate filter")
+        return 0
+
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    total = len(chunks_with_embeddings)
+    total = len(kept)
 
     for start in range(0, total, cfg.STORE_BATCH_SIZE):
-        batch = chunks_with_embeddings[start : start + cfg.STORE_BATCH_SIZE]
+        batch = kept[start : start + cfg.STORE_BATCH_SIZE]
 
         ids, embeddings, documents, metadatas = [], [], [], []
         for chunk, embedding in batch:
@@ -92,6 +115,7 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
                 "chunk_index": chunk.index,
                 "source": chunk.source,
                 "origin": chunk.origin,
+                "section_type": chunk.section_type,
                 "ingested_at": timestamp,
                 "embedding_model": cfg.EMBEDDING_MODEL,
                 "token_count": chunk.token_count,
@@ -101,7 +125,8 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
                        documents=documents, metadatas=metadatas)
         print(f"[store] added {min(start + len(batch), total)}/{total} records")
 
-    print(f"[store] done | collection count={collection.count()}")
+    print(f"[store] done | stored {total} of {len(chunks_with_embeddings)} chunk(s) | "
+          f"collection count={collection.count()}")
     return collection.count()
 
 

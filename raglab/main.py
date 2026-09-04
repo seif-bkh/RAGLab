@@ -62,14 +62,16 @@ def cmd_inspect(args) -> int:
 
     print(f"\n[inspect] parameters: chunk_size={cfg.CHUNK_SIZE_TOKENS} tokens | "
           f"overlap={cfg.CHUNK_OVERLAP_TOKENS} tokens | "
-          f"split_on_headings_first={cfg.SPLIT_ON_HEADINGS_FIRST}")
+          f"split_on_headings_first={cfg.SPLIT_ON_HEADINGS_FIRST} | "
+          f"sentence_aware_overlap={cfg.CHUNK_OVERLAP_SENTENCE_AWARE}")
     chunks = chunk_all(docs, cfg)
     print(f"\n[inspect] {len(chunks)} chunk(s) across {len(docs)} document(s)\n")
 
     for chunk in chunks:
         print("-" * 78)
         print(f"chunk #{chunk.index:03d} | source={chunk.source} | "
-              f"language={chunk.language} | tokens={chunk.token_count}")
+              f"language={chunk.language} | tokens={chunk.token_count} | "
+              f"section={chunk.section_type}")
         print(f"heading: {chunk.heading or '(none)'}")
         if chunk.notes:
             print(f"notes  : {', '.join(chunk.notes)}")

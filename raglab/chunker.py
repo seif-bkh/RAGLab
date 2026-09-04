@@ -53,6 +53,30 @@ def count_tokens(text: str) -> int:
     return max(words, approx)
 
 
+# Sentence boundaries for the sentence-aware overlap (covers Latin + Arabic).
+SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?…؟;؛۔])\s+")
+
+# Headings whose content is boilerplate (legal notice / terms / disclaimer),
+# not retrievable facts. Language-agnostic keyword list; "content" sections
+# are the only ones indexed when INDEX_EXCLUDE_BOILERPLATE is on.
+# NOTE: "conditions/شروط" alone is NOT a boilerplate marker: "Conditions
+# d'éligibilité" / "شروط الأهلية" are real product facts and must stay
+# content. Only general legal terms/disclaimers are matched.
+BOILERPLATE_HEADING_KEYWORDS = (
+    "conditions générales", "conditions generales", "mentions", "avertissement",
+    "avis légal", "avis legal", "terms", "notice", "disclaimer", "legal",
+    # Arabic-normalized forms (أ/إ/آ -> ا); "شروط" alone is excluded on purpose.
+    "الشروط العامة", "ملاحظات", "قانوني", "إخلاء", "مسؤولية", "اعلان", "عامة",
+)
+
+
+def split_sentences(text: str) -> list[str]:
+    """Split text into whole sentences, whitespace-reflowed, fragments dropped."""
+    parts = [re.sub(r"\s+", " ", s).strip()
+             for s in SENTENCE_BOUNDARY_RE.split(text)]
+    return [p for p in parts if p]
+
+
 # Table column keywords, per purpose, language-agnostic on purpose.
 FEE_COLUMN_KEYWORDS = ("frais mensuel", "frais de tenue", "tenue de compte",
                        "monthly fee", "الرسوم الشهرية", "رسوم", "شهرية")
@@ -72,6 +96,7 @@ class Chunk:
     source: str
     token_count: int = 0
     origin: str = "data/"
+    section_type: str = "content"  # "content" | "front-matter" | "legal"
     notes: list = field(default_factory=list)  # e.g. "long sentence hard-cut"
 
     def to_dict(self) -> dict:
@@ -83,12 +108,29 @@ class Chunk:
             "source": self.source,
             "token_count": self.token_count,
             "origin": self.origin,
+            "section_type": self.section_type,
             "notes": self.notes,
         }
 
 
 def _heading_level(line: str) -> int:
     return len(line) - len(line.lstrip("#"))
+
+
+def classify_section(heading: str, section_index: int) -> str:
+    """Classify a section as "content", "front-matter" or "legal".
+
+    - front-matter: the first H1 section (document title + preamble boilerplate).
+    - legal: headings mentioning terms, conditions, notices, disclaimers
+      (matched per-language via BOILERPLATE_HEADING_KEYWORDS).
+    - content: everything else — the sections that actually answer questions.
+    """
+    if heading.startswith("# ") and section_index == 0:
+        return "front-matter"
+    low = heading.casefold()
+    if any(k in low for k in BOILERPLATE_HEADING_KEYWORDS):
+        return "legal"
+    return "content"
 
 
 def _split_sections(text: str):
@@ -277,12 +319,14 @@ def _paragraphs_and_tables(section_body: str) -> list[str]:
 def chunk_document(doc: dict,
                    chunk_size: int = 220,
                    overlap: int = 40,
-                   split_on_headings: bool = True) -> list[Chunk]:
+                   split_on_headings: bool = True,
+                   sentence_aware_overlap: bool = True) -> list[Chunk]:
     """Chunk one document dict (from loader.py) into a list of Chunk objects.
 
     Parameters mirror config.py: chunk_size (token budget), overlap (tokens
     shared between consecutive chunks), split_on_headings (True = sections
-    first). Returns an empty list for an empty document.
+    first), sentence_aware_overlap (True = overlap only at sentence
+    boundaries). Returns an empty list for an empty document.
     """
     chunks: list[Chunk] = []
     text = doc.get("text", "").strip()
@@ -291,12 +335,17 @@ def chunk_document(doc: dict,
         return chunks
 
     print(f"[chunker] chunking {doc['name']} | size={chunk_size} overlap={overlap} "
-          f"split_headings={split_on_headings} | tokens={count_tokens(text)}")
+          f"split_headings={split_on_headings} "
+          f"sentence_overlap={sentence_aware_overlap} | tokens={count_tokens(text)}")
 
     sections = _split_sections(text) if split_on_headings else [("", text)]
 
-    for heading, body in sections:
+    for section_index, (heading, body) in enumerate(sections):
         heading_text = heading if heading else ""
+        section_type = classify_section(heading_text, section_index)
+        if section_type != "content":
+            print(f"[chunker]   section_type={section_type} "
+                  f"(heading={heading_text[:60]!r})")
         pieces = _paragraphs_and_tables(body)
         # Convert tables to sentences per document language (marker tuple).
         paragraphs: list[str] = []
@@ -314,7 +363,8 @@ def chunk_document(doc: dict,
                   f"({heading_text[:80]!r}); chunk may exceed the budget.")
             budget = max(1, chunk_size // 2)
 
-        body_chunks = _pack_paragraphs(paragraphs, budget, overlap)
+        body_chunks = _pack_paragraphs(paragraphs, budget, overlap,
+                                       sentence_aware=sentence_aware_overlap)
         for body_tokens, note in body_chunks:
             if heading_text:
                 chunk_text = f"{heading_text}\n\n{body_tokens['text']}"
@@ -328,6 +378,7 @@ def chunk_document(doc: dict,
                 source=doc["source"],
                 token_count=count_tokens(chunk_text),
                 origin=doc.get("origin", "data/"),
+                section_type=section_type,
                 notes=note,
             ))
 
@@ -336,25 +387,24 @@ def chunk_document(doc: dict,
     return chunks
 
 
-def _pack_paragraphs(paragraphs: list[str], budget: int, overlap: int):
-    """Group paragraphs into token-bounded bodies, with token overlap.
+def _pack_paragraphs(paragraphs: list[str], budget: int, overlap: int,
+                     sentence_aware: bool = True):
+    """Group paragraphs into token-bounded bodies, with sentence-aware overlap.
 
     Returns a list of ({"text": ..., "tokens": int}, notes:list[str]).
-    Falls back to hard splitting when a single paragraph exceeds the budget;
-    never cuts a sentence except at word boundaries.
+    Falls back to word-boundary hard splitting only when a single paragraph
+    exceeds the budget (marked with a note). Overlap text is whole sentences
+    when sentence_aware=True, so chunks never open with a fragment.
     """
     if not paragraphs:
         return []
-
-    # Overlap is re-applied only between consecutive chunks of the same
-    # section; it is measured in tokens and applied at word boundaries.
 
     result = []
     current_parts: list[str] = []
     current_tokens = 0
     current_note = []
 
-    def flush(extra_parts=None, extra_tokens=0):
+    def flush(extra_parts=None, extra_tokens=0, extra_notes=None):
         nonlocal current_parts, current_tokens, current_note
         if current_parts:
             text = "\n\n".join(current_parts)
@@ -362,25 +412,28 @@ def _pack_paragraphs(paragraphs: list[str], budget: int, overlap: int):
         if extra_parts:
             current_parts = list(extra_parts)
             current_tokens = extra_tokens
+            current_note = list(extra_notes or [])
         else:
             current_parts = []
             current_tokens = 0
-        current_note = []
+            current_note = []
 
     for para in paragraphs:
         para_tokens = count_tokens(para)
         if para_tokens <= budget:
             if current_tokens + para_tokens > budget and current_parts:
-                # Overlap: repeat the tail of the previous chunk, word-based.
-                tail = _token_tail(current_parts, overlap)
-                flush(tail[0], tail[1])
+                # Overlap: reuse whole trailing sentences of the previous chunk.
+                tail_parts, tail_tokens, tail_notes = _overlap_parts(
+                    current_parts, overlap, sentence_aware)
+                flush(tail_parts, tail_tokens, tail_notes)
             current_parts.append(para)
             current_tokens += para_tokens
         else:
-            # Single paragraph longer than the budget: hard split.
+            # Single paragraph longer than the budget: hard split (word-level).
+            # Every piece is flagged so `inspect` shows the cut explicitly.
             flush()
             for piece in _hard_split(para, budget):
-                note = ["long paragraph hard-split"] if _long_sentence(para) else []
+                note = ["paragraph longer than budget: hard-split at word boundary"]
                 result.append(({"text": piece, "tokens": count_tokens(piece)}, note))
 
     flush()
@@ -391,14 +444,64 @@ def _long_sentence(text: str) -> bool:
     return len(text) > 600  # heuristic: almost certainly one very long sentence
 
 
+def _sentence_tail(text: str, max_tokens: int) -> tuple[list[str], bool]:
+    """Return the trailing WHOLE sentences of `text` totalling ~max_tokens.
+
+    Never cuts a sentence: if even the last sentence exceeds max_tokens it is
+    still kept whole (returned with exceeded=True) — a complete clause beats
+    a fragment of context. Empty result only when there is nothing to reuse.
+    """
+    if max_tokens <= 0:
+        return [], False
+    sentences = split_sentences(text)
+    if not sentences:
+        return [], False
+    tail: list[str] = []
+    tokens = 0
+    for sentence in reversed(sentences):
+        sentence_tokens = count_tokens(sentence)
+        if tail and tokens + sentence_tokens > max_tokens:
+            break
+        tail.append(sentence)
+        tokens += sentence_tokens
+        if tokens >= max_tokens:
+            break
+    if not tail:
+        # Single very long sentence: keep it whole anyway (context > budget).
+        tail = [sentences[-1]]
+        return tail, True
+    return list(reversed(tail)), False
+
+
 def _token_tail(parts: list[str], overlap: int) -> tuple[list[str], int]:
-    """Return the last `overlap` tokens of `parts` as whole words (for reuse)."""
+    """Fallback: last `overlap` tokens as whole words (only if
+    CHUNK_OVERLAP_SENTENCE_AWARE is turned off)."""
     combined = " ".join(parts)
     tokens = combined.split()
     if not tokens or overlap <= 0:
         return [], 0
     tail = tokens[-overlap:]
     return [" ".join(tail)], count_tokens(" ".join(tail))
+
+
+def _overlap_parts(parts: list[str], overlap: int, sentence_aware: bool):
+    """Build the overlap tail for the next chunk: (parts, tokens, notes).
+
+    sentence_aware=True reuses whole trailing sentences (any language);
+    False falls back to word-level overlap for quick A/B comparison.
+    """
+    if overlap <= 0 or not parts:
+        return [], 0, []
+    combined = "\n\n".join(parts)
+    if sentence_aware:
+        sentences, exceeded = _sentence_tail(combined, overlap)
+        if sentences:
+            text = " ".join(sentences)
+            notes = ["overlap sentence exceeds budget"] if exceeded else []
+            return [text], count_tokens(text), notes
+        return [], 0, []
+    text_tokens, text_count = _token_tail(parts, overlap)
+    return text_tokens, text_count, []
 
 
 def _hard_split(text: str, budget: int) -> list[str]:
@@ -426,6 +529,7 @@ def chunk_all(docs: list[dict], cfg) -> list[Chunk]:
             chunk_size=cfg.CHUNK_SIZE_TOKENS,
             overlap=cfg.CHUNK_OVERLAP_TOKENS,
             split_on_headings=cfg.SPLIT_ON_HEADINGS_FIRST,
+            sentence_aware_overlap=cfg.CHUNK_OVERLAP_SENTENCE_AWARE,
         )
         all_chunks.extend(doc_chunks)
     return all_chunks

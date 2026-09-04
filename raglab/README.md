@@ -125,11 +125,30 @@ Parameters in `config.py`:
 
 The chunker splits on headings first, then on paragraph boundaries, and only
 falls back to word-boundary hard splits for paragraphs longer than the
-budget. Every chunk is prefixed with its nearest heading (e.g.
+budget (every hard-split piece is flagged with a note in `inspect`). Every
+chunk is prefixed with its nearest heading (e.g.
 `1.3 Frais de tenue de compte et exonération`), so no chunk loses context.
 A chunk may exceed `CHUNK_SIZE_TOKENS` by up to `CHUNK_OVERLAP_TOKENS`,
 because overlap text is *reused* in the next chunk rather than re-counted
 against its budget — that is deliberate, so nothing is lost between chunks.
+
+The overlap is **sentence-aware** (`CHUNK_OVERLAP_SENTENCE_AWARE = True`):
+the re-used tail is a set of *whole trailing sentences* (Latin and Arabic
+boundaries `. ! ? … ؟ ؛`), never a mid-sentence word fragment. This keeps
+chunks that straddle a boundary readable and avoids pollution like a chunk
+opening with `شهري لا يقل عن 1 500…`. Set it to `False` to A/B against
+word-level overlap.
+
+Every chunk is tagged with a `section_type`: **content**, **front-matter**
+(first H1: document title + preamble) or **legal** (general conditions,
+terms, disclaimers — detected per-language, but *not* eligibility conditions
+like "Conditions d'éligibilité"/"شروط الأهلية"). With
+`INDEX_EXCLUDE_BOILERPLATE = True` (default) boilerplate chunks are still
+chunked and visible in `inspect`, but they are **not stored**: they were
+retrieval magnets — the title chunk names every product, and the disclaimer
+literally says "aucun des taux, frais, seuils…" — so they outranked real
+answers. Exclusion is printed per chunk at ingest; set to `False` to index
+everything.
 Markdown tables are converted into full sentences *before* chunking, e.g.
 the fee table row becomes:
 
