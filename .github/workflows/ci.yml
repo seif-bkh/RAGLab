@@ -97,25 +97,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd raglab
-          ERROR_TEXT=$(cat results/ci_test_error.txt 2>/dev/null || echo "(no ci_test_error.txt)")
-          PROGRESS_TEXT=$(tail -40 results/ci_progress.txt 2>/dev/null || echo "(no ci_progress.txt)")
+          {
+            echo "Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "<details><summary>ci_test_error.txt</summary>"
+            echo
+            echo '```'
+            cat results/ci_test_error.txt 2>/dev/null || echo "(no ci_test_error.txt)"
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "<details><summary>ci_progress.txt (tail)</summary>"
+            echo
+            echo '```'
+            tail -40 results/ci_progress.txt 2>/dev/null || echo "(no ci_progress.txt)"
+            echo '```'
+            echo
+            echo "</details>"
+          } > issue_body.md
           gh issue create --repo "$GITHUB_REPOSITORY" \
             --title "RAGLab CI failed: integration test (run $GITHUB_RUN_ID)" \
-            --body "Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
-
-<details><summary>ci_test_error.txt</summary>
-
-\`\`\`
-$ERROR_TEXT
-\`\`\`
-
-</details>
-
-<details><summary>ci_progress.txt (tail)</summary>
-
-\`\`\`
-$PROGRESS_TEXT
-\`\`\`
-
-</details>" \
+            --body-file issue_body.md \
             || echo "issue creation failed (no permission) — annotations carry the summary"
