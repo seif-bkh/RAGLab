@@ -31,8 +31,10 @@ Gemini specifics (default provider, Google AI Studio key, free tier):
 """
 
 import hashlib
+import importlib
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -95,6 +97,29 @@ class EmbeddingCache:
     @property
     def size(self) -> int:
         return len(self.entries)
+
+
+def require_provider_sdk(module_name: str, pip_name: str):
+    """Import a provider SDK, failing with an actionable message if missing.
+
+    "cannot import name 'genai' from 'google'" means the `google` namespace
+    exists (usually via protobuf) but google-genai itself is not installed —
+    usually because `pip install -r requirements.txt` was never run, or it was
+    run with a different Python. This function reports the exact interpreter
+    and the exact command to fix it, instead of a raw traceback.
+    """
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as exc:
+        raise SystemExit(
+            f"[embedder] MISSING DEPENDENCY: '{pip_name}' is not importable from\n"
+            f"           this Python interpreter ({sys.executable}).\n"
+            f"           Fix:   {sys.executable} -m pip install -r requirements.txt\n"
+            f"           (or:   {sys.executable} -m pip install {pip_name})\n"
+            f"           Make sure you activate the same virtualenv you installed\n"
+            f"           into (e.g. `.venv`), then retry.\n"
+            f"           Original error: {exc}"
+        )
 
 
 def cache_key(model: str, text: str, input_type: str = "") -> str:
@@ -337,8 +362,8 @@ class GeminiEmbedder(BaseEmbedder):
                 "Create a key at https://aistudio.google.com/apikey, then copy "
                 ".env.example to .env and paste it."
             )
-        from google import genai
-        from google.genai import types
+        genai = require_provider_sdk("google.genai", "google-genai")
+        types = require_provider_sdk("google.genai.types", "google-genai")
 
         self._types = types
         self._client = genai.Client(
@@ -428,9 +453,9 @@ class OpenAIEmbedder(BaseEmbedder):
                 "[embedder] OPENAI_API_KEY is not set. "
                 "Copy .env.example to .env and paste your key."
             )
-        from openai import OpenAI
+        openai_mod = require_provider_sdk("openai", "openai")
 
-        self._client = OpenAI(api_key=api_key, timeout=60.0, max_retries=0)
+        self._client = openai_mod.OpenAI(api_key=api_key, timeout=60.0, max_retries=0)
         return self._client
 
     def _embed_batch(self, texts: list[str], input_type: str = "search_document"):
@@ -452,7 +477,7 @@ class CohereEmbedder(BaseEmbedder):
                 "[embedder] COHERE_API_KEY is not set. "
                 "Copy .env.example to .env and paste your key."
             )
-        import cohere
+        cohere = require_provider_sdk("cohere", "cohere")
 
         # ClientV2 is the current client (cohere>=5.10); fall back for older SDKs.
         if hasattr(cohere, "ClientV2"):
@@ -485,7 +510,7 @@ class VoyageEmbedder(BaseEmbedder):
                 "[embedder] VOYAGE_API_KEY is not set. "
                 "Copy .env.example to .env and paste your key."
             )
-        import voyageai
+        voyageai = require_provider_sdk("voyageai", "voyageai")
 
         self._client = voyageai.Client(api_key=api_key, timeout=60)
         return self._client

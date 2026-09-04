@@ -235,6 +235,15 @@ raglab/
 └── embeddings_cache.json # embedding cache (gitignored, generated)
 ```
 
+## 5.5 Troubleshooting
+
+| symptom | cause / fix |
+|---|---|
+| `ImportError: cannot import name 'genai' from 'google' (unknown location)` when running `ingest`/`query`/`evaluate` | `google-genai` is not installed in the interpreter you ran (this is exactly what the error means: the `google` namespace exists but the SDK package doesn't). The CLI now prints the exact interpreter and command — run `pip install -r requirements.txt` **inside the same venv**, or the printed `python -m pip install ...`. Then re-run the command. |
+| `GEMINI_API_KEY is not set` | copy `.env.example` to `.env` and paste your key from https://aistudio.google.com/apikey |
+| anything about `chromadb`/`tiktoken`/`pypdf` missing | same fix: `pip install -r requirements.txt` in the active venv |
+| `429` rate limit during ingest | normal on the free tier; the embedder retries with printed backoff. If it persists, wait a minute or lower `EMBEDDING_BATCH_SIZE` in `config.py`, or check your per-project quota in AI Studio. |
+
 ## 6. Notes / caveats
 
 - The sanity check and every query cost a small number of API calls; the
