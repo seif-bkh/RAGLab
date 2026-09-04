@@ -41,6 +41,13 @@ def progress(line: str) -> None:
         fh.write(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {line}\n")
 
 
+def annotate_error(lines: list[str]) -> None:
+    """Emit GitHub Actions ::error:: annotations (readable via the check-runs
+    API, even when the raw log/artifact hosts are unreachable)."""
+    for line in lines[:12]:  # keep annotations compact
+        print(f"::error::{line}", flush=True)
+
+
 def check(label: str, ok: bool, detail: str = "") -> bool:
     print(f"[ci] {'PASS' if ok else 'FAIL'}  {label}" + (f"  ({detail})" if detail else ""))
     if not ok:
@@ -174,6 +181,9 @@ def run_steps() -> None:
             fh.write(f"[assertions] failed during step {CURRENT_STEP}\n")
             for f in failures:
                 fh.write(f"  - {f}\n")
+        annotate_error([f"RAGLab CI FAILED: {len(failures)} check(s) at step {CURRENT_STEP}"]
+                       + [f"  check failed: {f}" for f in failures]
+                       + ["  details: artifact raglab-eval-results / ci_test_error.txt"])
         sys.exit(1)
     progress("[ci] CI PIPELINE PASSED — all mechanics verified; metrics above are the report.")
     print("=" * 78)
@@ -192,6 +202,9 @@ def run_main() -> None:
         with open(ERROR_FILE, "a", encoding="utf-8") as fh:
             fh.write(f"[crash] step={CURRENT_STEP} type={type(exc).__name__}\n{exc}\n")
             fh.write(traceback.format_exc())
+        annotate_error([f"RAGLab CI CRASHED at step {CURRENT_STEP}: "
+                        f"{type(exc).__name__}: {str(exc)[:180]}",
+                        "  details: artifact raglab-eval-results / ci_test_error.txt"])
         sys.exit(1)
 
 

@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  issues: write  # only used by the failure reporter (never for secrets)
 
 jobs:
   # ---------------------------------------------------------------- offline
@@ -89,3 +90,32 @@ jobs:
           name: raglab-eval-results
           path: raglab/results/
           if-no-files-found: warn
+
+      - name: Report failure details (GitHub issue, best-effort)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd raglab
+          ERROR_TEXT=$(cat results/ci_test_error.txt 2>/dev/null || echo "(no ci_test_error.txt)")
+          PROGRESS_TEXT=$(tail -40 results/ci_progress.txt 2>/dev/null || echo "(no ci_progress.txt)")
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "RAGLab CI failed: integration test (run $GITHUB_RUN_ID)" \
+            --body "Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+<details><summary>ci_test_error.txt</summary>
+
+\`\`\`
+$ERROR_TEXT
+\`\`\`
+
+</details>
+
+<details><summary>ci_progress.txt (tail)</summary>
+
+\`\`\`
+$PROGRESS_TEXT
+\`\`\`
+
+</details>" \
+            || echo "issue creation failed (no permission) — annotations carry the summary"
