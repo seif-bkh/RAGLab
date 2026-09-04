@@ -86,8 +86,9 @@ def run_steps() -> None:
     check("vector dimension matches config",
           expected_dim is None or embedder._dimension == expected_dim,
           f"got={embedder._dimension} config={expected_dim}")
-    for line in getattr(embedder, "sanity_lines", []):
-        notify(f"sanity: {line}")
+    # One compact notice (GitHub shows at most 10 annotations per step).
+    sanity = " | ".join(getattr(embedder, "sanity_lines", ["dimension: ?"]))
+    notify(f"sanity: {sanity}")
 
     # --- 3. Ingest (real embeddings, --reset) ---------------------------------
     CURRENT_STEP = "ingest"
@@ -159,25 +160,27 @@ def run_steps() -> None:
         for cat, d in sorted(metrics["by_category"].items()):
             progress(f"[ci]   category {cat:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
                      f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
-            notify(f"evaluation: category {cat} n={d['n']} "
-                   f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                   f"hit@5={d['hit@5']:.3f}")
+        cats = " ".join(f"{c}=h1:{metrics['by_category'][c]['hit@1']:.3f}/"
+                        f"h3:{metrics['by_category'][c]['hit@3']:.3f}/"
+                        f"h5:{metrics['by_category'][c]['hit@5']:.3f}"
+                        for c in sorted(metrics["by_category"]))
+        notify(f"evaluation: categories  {cats}")
         for lang, d in sorted(metrics["by_language"].items()):
             progress(f"[ci]   language {lang:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
                      f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
-            notify(f"evaluation: language {lang} n={d['n']} "
-                   f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                   f"hit@5={d['hit@5']:.3f}")
+        langs = " ".join(f"{l}=h1:{metrics['by_language'][l]['hit@1']:.3f}/"
+                         f"h3:{metrics['by_language'][l]['hit@3']:.3f}/"
+                         f"h5:{metrics['by_language'][l]['hit@5']:.3f}"
+                         for l in sorted(metrics["by_language"]))
+        notify(f"evaluation: languages  {langs}")
         progress(f"[ci]   separation  correct={sep['mean_correct_score']:.4f} "
                  f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
                  f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f}")
         notify(f"evaluation: separation correct={sep['mean_correct_score']:.4f} "
                f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
-               f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f}")
-        progress(f"[ci]   out-of-scope  max_top1={oos['max_top1_score']:.4f} "
-                 f"mean_top1={oos['mean_top1_score']:.4f} (n={oos['n']})")
-        notify(f"evaluation: out-of-scope max_top1={oos['max_top1_score']:.4f} "
-               f"mean_top1={oos['mean_top1_score']:.4f} (n={oos['n']})")
+               f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f} "
+               f"oos_max_top1={oos['max_top1_score']:.4f} "
+               f"oos_mean_top1={oos['mean_top1_score']:.4f} (oos_n={oos['n']})")
         misses = [q for q in run["questions"]
                   if not q["is_out_of_scope"] and q["correct_rank"] is None]
         for q in misses:
