@@ -1,7 +1,7 @@
 """embedder.py — hosted embedding API behind a tiny interface + local cache.
 
-One class per provider (OpenAI / Cohere / Voyage), all inheriting from
-BaseEmbedder so the rest of the lab only sees:
+One class per provider (Gemini / OpenAI / Cohere / Voyage), all inheriting
+from BaseEmbedder so the rest of the lab only sees:
 
     embedder = build_embedder(config)
     embedder.embed_texts(["some text", ...])   -> list[list[float]]
@@ -12,9 +12,22 @@ BaseEmbedder so the rest of the lab only sees:
 Behaviour (all of it explicit and printable):
 - keys come from .env, never from code;
 - batch embedding (EMBEDDING_BATCH_SIZE per API call);
-- retry with exponential backoff on rate limits / connection errors;
+- retry with exponential backoff on rate limits (429) / 5xx / connection errors,
+  fail fast on non-retryable 4xx errors;
 - embeddings cached in embeddings_cache.json, keyed by
-  sha256(model_name + "\n" + text), so metadata-only re-ingests cost nothing.
+  sha256(model + input_type + text), so metadata-only re-ingests cost nothing
+  and document/query embeddings of identical text never collide.
+
+Gemini specifics (default provider, Google AI Studio key, free tier):
+- `gemini-embedding-2`: does NOT support `task_type`. Per Google docs, task
+  instructions go in the prompt (see GEMINI_USE_TASK_PROMPTS in config.py),
+  and each input must be wrapped in a Content object, otherwise multiple
+  inputs are AGGREGATED into a single embedding.
+- `gemini-embedding-001`: supports task_type=RETRIEVAL_DOCUMENT / _QUERY and
+  a plain list of strings (one embedding per string).
+- Both default to 3072 dims; we truncate to GEMINI_OUTPUT_DIMENSIONALITY (768,
+  recommended). Embedding spaces are model-specific: switching models or
+  dimensions requires a full re-ingest (use --reset).
 """
 
 import hashlib
@@ -39,6 +52,7 @@ class EmbeddingCache:
         self.path = Path(path)
         self.entries: dict = {}
         self.model = ""
+        self.stale_model = False
         self._load()
 
     def _load(self):
@@ -54,11 +68,16 @@ class EmbeddingCache:
             print(f"[embedder] WARNING: could not read cache {self.path}: {exc}")
             self.entries = {}
 
+    def note_expected_model(self, model: str):
+        """Flag entries cached for a different model (spaces are incompatible)."""
+        self.stale_model = bool(self.model and self.model != model and self.entries)
+
     def save(self):
         payload = {
             "model": self.model,
             "entries": self.entries,
-            "note": "key = sha256(model + '\\n' + text); preview shows the text tail",
+            "note": "key = sha256(model + '\\n' + input_type + '\\n' + text); "
+                    "preview shows the text tail",
         }
         self.path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
@@ -78,9 +97,14 @@ class EmbeddingCache:
         return len(self.entries)
 
 
-def cache_key(model: str, text: str) -> str:
-    """Deterministic key: sha256 over model name and the exact text."""
-    payload = (model + "\n" + text).encode("utf-8")
+def cache_key(model: str, text: str, input_type: str = "") -> str:
+    """Deterministic key: sha256 over model name, input type and exact text.
+
+    input_type is included because some providers embed documents and queries
+    differently (Gemini 001 task_type, Gemini 2 prompt headers); the same raw
+    text embedded as a document and as a query must not share a cache entry.
+    """
+    payload = (model + "\n" + (input_type or "none") + "\n" + text).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -102,6 +126,7 @@ class BaseEmbedder:
         self.retry_base_delay = cfg.EMBEDDING_RETRY_BASE_DELAY
         self.cache = EmbeddingCache(cfg.EMBEDDING_CACHE_PATH)
         self.cache.model = self.model
+        self.cache.note_expected_model(self.model)
         self._client = None
         self._dimension = None
         self.cache_hits = 0
@@ -115,17 +140,41 @@ class BaseEmbedder:
         raise NotImplementedError
 
     # -- shared machinery -----------------------------------------------------
-    def _call_with_retry(self, texts: list[str], input_type: str) -> list:
-        """Call _embed_batch, retrying on any provider error (bounded).
+    @staticmethod
+    def _is_retryable(exc: Exception) -> bool:
+        """True for transient errors worth retrying (rate limits, 5xx, network).
 
-        Retries are bounded by max_retries; each failure is printed together
-        with the exception type so rate limits are never silent.
+        Non-retryable 4xx (bad request, wrong key, unknown model) fail fast
+        instead of burning max_retries * backoff on a mistake.
+        """
+        code = getattr(exc, "status_code", None)
+        if code is None:
+            code = getattr(exc, "code", None)
+        if code is not None:
+            try:
+                return int(code) in (408, 429, 500, 502, 503, 504)
+            except (TypeError, ValueError):
+                pass  # code may be an enum/string; fall through to text match
+        text = f"{type(exc).__name__} {exc}".lower()
+        return any(tok in text for tok in (
+            "429", "resource_exhausted", "rate limit", "quota",
+            "unavailable", "deadline", "timeout", "connection", "server error",
+        ))
+
+    def _call_with_retry(self, texts: list[str], input_type: str) -> list:
+        """Call _embed_batch with bounded exponential-backoff retries.
+
+        Only transient errors are retried; every retry is printed with the
+        exception type so rate limits are never silent.
         """
         last_error = None
         for attempt in range(1, self.max_retries + 1):
             try:
                 return self._embed_batch(texts, input_type)
             except Exception as exc:  # noqa: BLE001 — providers raise many SDK-specific types
+                if not self._is_retryable(exc):
+                    print(f"[embedder] NON-RETRYABLE error ({type(exc).__name__}): {exc}")
+                    raise
                 last_error = exc
                 delay = self.retry_base_delay * (2 ** (attempt - 1))
                 message = f"{type(exc).__name__}: {exc}"
@@ -150,7 +199,7 @@ class BaseEmbedder:
         seen_keys: dict[str, int] = {}
 
         for i, text in enumerate(texts):
-            key = cache_key(self.model, text)
+            key = cache_key(self.model, text, input_type)
             entry = self.cache.get(key)
             if entry is not None:
                 results[i] = entry["embedding"]
@@ -183,6 +232,10 @@ class BaseEmbedder:
             raise ValueError("empty query text")
         return self.embed_texts([text], input_type="search_query")[0]
 
+    def _provider_notes(self) -> list[str]:
+        """Extra lines printed in startup_report (provider-specific)."""
+        return []
+
     def startup_report(self):
         """Print provider/model/dimension, then run the multilingual sanity check.
 
@@ -196,6 +249,13 @@ class BaseEmbedder:
         print("[embedder] batch size        :", self.batch_size)
         print("[embedder] cache entries     :", self.cache.size)
         print("[embedder] cache file        :", self.cache.path.name)
+        if self.cache.stale_model:
+            print(f"[embedder] WARNING: cache has {self.cache.size} embedding(s) for model "
+                  f"'{self.cache.model}' but the current model is '{self.model}'. "
+                  "Embedding spaces are incompatible, so those entries are ignored; "
+                  "re-run `ingest --reset` to re-embed everything.")
+        for line in self._provider_notes():
+            print(line)
         print("[embedder] multi-language sanity check follows (this may hit the API once):")
         self._sanity_check()
         print("=" * 72)
@@ -237,6 +297,123 @@ def cosine(a: list, b: list) -> float:
 # ---------------------------------------------------------------------------
 # Concrete providers — official SDKs only, no wrappers
 # ---------------------------------------------------------------------------
+
+
+class GeminiEmbedder(BaseEmbedder):
+    """Google Gemini API embeddings (official `google-genai` SDK).
+
+    Works with a Google AI Studio key (free tier). Handles both model families:
+    - `gemini-embedding-2`  (current, multilingual, 100+ languages):
+        task_type is NOT supported -> optional prompt-header instructions
+        (config GEMINI_USE_TASK_PROMPTS) and each input must be wrapped in a
+        Content object so the API returns one embedding per input.
+    - `gemini-embedding-001` (older, text-only):
+        task_type=RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY, plain string list.
+    Both default to 3072 dims; we request GEMINI_OUTPUT_DIMENSIONALITY (768).
+    """
+
+    provider_name = "gemini"
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.output_dimensionality = (
+            int(getattr(cfg, "GEMINI_OUTPUT_DIMENSIONALITY", 768) or 0) or None
+        )
+        self.use_task_prompts = bool(getattr(cfg, "GEMINI_USE_TASK_PROMPTS", True))
+        self.model_is_v2 = self.model.startswith("gemini-embedding-2")
+        self._types = None
+
+    def _make_client(self):
+        if self._client is not None:
+            return self._client
+        api_key = (
+            os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or ""
+        ).strip()
+        if not api_key:
+            raise SystemExit(
+                "[embedder] GEMINI_API_KEY is not set (GOOGLE_API_KEY also accepted). "
+                "Create a key at https://aistudio.google.com/apikey, then copy "
+                ".env.example to .env and paste it."
+            )
+        from google import genai
+        from google.genai import types
+
+        self._types = types
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=120_000),  # milliseconds
+        )
+        return self._client
+
+    def _embed_batch(self, texts: list[str], input_type: str = "search_document") -> list:
+        client = self._make_client()  # also populates self._types
+        types = self._types
+
+        if self.model_is_v2:
+            # gemini-embedding-2: no task_type parameter; per Google docs, put
+            # the task instruction in the prompt (only when enabled).
+            if self.use_task_prompts:
+                if input_type == "search_query":
+                    texts = [f"task: search result | query: {t}" for t in texts]
+                else:
+                    texts = [f"title: none | text: {t}" for t in texts]
+            # Multiple raw inputs would be AGGREGATED into one embedding, so
+            # wrap each input in a Content object -> one embedding per input.
+            contents = [
+                types.Content(parts=[types.Part.from_text(text=t)]) for t in texts
+            ]
+            config = (
+                types.EmbedContentConfig(output_dimensionality=self.output_dimensionality)
+                if self.output_dimensionality
+                else None
+            )
+        else:
+            # gemini-embedding-001: task_type + plain string list, one embedding
+            # per string (documented behaviour).
+            task_type = (
+                "RETRIEVAL_QUERY" if input_type == "search_query"
+                else "RETRIEVAL_DOCUMENT"
+            )
+            contents = list(texts)
+            config = (
+                types.EmbedContentConfig(
+                    task_type=task_type,
+                    output_dimensionality=self.output_dimensionality,
+                )
+                if self.output_dimensionality
+                else types.EmbedContentConfig(task_type=task_type)
+            )
+
+        response = client.models.embed_content(
+            model=self.model, contents=contents, config=config
+        )
+        return [list(item.values) for item in response.embeddings]
+
+    def _provider_notes(self) -> list[str]:
+        notes = []
+        if self.model_is_v2:
+            notes.append(
+                "[embedder] gemini-embedding-2: task_type is NOT supported; "
+                f"prompt-header task instructions = "
+                f"{'ON' if self.use_task_prompts else 'OFF'} "
+                "(config GEMINI_USE_TASK_PROMPTS)"
+            )
+            if self.use_task_prompts:
+                notes.append("[embedder]   documents -> 'title: none | text: ...'")
+                notes.append("[embedder]   queries    -> 'task: search result | query: ...'")
+        else:
+            notes.append(
+                "[embedder] gemini-embedding-001: task_type = RETRIEVAL_DOCUMENT "
+                "(chunks) / RETRIEVAL_QUERY (questions)"
+            )
+        notes.append(
+            f"[embedder] output dimensionality = "
+            f"{self.output_dimensionality or 'model default (3072)'} "
+            "(config GEMINI_OUTPUT_DIMENSIONALITY)"
+        )
+        return notes
 
 
 class OpenAIEmbedder(BaseEmbedder):
@@ -323,6 +500,7 @@ class VoyageEmbedder(BaseEmbedder):
 def build_embedder(cfg) -> BaseEmbedder:
     """Factory: instantiate the provider named in config.py."""
     providers = {
+        "gemini": GeminiEmbedder,
         "openai": OpenAIEmbedder,
         "cohere": CohereEmbedder,
         "voyage": VoyageEmbedder,

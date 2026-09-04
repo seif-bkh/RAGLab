@@ -2,8 +2,9 @@
 
 This repository contains `raglab/` — a small local Python laboratory for
 testing a multilingual (Arabic, French, English) RAG retrieval pipeline:
-document cleaning, chunking, embedding via a hosted API, storage in local
-ChromaDB, and retrieval evaluation. No LLM generation, no UI.
+document cleaning, chunking, embedding via the Google Gemini API (a free
+Google AI Studio key works), storage in local ChromaDB, and retrieval
+evaluation. No LLM generation, no UI.
 
 Start here:
 

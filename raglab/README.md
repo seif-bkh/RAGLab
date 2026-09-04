@@ -7,8 +7,9 @@ English).
 
 **Not a product.** No UI, no authentication, no LLM answer generation, no
 cloud vector database. The only network calls are hosted **embedding** API
-calls (OpenAI by default). The sample documents are **invented — they contain
-no real bank, no real rates, and no real data.**
+calls — by default **Google Gemini (`gemini-embedding-2`)**, which works with a
+**free Google AI Studio API key** (no credit card). The sample documents are
+**invented — they contain no real bank, no real rates, and no real data.**
 
 > ⚠️ The `data/` product sheets describe a fictional "Banque Atlas".
 > The bank, its products, fees (4,50 €, 9,00 €, 2,75 %, …), thresholds,
@@ -24,7 +25,8 @@ python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
-# edit .env and paste your embedding API key (OPENAI_API_KEY by default)
+# edit .env and paste your key, e.g. GEMINI_API_KEY=
+#   (create one at https://aistudio.google.com/apikey — the free tier works)
 ```
 
 `requirements.txt` is intentionally minimal:
@@ -33,12 +35,12 @@ cp .env.example .env
 - `python-dotenv` — reads `.env`
 - `pypdf` — PDF text extraction
 - `tiktoken` — token counting (`cl100k_base`)
-- `openai` — official OpenAI client (default embedding provider)
+- `google-genai` — official Google Gemini client (default embedding provider)
 
 No LangChain, no LlamaIndex, no orchestration framework: every call is raw.
 
 If you switch the provider (section 4), uncomment the matching line in
-`requirements.txt` (`cohere` or `voyageai`) and keep the others.
+`requirements.txt` (`openai`, `cohere` or `voyageai`) and keep the others.
 
 ## 2. Quick start — the order of commands
 
@@ -118,18 +120,46 @@ ils sont exonérés si Salaire mensuel d'au moins 1 500 € versé sur le compte
 
 ### Embeddings (`embedder.py`)
 
-- Key from `.env` only — never hardcoded.
+- Key from `.env` only — never hardcoded. Default: `GEMINI_API_KEY` from a
+  Google AI Studio key (the `google-genai` SDK also accepts `GOOGLE_API_KEY`).
 - Provider behind a tiny interface: `BaseEmbedder` + one class per provider.
   Switch by changing **two strings in `config.py`**:
-  - `EMBEDDING_PROVIDER = "openai"` → `"cohere"` or `"voyage"`
-  - `EMBEDDING_MODEL = "text-embedding-3-large"` →
+  - `EMBEDDING_PROVIDER = "gemini"` → `"openai"`, `"cohere"` or `"voyage"`
+  - `EMBEDDING_MODEL = "gemini-embedding-2"` →
+    e.g. `"gemini-embedding-001"`, `"text-embedding-3-large"`,
     `"embed-multilingual-v3.0"` or `"voyage-multilingual-2"`
 - Batch calls (`EMBEDDING_BATCH_SIZE`, default 16), retries with exponential
-  backoff on rate limits/connection errors (`EMBEDDING_MAX_RETRIES`).
+  backoff on rate limits / 5xx / connection errors
+  (`EMBEDDING_MAX_RETRIES`) — but **fails fast** on non-retryable errors
+  (bad request, wrong key, unknown model).
 - **Embedding cache**: `embeddings_cache.json`, keyed by
-  `sha256(model + "\n" + text)`. Re-running ingestion after changing only
-  metadata (e.g. chunk index, timestamp) makes **zero** API calls; the
-  cache holds a text preview per key so you can eyeball it.
+  `sha256(model + "\n" + input_type + "\n" + text)`. Re-running ingestion
+  after changing only metadata (e.g. chunk index, timestamp) makes **zero**
+  API calls; the cache holds a text preview per key so you can eyeball it.
+
+#### Gemini specifics (`config.py`)
+
+| knob | default | meaning |
+|---|---|---|
+| `EMBEDDING_MODEL` | `gemini-embedding-2` | current model, 100+ languages, works on free tier; `gemini-embedding-001` (older, text-only) also supported |
+| `GEMINI_OUTPUT_DIMENSIONALITY` | `768` | MRL truncation; Google recommends 768/1536/3072. Keep queries and documents on the same value |
+| `GEMINI_USE_TASK_PROMPTS` | `True` | `gemini-embedding-2` does **not** accept `task_type`; with this on, the adapter prefixes documents with `title: none | text: …` and queries with `task: search result | query: …` (Google's recommended prompt format). Off = raw symmetric text |
+
+`gemini-embedding-001` instead uses `task_type=RETRIEVAL_DOCUMENT` for
+chunks and `RETRIEVAL_QUERY` for questions automatically. The startup report
+prints which mode is active.
+
+**Free tier**: embedding models are included in the Google AI Studio free
+tier (per-project rate limits, see the AI Studio rate-limit page). This lab
+makes ~2–4 batched requests per ingest and a handful per query/evaluation —
+well inside free quota. If you hit a 429, the retry/backoff handles it and
+prints every retry; if you hit it repeatedly, check your per-project limit.
+
+**Important**: embedding spaces are model- and dimension-specific. Changing
+`EMBEDDING_MODEL` or `GEMINI_OUTPUT_DIMENSIONALITY` means stored vectors are
+incompatible with new ones — re-run `python main.py ingest --reset`. The
+cache keys include the model, so old cache entries are skipped with a
+printed warning rather than mixed in.
 
 ### Storage & retrieval (`store.py`)
 
@@ -176,6 +206,8 @@ provider, model and top-k so runs are comparable after you change settings.
 | Change overlap | edit `CHUNK_OVERLAP_TOKENS` in `config.py` |
 | Disable heading-first splitting | `SPLIT_ON_HEADINGS_FIRST = False` |
 | Switch embedding provider | set `EMBEDDING_PROVIDER` + `EMBEDDING_MODEL` in `config.py`, uncomment the matching `requirements.txt` line, `pip install -r requirements.txt`, set the provider key in `.env` |
+| Change Gemini model / dimensions | edit `EMBEDDING_MODEL` / `GEMINI_OUTPUT_DIMENSIONALITY`, then `ingest --reset` (embedding spaces are incompatible) |
+| A/B task prompts on `gemini-embedding-2` | flip `GEMINI_USE_TASK_PROMPTS`, then `ingest --reset` |
 | Tune retrieval | `RETRIEVAL_TOP_K`, `RRF_RANK_CONSTANT`, `EVAL_TOP_K` in `config.py` |
 
 Typical iteration loop: `inspect` → tweak chunking → `inspect` again →
@@ -207,6 +239,9 @@ raglab/
 
 - The sanity check and every query cost a small number of API calls; the
   cache makes full re-ingests free once the chunk texts are unchanged.
+  The cache key now includes the input type, so a text embedded as a
+  document and the same text embedded as a query never collide (relevant
+  for the asymmetric Gemini prompt format).
 - tiktoken downloads its `cl100k_base` BPE file on first use (once, then
   cached). If that download is blocked (offline/proxy), the chunker prints a
   warning and falls back to a transparent estimator `max(words, chars/4)`;

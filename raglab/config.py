@@ -31,9 +31,28 @@ CHROMA_COLLECTION_NAME = "raglab_docs"
 # Embedding provider
 # ---------------------------------------------------------------------------
 # Change these two lines to switch providers (see .env.example and README).
-# Default: OpenAI text-embedding-3-large — multilingual (Arabic/French/English).
-EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "openai")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+# Default: Google Gemini API with a Google AI Studio key (free tier OK).
+# `gemini-embedding-2` is the current multilingual model (100+ languages) and
+# works with AI Studio keys. `gemini-embedding-001` (text-only, older) also
+# works; the embedder handles both automatically.
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "gemini")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
+
+# Gemini-specific knobs ------------------------------------------------------
+# Both Gemini embedding models default to 3072 dimensions. MRL lets you
+# truncate; Google recommends 768 / 1536 / 3072 (lower = smaller/faster,
+# nearly identical quality). Set to 0/None to use the model default (3072).
+# NOTE: embeddings produced with different dimensions are NOT comparable —
+# keep queries and documents on the same setting, and re-ingest after a change.
+GEMINI_OUTPUT_DIMENSIONALITY = 768
+
+# `gemini-embedding-2` does NOT accept task_type; Google recommends putting
+# task instructions in the prompt instead. When True the embedder prefixes:
+#   documents -> "title: none | text: ..."
+#   queries    -> "task: search result | query: ..."
+# Set False to send raw text (then documents and queries embed symmetrically).
+# `gemini-embedding-001` always uses task_type=RETRIEVAL_DOCUMENT/QUERY.
+GEMINI_USE_TASK_PROMPTS = True
 
 # Batch size sent to the provider per API call, and retry policy for rate limits.
 EMBEDDING_BATCH_SIZE = 16
