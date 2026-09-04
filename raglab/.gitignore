@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# Local virtual environment
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Runtime/generated artifacts (regenerable, not source of truth)
+chroma_db/
+results/
+embeddings_cache.json

@@ -1,0 +1,132 @@
+{
+  "description": "Evaluation questions for RAGLab, derived from the two fictional Atlas Bank product sheets (French + Arabic) in data/. All numbers, products and banks are invented.",
+  "note": "A case is correct when the top-k results contain a chunk matching expected_substring (normalized, language-aware via expected_lang). Out-of-scope cases have no expected match.",
+  "cases": [
+    {
+      "id": "q01",
+      "question": "Quel est le frais mensuel du Compte Courant Atlas ?",
+      "language": "fr",
+      "category": "verbatim",
+      "expected_substring": "4,50",
+      "expected_lang": "fr"
+    },
+    {
+      "id": "q02",
+      "question": "Le Compte Courant Atlas Pro est-il réservé aux professionnels ?",
+      "language": "fr",
+      "category": "verbatim",
+      "expected_substring": "Atlas Pro",
+      "expected_lang": "fr"
+    },
+    {
+      "id": "q03",
+      "question": "كم تبلغ الرسوم الشهرية لحساب أطلس الجاري؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_substring": "4,50",
+      "expected_lang": "ar"
+    },
+    {
+      "id": "q04",
+      "question": "ما هو شرط الإعفاء من الرسوم الشهرية لحساب أطلس الجاري؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_substring": "1 500",
+      "expected_lang": "ar"
+    },
+    {
+      "id": "q05",
+      "question": "Combien coûte la tenue de compte chaque mois pour le compte courant standard d'Atlas ?",
+      "language": "fr",
+      "category": "paraphrase",
+      "expected_substring": "4,50"
+    },
+    {
+      "id": "q06",
+      "question": "How much do I pay per month for my regular checking account at Atlas?",
+      "language": "en",
+      "category": "paraphrase",
+      "expected_substring": "4,50"
+    },
+    {
+      "id": "q07",
+      "question": "ما هي تكلفة إدارة الحساب الجاري العادي شهريًا؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_substring": "4,50"
+    },
+    {
+      "id": "q08",
+      "question": "What is the interest rate on the Atlas savings account?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_substring": "2,75",
+      "expected_lang": "fr"
+    },
+    {
+      "id": "q09",
+      "question": "Is the monthly fee for the Atlas current account waived under any condition?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_substring": "1 500",
+      "expected_lang": "ar"
+    },
+    {
+      "id": "q10",
+      "question": "Quel est le montant minimal pour ouvrir le livret d'épargne Atlas ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_substring": "100",
+      "expected_lang": "ar"
+    },
+    {
+      "id": "q11",
+      "question": "ما هو المبلغ الأدنى لفتح دفتر التوفير أطلس؟",
+      "language": "ar",
+      "category": "cross-lingual",
+      "expected_substring": "100",
+      "expected_lang": "fr"
+    },
+    {
+      "id": "q12",
+      "question": "Which Atlas account is meant for self-employed professionals?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_substring": "Atlas Pro",
+      "expected_lang": "fr"
+    },
+    {
+      "id": "q13",
+      "question": "Quel compte proposé par Atlas est destiné aux indépendants ?",
+      "language": "fr",
+      "category": "paraphrase",
+      "expected_substring": "Atlas Pro"
+    },
+    {
+      "id": "q17",
+      "question": "Which product is called \"Compte Courant Atlas Pro\"?",
+      "language": "en",
+      "category": "verbatim",
+      "expected_substring": "Atlas Pro",
+      "expected_lang": "fr"
+    },
+    {
+      "id": "q14",
+      "question": "How do I change my online banking password?",
+      "language": "en",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q15",
+      "question": "Quels sont les horaires d'ouverture de l'agence de Marseille ?",
+      "language": "fr",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q16",
+      "question": "كيف أتقدم بطلب للحصول على قرض عقاري؟",
+      "language": "ar",
+      "category": "out-of-scope"
+    }
+  ]
+}

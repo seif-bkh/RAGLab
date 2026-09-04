@@ -1,0 +1,15 @@
+# Minimal, deliberate dependency list. No orchestration frameworks (no LangChain, no LlamaIndex).
+chromadb>=1.0,<2
+python-dotenv>=1.0
+pypdf>=4.0
+tiktoken>=0.7
+
+# Official OpenAI client — default embedding provider (EMBEDDING_PROVIDER = "openai" in config.py).
+openai>=1.30
+
+# --- Optional providers -----------------------------------------------
+# Uncomment exactly one line when you switch EMBEDDING_PROVIDER in config.py.
+# For EMBEDDING_PROVIDER = "cohere"  -> model e.g. `embed-multilingual-v3.0`:
+# cohere>=5.10
+# For EMBEDDING_PROVIDER = "voyage"  -> model e.g. `voyage-multilingual-2`:
+# voyageai>=0.2
