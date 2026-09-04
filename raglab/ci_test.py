@@ -150,10 +150,20 @@ def run_steps() -> None:
                          if c.get("language") != target]
                 if texts:
                     translator.translate_many(texts, target)
-            check("translation API calls succeeded",
-                  translator.api_calls >= 1 and translator.failures == 0,
+            ok_trans = (translator.api_calls >= 1
+                        and translator.failures == 0)
+            check("translation API calls succeeded", ok_trans,
                   f"calls={translator.api_calls} failures={translator.failures} "
-                  f"cache_hits={translator.cache_hits}")
+                  f"cache_hits={translator.cache_hits} "
+                  f"active_model={translator.active_model} "
+                  f"last_error={translator.last_error or 'none'}")
+            if not ok_trans:
+                annotate_error([
+                    f"translation failed: active_model="
+                    f"{translator.active_model} last_error="
+                    f"{translator.last_error or 'unknown'}",
+                    "fix: check QUERY_TRANSLATION_MODEL / key permissions "
+                    "(workflow makes query-translation a hard plumbing check)"])
             sample = next((c for c in samples if c.get("language") == "ar"
                            and c.get("expected_lang") == "fr"), None)
             example = ""
@@ -161,7 +171,10 @@ def run_steps() -> None:
                 tr = translator.translate_one(sample["question"], "fr")
                 if tr:
                     example = f" | e.g. {sample['id']} ar->fr: {tr!r}"
-            notify(f"query-translation: enabled=True model={translator.model} "
+            active = ("" if translator.active_model == translator.model
+                      else f"->{translator.active_model}")
+            notify(f"query-translation: enabled=True model="
+                   f"{translator.model}{active} "
                    f"api_calls={translator.api_calls} "
                    f"cache_hits={translator.cache_hits} "
                    f"failures={translator.failures}{example}")

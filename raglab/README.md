@@ -286,7 +286,7 @@ provider, model and top-k so runs are comparable after you change settings.
 | A/B task prompts on `gemini-embedding-2` | flip `GEMINI_USE_TASK_PROMPTS`, then `ingest --reset` |
 | Tune retrieval | `RETRIEVAL_TOP_K`, `RRF_RANK_CONSTANT`, `EVAL_TOP_K` in `config.py` |
 | Toggle query translation | `QUERY_TRANSLATION_ENABLED` in `config.py`, or `--no-translation` on `query` / `evaluate` |
-| Change translation model | edit `QUERY_TRANSLATION_MODEL` (e.g. `gemini-2.5-flash-lite`) |
+| Change translation model | edit `QUERY_TRANSLATION_MODEL` (e.g. `gemini-2.5-flash-lite`); `QUERY_TRANSLATION_FALLBACK_MODELS` is tried in order when the primary errors |
 
 Typical iteration loop: `inspect` → tweak chunking → `inspect` again →
 `ingest --reset` (cached embeddings make re-ingest free) → `query` →

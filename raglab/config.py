@@ -115,4 +115,10 @@ QUERY_TRANSLATION_ENABLED = os.getenv(
 QUERY_TRANSLATION_MODEL = os.getenv(
     "QUERY_TRANSLATION_MODEL", "gemini-2.5-flash"
 )  # free AI Studio tier: 2.5 Flash / 2.5 Flash-Lite family
+# Tried in order when the primary model errors (e.g. not enabled for the
+# key/project); the switch is printed and recorded in the results.
+QUERY_TRANSLATION_FALLBACK_MODELS = os.getenv(
+    "QUERY_TRANSLATION_FALLBACK_MODELS",
+    "gemini-2.5-flash-lite,gemini-2.0-flash",
+)
 QUERY_TRANSLATION_CACHE_PATH = PROJECT_DIR / "translations_cache.json"

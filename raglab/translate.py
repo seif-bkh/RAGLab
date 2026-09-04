@@ -114,6 +114,13 @@ class QueryTranslator:
 
     def __init__(self, cfg):
         self.model = str(getattr(cfg, "QUERY_TRANSLATION_MODEL", "gemini-2.5-flash"))
+        # If the primary model is unavailable for this key/project, fall back
+        # to other free-tier flash models; the switch is loud and recorded.
+        self.fallback_models = [
+            m.strip() for m in str(getattr(
+                cfg, "QUERY_TRANSLATION_FALLBACK_MODELS", "")
+            ).split(",") if m.strip()]
+        self.active_model = self.model
         self.cache_path = Path(getattr(cfg, "QUERY_TRANSLATION_CACHE_PATH", "translations_cache.json"))
         self.cache = TranslationCache(self.cache_path)
         self.cache.model = self.model
@@ -122,6 +129,7 @@ class QueryTranslator:
         self.cache_hits = 0
         self.failures = 0
         self.dropped: list[str] = []  # "ar -> fr (first words...)"
+        self.last_error = ""          # last API error, for transparent failure
         self._client = None
         self._types = None
         self.available = self._make_client()
@@ -205,7 +213,14 @@ class QueryTranslator:
         return out[0] if out else None
 
     def _call_api(self, texts: list[str], target: str) -> list[str] | None:
-        """One numbered-lines request; one retry if parsing fails."""
+        """One numbered-lines request; one retry; falls back across models.
+
+        The primary model is tried first; on API errors (e.g. a model that is
+        not available for this key/project) the configured fallbacks are
+        tried in order. The switch is printed and recorded (active_model), so
+        a fallback is never silent. Parse failures retry once on the same
+        model before moving on.
+        """
         lang_name = LANG_NAMES[target]
         # Newlines would break the numbering; questions never need them.
         clean = [re.sub(r"\s+", " ", t).strip() for t in texts]
@@ -216,22 +231,33 @@ class QueryTranslator:
             "order, each prefixed with its number and a dot. No explanations.\n\n"
             + "\n".join(f"{i + 1}. {t}" for i, t in enumerate(clean))
         )
-        for attempt in range(2):
-            try:
-                self.api_calls += 1
-                response = self._client.models.generate_content(
-                    model=self.model, contents=[prompt]
-                )
-                parsed = self._parse(response.text or "", len(clean))
-                if parsed is not None:
-                    return parsed
-                print(f"[translate] WARNING: malformed response for target "
-                      f"{target} (attempt {attempt + 1}), retrying")
-            except Exception as exc:  # noqa: BLE001 — API/network: warn and retry once
-                print(f"[translate] WARNING: {type(exc).__name__} translating "
-                      f"to {target} (attempt {attempt + 1}/2): {exc}")
-            if attempt == 0:
-                time.sleep(1.5)
+
+        models = [self.active_model] + [
+            m for m in self.fallback_models if m != self.active_model]
+        for model in models:
+            if model != self.active_model:
+                print(f"[translate] WARNING: model {self.active_model!r} "
+                      f"failed; retrying with fallback {model!r}")
+                self.active_model = model
+                print(f"[translate] active model switched to {model}")
+            for attempt in range(2):
+                try:
+                    self.api_calls += 1
+                    response = self._client.models.generate_content(
+                        model=model, contents=[prompt]
+                    )
+                    parsed = self._parse(response.text or "", len(clean))
+                    if parsed is not None:
+                        return parsed
+                    self.last_error = f"malformed response (model={model})"
+                    print(f"[translate] WARNING: malformed response for target "
+                          f"{target} (attempt {attempt + 1}/2), retrying")
+                except Exception as exc:  # noqa: BLE001 — API/network: warn + retry
+                    self.last_error = f"{type(exc).__name__}: {exc} (model={model})"
+                    print(f"[translate] WARNING: {self.last_error} "
+                          f"(attempt {attempt + 1}/2)")
+                if attempt == 0:
+                    time.sleep(1.5)
         self.failures += 1
         return None
 
@@ -282,6 +308,8 @@ class QueryTranslator:
     # -- reporting ------------------------------------------------------------
 
     def summary(self) -> str:
-        return (f"model={self.model} available={self.available} "
-                f"api_calls={self.api_calls} cache_hits={self.cache_hits} "
-                f"failures={self.failures} dropped={len(self.dropped)}")
+        return (f"model={self.model} active={self.active_model} "
+                f"available={self.available} api_calls={self.api_calls} "
+                f"cache_hits={self.cache_hits} failures={self.failures} "
+                f"dropped={len(self.dropped)}"
+                + (f" last_error={self.last_error!r}" if self.last_error else ""))
