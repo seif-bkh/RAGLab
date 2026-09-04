@@ -48,6 +48,11 @@ def annotate_error(lines: list[str]) -> None:
         print(f"::error::{line}", flush=True)
 
 
+def notify(line: str) -> None:
+    """Emit a ::notice:: annotation (same API-readability benefit)."""
+    print(f"::notice::{line}", flush=True)
+
+
 def check(label: str, ok: bool, detail: str = "") -> bool:
     print(f"[ci] {'PASS' if ok else 'FAIL'}  {label}" + (f"  ({detail})" if detail else ""))
     if not ok:
@@ -81,6 +86,8 @@ def run_steps() -> None:
     check("vector dimension matches config",
           expected_dim is None or embedder._dimension == expected_dim,
           f"got={embedder._dimension} config={expected_dim}")
+    for line in getattr(embedder, "sanity_lines", []):
+        notify(f"sanity: {line}")
 
     # --- 3. Ingest (real embeddings, --reset) ---------------------------------
     CURRENT_STEP = "ingest"
@@ -146,23 +153,39 @@ def run_steps() -> None:
         progress(f"\n[ci] CONCLUSION — overall hit rates:"
                  f"  hit@1={overall['hit@1']:.3f}  hit@3={overall['hit@3']:.3f}"
                  f"  hit@5={overall['hit@5']:.3f}  (n={overall['n']})")
+        notify(f"evaluation: overall hit@1={overall['hit@1']:.3f} "
+               f"hit@3={overall['hit@3']:.3f} hit@5={overall['hit@5']:.3f} "
+               f"(n={overall['n']})")
         for cat, d in sorted(metrics["by_category"].items()):
             progress(f"[ci]   category {cat:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
                      f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
+            notify(f"evaluation: category {cat} n={d['n']} "
+                   f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                   f"hit@5={d['hit@5']:.3f}")
         for lang, d in sorted(metrics["by_language"].items()):
             progress(f"[ci]   language {lang:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
                      f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
+            notify(f"evaluation: language {lang} n={d['n']} "
+                   f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                   f"hit@5={d['hit@5']:.3f}")
         progress(f"[ci]   separation  correct={sep['mean_correct_score']:.4f} "
                  f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
                  f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f}")
+        notify(f"evaluation: separation correct={sep['mean_correct_score']:.4f} "
+               f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
+               f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f}")
         progress(f"[ci]   out-of-scope  max_top1={oos['max_top1_score']:.4f} "
                  f"mean_top1={oos['mean_top1_score']:.4f} (n={oos['n']})")
+        notify(f"evaluation: out-of-scope max_top1={oos['max_top1_score']:.4f} "
+               f"mean_top1={oos['mean_top1_score']:.4f} (n={oos['n']})")
         misses = [q for q in run["questions"]
                   if not q["is_out_of_scope"] and q["correct_rank"] is None]
         for q in misses:
             progress(f"[ci]   MISS  {q['id']} [{q['language']}/{q['category']}] "
                      f"not in top {run['config']['retrieval_top_k']} — "
                      f"{q['question'][:70]}")
+            notify(f"evaluation: MISS {q['id']} [{q['language']}/{q['category']}] "
+                   f"not in top {run['config']['retrieval_top_k']}")
 
     # --- 6. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"
@@ -185,6 +208,8 @@ def run_steps() -> None:
                        + [f"  check failed: {f}" for f in failures]
                        + ["  details: artifact raglab-eval-results / ci_test_error.txt"])
         sys.exit(1)
+    notify("RAGLab CI PASSED: full pipeline mechanics + evaluation OK "
+           "(metrics above, results JSON in the raglab-eval-results artifact)")
     progress("[ci] CI PIPELINE PASSED — all mechanics verified; metrics above are the report.")
     print("=" * 78)
     sys.exit(0)

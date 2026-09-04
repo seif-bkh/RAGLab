@@ -287,7 +287,11 @@ class BaseEmbedder:
 
     def _sanity_check(self):
         """Embed three phrases, one per language, and print pairwise cosine
-        similarity so you can see whether they live in one shared space."""
+        similarity so you can see whether they live in one shared space.
+
+        Also stores self.sanity_lines so callers (e.g. the CI test) can pass
+        the results on to GitHub Actions ::notice:: annotations.
+        """
         phrases = [
             ("English", "savings account"),
             ("French", "compte épargne"),
@@ -296,14 +300,17 @@ class BaseEmbedder:
         vectors = self.embed_texts([p[1] for p in phrases])
         self._dimension = len(vectors[0]) if vectors else None
 
-        print("[sanity]  dimension:", self._dimension)
+        lines = [f"dimension: {self._dimension}"]
         for i in range(len(phrases)):
             for j in range(i + 1, len(phrases)):
                 sim = cosine(vectors[i], vectors[j])
-                print(f"[sanity]  cosine({phrases[i][0]:<7}, {phrases[j][0]:<7}) = {sim:+.4f}")
-        print("[sanity]  interpretation: if all three similarities are clearly positive, "
-              "the model places the languages in a shared space; negative/near-zero "
-              "values mean cross-lingual retrieval is likely to fail.")
+                lines.append(f"cosine({phrases[i][0]:<7}, {phrases[j][0]:<7}) = {sim:+.4f}")
+        lines.append("interpretation: if all three similarities are clearly positive, "
+                     "the model places the languages in a shared space; negative/near-zero "
+                     "values mean cross-lingual retrieval is likely to fail.")
+        self.sanity_lines = lines
+        for line in lines:
+            print(f"[sanity]  {line}")
         return vectors
 
 
