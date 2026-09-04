@@ -241,6 +241,9 @@ def cmd_query(args) -> int:
                 print(f"variant ranks: {ranks}")
         if hit.get("similarity") is not None:
             print(f"similarity : {hit['similarity']:+.4f}  (cosine, 1 - distance)")
+        if hit.get("relative_score") is not None:
+            print(f"relative   : {hit['relative_score']:.4f}  "
+                  f"(score / best score of its variant)")
         if hit.get("keyword_score") is not None:
             print(f"BM25 score : {hit['keyword_score']:.4f}")
         if hit.get("rrf_score") is not None:

@@ -98,8 +98,10 @@ EVAL_TOP_K = 20                # how many hits evaluation records per question
 # The remaining retrieval failures are language routing: an Arabic question
 # clusters on Arabic chunks even though the fact also exists in the French
 # document. When enabled, every query is translated into each corpus language
-# (translate.py) and each chunk is ranked by its best score across variants
-# (store.best_variant_merge). Translation uses the SAME Google AI Studio key
+# (translate.py) and each chunk is ranked by its best LANGUAGE-NORMALIZED score
+# across variants (store.best_variant_merge: each variant's scores are divided
+# by its own best match, because raw scores are not comparable across
+# languages). Translation uses the SAME Google AI Studio key
 # and google-genai SDK as the embedder — no new dependency, no new secret —
 # and is retrieval-side only (answer.py remains a stub).
 #

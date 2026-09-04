@@ -231,10 +231,15 @@ translated into each corpus language and retrieval runs **per variant**:
    per run), and translations are cached in `translations_cache.json`
    (sha256 of model + target + text).
 2. Each variant is embedded and retrieved like any other query.
-3. `store.best_variant_merge` fuses the variant rankings by **best-score
-   fusion**: every chunk keeps its highest similarity (or RRF score) across
-   variants *and the variant that produced it*, so a French chunk can win for
-   an Arabic question based on its French-variant score.
+3. `store.best_variant_merge` fuses the variant rankings by
+   **language-normalized best-score fusion**: raw scores are not comparable
+   across variants (the original same-language query always scores its
+   chunks ~0.80 vs ~0.76 for a translated query), so each variant's scores
+   are first normalized by that variant's own best match; every chunk then
+   keeps its best *relative* score, the variant that produced it, and all
+   (variant, rank) pairs. Ties break toward the original variant, so
+   same-language questions keep their ranking while a French chunk can win
+   for an Arabic question on its French-variant score.
 
 Transparency: `query` prints every variant and, per hit, the `best variant`
 and all `variant ranks`; `evaluate` records `query_variants`, `top_variant`

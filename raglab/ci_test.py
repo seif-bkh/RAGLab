@@ -259,14 +259,28 @@ def run_steps() -> None:
                f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f} "
                f"oos_max_top1={oos['max_top1_score']:.4f} "
                f"oos_mean_top1={oos['mean_top1_score']:.4f} (oos_n={oos['n']})")
+        # Per-question diagnostics (compact annotations; verbose detail below
+        # in the progress log, kept in the uploaded results artifact).
+        xl_detail = " | ".join(
+            f"{q['id']} {q.get('language')}->{q.get('expected_lang')} "
+            f"rank={q.get('correct_rank')} via={q.get('correct_variant') or '-'} "
+            f"top={q.get('top_variant') or '-'}"
+            for q in run.get("questions", [])
+            if q.get("category") == "cross-lingual")
+        sl_detail = " | ".join(
+            f"{q['id']} {q.get('language')} rank={q.get('correct_rank')} "
+            f"via={q.get('correct_variant') or '-'}"
+            for q in run.get("questions", [])
+            if q.get("category") in ("verbatim", "paraphrase"))
+        # One compact line (GitHub shows at most 10 annotations per step).
+        notify(f"evaluation: detail  xl: {xl_detail or '-'}  sl: {sl_detail or '-'}")
         misses = [q for q in run["questions"]
                   if not q["is_out_of_scope"] and q["correct_rank"] is None]
         for q in misses:
             progress(f"[ci]   MISS  {q['id']} [{q['language']}/{q['category']}] "
                      f"not in top {run['config']['retrieval_top_k']} — "
                      f"{q['question'][:70]}")
-            # What DID come back instead? Top 3 hits, one compact notice each,
-            # so the diagnosis (retrieval noise vs chunking) is visible.
+            # What DID come back instead? Top 3 hits (log-level only).
             top = q["hits"][:3]
             parts = []
             for h in top:
@@ -283,11 +297,7 @@ def run_steps() -> None:
                     f"v={h.get('variant') or '?'} h='{heading[:20]}' "
                     f"txt='{snippet}...'"
                 )
-            any_lang = q.get("correct_any_lang_rank")
-            note = f" [answer found ANY-lang at rank {any_lang} -> language-routing] " \
-                if any_lang else " [no any-language hit in top-k] "
-            notify(f"evaluation: MISS {q['id']}{note} expected={q.get('expected')} -> "
-                   + " | ".join(parts))
+            progress(f"[ci]     " + " | ".join(parts))
 
     # --- 6. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"

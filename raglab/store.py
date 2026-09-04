@@ -249,26 +249,46 @@ def collection_languages(collection) -> list[str]:
     return sorted({m.get("language") for m in metas if m.get("language")})
 
 
+def _variant_lang(label: str) -> str:
+    """'fr(translated)' -> 'fr', 'ar(original)' -> 'ar'."""
+    return str(label).split("(")[0].strip()
+
+
 def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
                        labels: list = None) -> list:
-    """Best-score fusion across query-language variants.
+    """Language-normalized best-score fusion across query-language variants.
 
-    Each chunk keeps its BEST score across variants — the language in which it
-    matches best — plus the variant that produced it and every (variant, rank)
-    pair, so retrieval stays transparent. This is what makes a French chunk
-    winnable for an Arabic question: it is ranked by its French-variant score,
-    not by the Arabic-variant score of the Arabic chunks around it.
+    Raw scores are NOT comparable across variants: the original (same-language)
+    query scores its chunks ~0.80 while a translated query scores its chunks
+    ~0.76, so a raw maximum systematically favors the query's own language —
+    exactly the language-routing problem translation is meant to fix.
 
-    score_key selects the comparable score: "similarity" (cosine) for
-    vector-only retrieval, "rrf_score" for hybrid (both variants used the
-    same fusion constant, so the values are comparable).
+    Therefore each variant's scores are first normalized by the variant's OWN
+    best score (relative similarity: how close a chunk is to the best match in
+    that query language), then every chunk keeps its best relative score plus
+    the variant that produced it and all (variant, rank) pairs. Ties (e.g. the
+    correct chunk is rank 1 in its own language AND another variant's best is
+    also 1.0) break by variant order, so the original-language ranking is
+    preserved and same-language queries are unaffected.
+
+    score_key selects the comparable score within a variant: "similarity"
+    (cosine) for vector-only retrieval, "rrf_score" for hybrid.
     """
     if not variant_hit_lists:
         return []
     labels = [str(l) for l in (labels or range(len(variant_hit_lists)))]
     fused: dict[str, dict] = {}
     for v_idx, (label, hits) in enumerate(zip(labels, variant_hit_lists)):
+        # Normalization constant: best score inside THIS variant.
+        top = max((h.get(score_key) for h in hits
+                   if h.get(score_key) is not None), default=None)
+        if top is None or top <= 0:
+            continue
         for hit in hits:
+            val = hit.get(score_key)
+            if val is None:
+                continue
+            rel = val / top
             entry = fused.setdefault(hit["id"], {
                 "id": hit["id"],
                 "text": hit["text"],
@@ -277,29 +297,45 @@ def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
                 "rrf_score": None,
                 "keyword_score": None,
                 "best_score": None,
+                "relative_score": None,
                 "from_variant": None,
                 "variant_ranks": {},
                 "_variant_order": v_idx,
+                "_best_same_lang": False,
             })
             entry["variant_ranks"][label] = hit["rank"]
-            # Keep the best value of EACH score type so hybrid entries stay
-            # recognizably hybrid; the selected score is best_score.
+            # Keep the best raw value of EACH score type so hybrid entries
+            # stay recognizably hybrid; ranking uses the RELATIVE score.
             for key in ("similarity", "rrf_score", "keyword_score"):
-                val = hit.get(key)
-                if val is not None and (entry[key] is None or val > entry[key]):
-                    entry[key] = val
-            val = hit.get(score_key)
-            if val is not None and (entry["best_score"] is None
-                                    or val > entry["best_score"]):
+                raw = hit.get(key)
+                if raw is not None and (entry[key] is None or raw > entry[key]):
+                    entry[key] = raw
+            if entry["best_score"] is None or val > entry["best_score"]:
                 entry["best_score"] = val
+            # Relative selection: strictly better wins. On an exact tie the
+            # variant whose language matches the chunk's language wins (the
+            # translated query is the effective search language for that side
+            # of the corpus); the original variant is the final fallback, so
+            # same-language questions keep their ranking.
+            chunk_lang = (entry["metadata"] or {}).get("language")
+            variant_lang = _variant_lang(label)
+            same_lang = bool(chunk_lang and chunk_lang == variant_lang)
+            if (entry["relative_score"] is None
+                    or rel > entry["relative_score"]
+                    or (rel == entry["relative_score"]
+                        and same_lang and not entry["_best_same_lang"])):
+                entry["relative_score"] = rel
                 entry["from_variant"] = label
                 entry["_variant_order"] = v_idx
+                entry["_best_same_lang"] = same_lang
 
-    merged = [e for e in fused.values() if e["best_score"] is not None]
-    merged.sort(key=lambda e: (-e["best_score"], e["_variant_order"]))
+    merged = [e for e in fused.values() if e["relative_score"] is not None]
+    merged.sort(key=lambda e: (-e["relative_score"], e["_variant_order"],
+                               -(e.get("best_score") or 0.0)))
     for rank, entry in enumerate(merged, start=1):
         entry["rank"] = rank
         entry.pop("_variant_order", None)
+        entry.pop("_best_same_lang", None)
     return merged
 
 
