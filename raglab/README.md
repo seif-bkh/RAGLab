@@ -246,6 +246,19 @@ printed warning rather than mixed in.
   extra lambda costs zero additional embedding API calls; the sweep picks the
   lambda that maximizes hit@1 (hit@3/5 as tiebreakers) and reports whether it
   recovers the vector hit@1 while keeping the RRF recall gain on q10.
+- The per-variant fusion tie-break is also measured in CI (three policies,
+  `FUSION_TIE_BREAK`): `variant_order` (original behavior), `raw` (absolute
+  score — fixes cross-lingual top-1 but biases same-language), and
+  `same_lang_margin` (default: champion whose query language matches the
+  chunk's language, then the sharpest champion). The best policy is picked by
+  the measured blend hit@1 and reported.
+- Measured (fictional, gemini-embedding-2, run `836cef1`-based CI): with
+  `same_lang_margin`, vector h1 .571 / RRF .429 / blend(λ=.7) .500 — the
+  spec'd λ=0.7 still misses hit@1 by one question (n=14, ±.07 is noise), but
+  the blend keeps the RRF recall gain (q10 9→4, hit@5 1.000). The sweep's
+  λ=0.95 recovers hit@1 (.643 ≥ .571) with q10 9→5. Set
+  `HYBRID_BLEND_LAMBDA=0.95` to prefer hit@1; keep 0.7 for deep recall. Both
+  verdicts are printed by CI per run.
 
 ### Query translation — cross-lingual retrieval (experimental, `translate.py`)
 

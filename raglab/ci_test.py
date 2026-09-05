@@ -222,6 +222,16 @@ def blend_sweep(extra_args: tuple, label: str, baseline: dict | None,
               if b else "")
            + f" | {anchor_q} rank={q_b} (vector={q_v}, rrf={q_r}) | "
            f"hit@1 recovered: {'YES' if recovered else 'NO'}")
+    # The user's spec'd lambda (=0.7) gets its own verified verdict; the sweep
+    # may find a better value, reported separately above.
+    d70 = next((r for lam, r in rows if abs(lam - 0.70) < 1e-9), None)
+    if d70 is not None and baseline is not None:
+        od = d70["metrics"]["overall"]
+        rec70 = od["hit@1"] >= b["hit@1"]
+        notify(f"{label} blend at lambda=0.70: "
+               f"h1={od['hit@1']:.3f}/h3={od['hit@3']:.3f}/h5={od['hit@5']:.3f}"
+               f" (vector h1={b['hit@1']:.3f}) | "
+               f"hit@1 recovered: {'YES' if rec70 else 'NO'}")
 
 
 def check(label: str, ok: bool, detail: str = "") -> bool:

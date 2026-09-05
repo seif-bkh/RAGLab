@@ -103,8 +103,22 @@ jobs:
             else
               echo "cache artifact downloaded but empty — starting fresh"
             fi
+            if [ -s /tmp/cachex/translations_cache.json ]; then
+              cp /tmp/cachex/translations_cache.json ./translations_cache.json
+              echo "restored translation cache ($(wc -c < translations_cache.json) bytes)"
+            fi
           else
             echo "no previous ragLab-embed-cache artifact — starting fresh"
+          fi
+          TART=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" --paginate \
+                 --jq '[.artifacts[] | select(.name=="raglab-translation-cache" and .expired==false)][0].id' || true)
+          if [ -n "$TART" ] && [ "$TART" != "null" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$TART/zip" > /tmp/tcache.zip || true
+            mkdir -p /tmp/tcachex && (cd /tmp/tcachex && unzip -o -q /tmp/tcache.zip) || true
+            if [ -s /tmp/tcachex/translations_cache.json ]; then
+              cp /tmp/tcachex/translations_cache.json ./translations_cache.json
+              echo "restored translation cache (artifact $TART)"
+            fi
           fi
 
       - name: Run full pipeline integration test
@@ -127,6 +141,14 @@ jobs:
         with:
           name: raglab-embed-cache
           path: raglab/embeddings_cache.json
+          if-no-files-found: warn
+
+      - name: Upload translation cache (reproducible cross-run A/B)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raglab-translation-cache
+          path: raglab/translations_cache.json
           if-no-files-found: warn
 
       - name: Report failure details (GitHub issue, best-effort)
