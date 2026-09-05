@@ -841,6 +841,7 @@ def run_steps() -> None:
     CURRENT_STEP = "real-chunksize"
     progress("\n[ci] STEP 11b — real-docs chunk-size A/B (220 vs 340 tokens)")
     chunksize_ab = {}
+    ranks340 = ""  # per-question vector ranks at 340 (separate from metrics)
     # run only when the real leg actually completed
     if real_ready:
         old_size = cfg.CHUNK_SIZE_TOKENS
@@ -891,8 +892,9 @@ def run_steps() -> None:
                         o = runx["metrics"]["overall"]
                         if key == "vector":
                             # per-question ranks at 340 (rq13/rq14 = the two
-                            # questions that motivated the size A/B)
-                            chunksize_ab["_ranks340"] = " ".join(
+                            # questions that motivated the size A/B); kept in
+                            # a SEPARATE string, never inside the metrics dict
+                            ranks340 = " ".join(
                                 f"{qid}@v={q.get('correct_rank')}"
                                 for qid in ("rq13", "rq14")
                                 for q in (runx.get("questions") or [])
@@ -1035,13 +1037,13 @@ def run_steps() -> None:
                    f"vector={v220} rrf={r220} blend(.7)={b220}")
         summary += " || 340t " + " ".join(
             f"{k}={d['h1']:.3f}/{d['h3']:.3f}/{d['h5']:.3f}"
-            for k, d in sorted(chunksize_ab.items())
-            if not k.startswith("_"))
+            for k, d in sorted(chunksize_ab.items()))
         summary += (" (chunks="
-                    + ",".join(str(d["chunks"]) for d in chunksize_ab.values())
+                    + ",".join(str(d["chunks"]) for d in
+                               chunksize_ab.values())
                     + f", rq13-reachable={cov340['covered'] == cov340['total']})")
-        if chunksize_ab.get("_ranks340"):
-            summary += f" || 340t {chunksize_ab['_ranks340']}"
+        if ranks340:
+            summary += f" || 340t {ranks340}"
     else:
         summary = ""
     state = ""
