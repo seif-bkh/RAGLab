@@ -206,7 +206,6 @@ def blend_sweep(extra_args: tuple, label: str, baseline: dict | None,
         f"lambda={lam:.2f}:{hit3(r['metrics']['overall'])}"
         f" {anchor_q}={qrank(r, anchor_q)}"
         for lam, r in sorted(rows))
-    notify(f"{label} blend-lambda sweep ({joined})")
     best_lam, best_run = max(rows, key=lambda t: (
         t[1]["metrics"]["overall"]["hit@1"],
         t[1]["metrics"]["overall"]["hit@3"],
@@ -214,24 +213,27 @@ def blend_sweep(extra_args: tuple, label: str, baseline: dict | None,
     b = baseline["metrics"]["overall"] if baseline else None
     bh = best_run["metrics"]["overall"]
     q_b, q_v, q_r = qrank(best_run, anchor_q), (qrank(baseline, anchor_q)
-                                                if baseline else None),         (qrank(rrf_run, anchor_q) if rrf_run else None)
+                                                if baseline else None), (qrank(
+                                                    rrf_run, anchor_q)
+                                                if rrf_run else None)
     recovered = bool(b is not None and bh["hit@1"] >= b["hit@1"])
-    notify(f"{label} blend acceptance: best lambda={best_lam:.2f} "
-           f"h1={bh['hit@1']:.3f}/h3={bh['hit@3']:.3f}/h5={bh['hit@5']:.3f}"
-           + (f" (vector {b['hit@1']:.3f}/{b['hit@3']:.3f}/{b['hit@5']:.3f})"
-              if b else "")
-           + f" | {anchor_q} rank={q_b} (vector={q_v}, rrf={q_r}) | "
-           f"hit@1 recovered: {'YES' if recovered else 'NO'}")
-    # The user's spec'd lambda (=0.7) gets its own verified verdict; the sweep
-    # may find a better value, reported separately above.
+    # ONE line per sweep (GitHub keeps ~10 annotations per step; the sweep,
+    # its acceptance verdict and the spec'd-lambda verdict belong together).
+    line = (f"{label} blend sweep ({joined}) || best lambda={best_lam:.2f} "
+            f"h1={bh['hit@1']:.3f}/h3={bh['hit@3']:.3f}/h5={bh['hit@5']:.3f}"
+            + (f" (vector {b['hit@1']:.3f}/{b['hit@3']:.3f}/{b['hit@5']:.3f})"
+               if b else "")
+            + f" | {anchor_q} rank={q_b} (vector={q_v}, rrf={q_r}) | "
+            f"hit@1 recovered: {'YES' if recovered else 'NO'}")
     d70 = next((r for lam, r in rows if abs(lam - 0.70) < 1e-9), None)
     if d70 is not None and baseline is not None:
         od = d70["metrics"]["overall"]
         rec70 = od["hit@1"] >= b["hit@1"]
-        notify(f"{label} blend at lambda=0.70: "
-               f"h1={od['hit@1']:.3f}/h3={od['hit@3']:.3f}/h5={od['hit@5']:.3f}"
-               f" (vector h1={b['hit@1']:.3f}) | "
-               f"hit@1 recovered: {'YES' if rec70 else 'NO'}")
+        line += (f" || lambda=0.70: "
+                 f"h1={od['hit@1']:.3f}/h3={od['hit@3']:.3f}/h5={od['hit@5']:.3f}"
+                 f" (vector h1={b['hit@1']:.3f}) "
+                 f"hit@1 recovered: {'YES' if rec70 else 'NO'}")
+    notify(line)
 
 
 def check(label: str, ok: bool, detail: str = "") -> bool:
@@ -447,26 +449,25 @@ def run_steps() -> None:
         if not ab_rows:
             check("at least one tie-break A/B row recorded", False)
         else:
-            notify("fictional modes A/B (h1/h3/h5, q10 rank): " + " | ".join(
+            best_tie, best = max(ab_rows, key=lambda t: (
+                t[1]["blend"]["metrics"]["overall"]["hit@1"],
+                t[1]["blend"]["metrics"]["overall"]["hit@3"],
+                t[1]["blend"]["metrics"]["overall"]["hit@5"]))
+            cfg.FUSION_TIE_BREAK = best_tie
+            notify("fictional tie-break A/B (h1/h3/h5, q10): " + " | ".join(
                 f"{tie} v={hit3(r['vector']['metrics']['overall'])}"
                 f"@q10={qrank(r['vector'], 'q10')} "
                 f"r={hit3(r['rrf']['metrics']['overall'])}"
                 f"@q10={qrank(r['rrf'], 'q10')} "
                 f"b={hit3(r['blend']['metrics']['overall'])}"
                 f"@q10={qrank(r['blend'], 'q10')}"
-                for tie, r in ab_rows))
-            best_tie, best = max(ab_rows, key=lambda t: (
-                t[1]["blend"]["metrics"]["overall"]["hit@1"],
-                t[1]["blend"]["metrics"]["overall"]["hit@3"],
-                t[1]["blend"]["metrics"]["overall"]["hit@5"]))
-            cfg.FUSION_TIE_BREAK = best_tie
-            notify(f"fictional best tie-break: {best_tie} "
-                   f"(blend h1="
-                   f"{best['blend']['metrics']['overall']['hit@1']:.3f} "
-                   f"| vector h1="
-                   f"{best['vector']['metrics']['overall']['hit@1']:.3f}"
-                   f" | rrf h1="
-                   f"{best['rrf']['metrics']['overall']['hit@1']:.3f})")
+                for tie, r in ab_rows)
+                + f" || best={best_tie} (blend h1="
+                + f"{best['blend']['metrics']['overall']['hit@1']:.3f}, "
+                  f"vector="
+                + f"{best['vector']['metrics']['overall']['hit@1']:.3f}, "
+                  f"rrf="
+                + f"{best['rrf']['metrics']['overall']['hit@1']:.3f})")
             # Lambda sweep under the winning tie-break + acceptance verdict.
             blend_sweep((), "fictional", best["vector"], best["rrf"],
                         best["blend"], "q10", SWEEP_LAMBDAS)
@@ -587,9 +588,9 @@ def run_steps() -> None:
                      f"hit@3={m_rb['overall']['hit@3']:.3f}  "
                      f"hit@5={m_rb['overall']['hit@5']:.3f}  "
                      f"(n={m_rb['overall']['n']})")
-            d = delta_str(run_real_b, run_real) if run_real is not None else ""
-            notify(f"real-docs: blend {d} | {eval_summary(run_real_b)}")
-            # Preserve the default-lambda run, then sweep lambda (cache reuse).
+            # Preserve the default-lambda run, then sweep lambda (cache reuse);
+            # the merged sweep notice carries the blend result + verdict.
+            # (No standalone blend notice: GitHub keeps ~10 per step.)
             files = sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))
             if files:
                 shutil.copy(files[-1], cfg.RESULTS_DIR
