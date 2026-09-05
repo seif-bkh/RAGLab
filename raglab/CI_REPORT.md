@@ -208,9 +208,32 @@ larger Qwen3 variant are the candidates if we pursue local embeddings
 further. For now: keep `EMBEDDING_PROVIDER=gemini` (free hosted) as
 default; the huggingface provider remains an offline fallback (no quota).
 
+## Real docs — Jina embeddings A/B (2026-09-05, run `33944939286` + `33945106657`)
+
+New `EMBEDDING_PROVIDER=jina` (raw HTTPS, no new deps; key from
+`JINA_API_KEY`). Same 836 chunks (post-fix split), same questions.
+`jina-embeddings-v5-omni-small`: 1024 dims, L2-normalized,
+`retrieval.passage`/`retrieval.query` task mapping. Cross-lingual sanity:
+EN↔FR +0.8261, EN↔AR +0.8140, FR↔AR +0.8320 (Gemini 768d: +0.843/+0.864/+0.845
+— close, both clearly in one shared space).
+
+| mode (jina, 836 chunks) | h1  | h3  | h5  |
+|---|---|---|---|
+| vector | **.714** | **1.000** | **1.000** |
+| rrf (BM25+meta) | .571 | .786 | .857 |
+| blend λ=.75 | .643 | .929 | .929 |
+
+**Key per-question (vector mode): `rq13@v=1`** — the phrase that was
+UNREACHABLE on the old split (no chunk contained it) is now rank 1; rq14@v=3
+(previously rank 5 with Gemini on the old split). vector h3/h5 = 14/14.
+The gap to Gemini's historical h1 (.786 on the OLD 573-chunk split) cannot
+be judged yet: Gemini has not re-run on the NEW 836-chunk split (daily quota);
+the post-reset run gives the apples-to-apples comparison.
+
 ## Next step (after quota reset ~07:00 UTC)
 
 Re-run once (`workflow_run` on `arena/01a06d64-raglab`, or push a trivial
 commit): the 836-chunk real ingest resumes from the saved batch cache, then
 the vector/rrf/blend + lambda sweep + 220-vs-340 chunk-size A/B all rerun on
-the FIXED split. Those numbers will replace the "historical" block above.
+the FIXED split. Those numbers will replace the "historical" block above and
+complete the Gemini ↔ Jina comparison on identical chunks.
