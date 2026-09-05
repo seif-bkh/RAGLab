@@ -1035,7 +1035,8 @@ def run_steps() -> None:
                    f"vector={v220} rrf={r220} blend(.7)={b220}")
         summary += " || 340t " + " ".join(
             f"{k}={d['h1']:.3f}/{d['h3']:.3f}/{d['h5']:.3f}"
-            for k, d in sorted(chunksize_ab.items()))
+            for k, d in sorted(chunksize_ab.items())
+            if not k.startswith("_"))
         summary += (" (chunks="
                     + ",".join(str(d["chunks"]) for d in chunksize_ab.values())
                     + f", rq13-reachable={cov340['covered'] == cov340['total']})")
