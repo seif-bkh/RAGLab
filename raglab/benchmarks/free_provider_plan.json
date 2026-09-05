@@ -1,38 +1,16 @@
 {
-  "iteration": "03-fresh-full-development-xkiro",
+  "iteration": "04-selected-qwen-nemotron-only",
   "source_run": "33970405295",
   "source_commit": "be5f4448b09cd8905db6eaaf718d215bf4036e11",
   "retrieval_profile": "original",
   "answer_profile": "grounded-v1",
-  "screen_ids": [
-    "rq01",
-    "rq03",
-    "rq05",
-    "rq08",
-    "rq14",
-    "rq15",
-    "rq16"
-  ],
-  "max_logical_calls": 100,
-  "models": {
-    "xkiro": [
-      "qwen/qwen3.8-max:free",
-      "minimax/minimax-m3:free",
-      "mistralai/mistral-small-2603",
-      "deepseek/deepseek-v4-flash"
-    ],
-    "kiosapi": [
-      "moonshotai/kimi-k3",
-      "Qwen/Qwen3.8-27B",
-      "nvidia/nemotron-3-super-120b-a12b",
-      "deepseek-v4-flash"
-    ]
-  },
-  "selection": "Evaluate every eligible xKiro candidate on a fresh full development set, without reading or writing answer-cache successes. Select by refusal, rubric, validation and client latency before holdout. KiosAPI is explicitly deferred until Free-group routing is available. Existing held-out results may be reused only for exactly identical requests; not fresh validation.",
-  "free_policy": "Recheck live pricing. xKiro: free access tier and zero input/output/cache charges. KiosAPI: SKU exclusively in Free group with zero group multiplier and no billing expression. Never strip :free or fall back to a paid SKU.",
+  "screen_ids": ["rq01", "rq03", "rq05", "rq08", "rq14", "rq15", "rq16"],
+  "max_logical_calls": 40,
+  "models": {"xkiro": ["qwen/qwen3.8-max:free"]},
+  "selection": "Single user-selected model. Fresh development, held-out and source-injection checks; no model search, query translation or fallback.",
+  "free_policy": "Require xKiro free access tier and zero USD input/output/cache prices for the exact Qwen SKU. Fail closed if pricing or availability changes.",
   "development_mode": "all",
   "fresh_development": true,
-  "skip_providers": {
-    "kiosapi": "Previous run returned model_not_found for Free-only SKUs under group default (distributor). Await a token permitted to use Free; no further identical retries."
-  }
+  "fresh_holdout": true,
+  "fresh_security": true
 }

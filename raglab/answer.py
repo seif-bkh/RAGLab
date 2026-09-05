@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from artifacts import cache_lock, fingerprint, write_json
+from pipeline_policy import ANSWER_PROVIDER, validate_answer_selection
 from chunker import count_tokens
 from loader import normalize_arabic
 from nvidia_api import ANSWER_MODELS, NvidiaClient, safe_error
@@ -152,11 +153,8 @@ def local_private_refusal(cfg, question, language=None):
 
 def build_answer_generator(cfg, *, call_budget=1):
     """One-shot CLI factory. Alternative gateways must pass live free-price checks."""
-    provider = getattr(cfg, 'ANSWER_PROVIDER', 'nvidia')
-    if provider == 'nvidia':
-        return AnswerGenerator(cfg)
-    if provider not in {'xkiro', 'kiosapi'}:
-        raise ValueError(f'Unknown answer provider {provider!r}')
+    provider = getattr(cfg, 'ANSWER_PROVIDER', ANSWER_PROVIDER)
+    validate_answer_selection(provider, cfg.ANSWER_MODEL)
     from free_gateway import FreeGatewayClient, load_pricing
     from provider_catalog import PROVIDERS
     import os

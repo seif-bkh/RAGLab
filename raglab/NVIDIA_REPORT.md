@@ -1,5 +1,10 @@
 # NVIDIA RAG evaluation — 5 September 2026
 
+> Historical experiments; not the supported runtime. Current configuration uses
+> only xKiro Qwen 3.8 Max Free and native Nemotron embeddings. See the main guide
+> and readiness assessment. Old measurements/labels remain unchanged.
+
+
 ## Bottom line
 
 **The three exact translators have now been measured on the real corpus. The

@@ -1,5 +1,10 @@
 # Frozen NVIDIA evaluation protocol
 
+> Historical experiments; not the supported runtime. Current configuration uses
+> only xKiro Qwen 3.8 Max Free and native Nemotron embeddings. See the main guide
+> and readiness assessment. Old measurements/labels remain unchanged.
+
+
 ## Data
 
 - `retrieval_dev.json`: the previous session's 16 real-document questions

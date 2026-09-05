@@ -1,40 +1,34 @@
 # RAGLab
 
-A transparent Python laboratory for multilingual banking RAG (Arabic, French,
-English): document extraction → chunking → embeddings → local Chroma retrieval
-→ optional **cited, document-grounded answers**. No UI, cloud vector database,
-or orchestration framework.
+A transparent Arabic/French/English document-grounded QA lab. The supported
+pipeline now uses **only two models**:
 
-The current NVIDIA experiment uses these **exact** models:
+- **Embeddings:** `nvidia/nemotron-3-embed-1b`, native 2048 dimensions.
+- **Answers:** `qwen/qwen3.8-max:free` through xKiro, with live free-price checks.
 
-- Embeddings: `nvidia/nemotron-3-embed-1b` (native 2048-dimensional hosted API).
-- Translation comparison: `moonshotai/kimi-k3`,
-  `deepseek-ai/deepseek-v4-pro-0813`, `nvidia/riva-translate-4b-instruct-v2`.
-- Optional answers: the same Kimi or DeepSeek model, with evidence validation
-  and refusal when the documents do not support an answer.
+Retrieval uses the original query, local ChromaDB/cosine, and no separate chat
+translation model. There is no model/provider fallback. Retired provider choices
+and stale translation-enabled configuration fail before model calls.
 
 ```bash
 cd raglab
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-benchmark.txt
-cp .env.example .env                 # configure NVIDIA_API_KEY locally
+pip install -r requirements.txt
+cp .env.example .env  # configure only NVIDIA_API_KEY and XKIRO_API_KEY
 python main.py inspect --data-dir ../docs
 python main.py ingest --reset --data-dir ../docs
 python main.py query "What is Murabaha?" --query-lang en
 python main.py answer "What is Murabaha?" --query-lang en
-python main.py benchmark --stage all # explicit live API use; saves results/nvidia/
 ```
 
-See the **[free-model comparison and tested Qwen configuration](raglab/FREE_MODELS_REPORT.md)**,
-[exact NVIDIA results](raglab/NVIDIA_REPORT.md), [CLI guide](raglab/README.md),
-and [benchmark methodology](raglab/benchmarks/README.md).
-Qwen's free xKiro profile passed the small answer/security suite; KiosAPI is
-blocked by routing configuration and production certification remains outstanding.
-The previous session's
-measurements remain in [CI_REPORT.md](raglab/CI_REPORT.md); those are historical,
-not NVIDIA results. `chat_history.html` is the supplied previous-session archive.
+**Not production-ready for a banking service.** The measured Qwen profile passed
+13/14 development rubric checks, 18/18 held-out answer checks and three synthetic
+source-injection fixtures. That small, correlated test set is not a security,
+legal-correctness or availability guarantee. Suitable for a supervised pilot with
+approved nonconfidential documents, not unsupervised customer banking advice.
 
-**Not a production-certified banking service.** Retrieval scores and citation
-membership do not prove factual/legal correctness. The sample bank in `data/`
-is fictional; `docs/` is a separate real-document evaluation corpus. Do not send
-personal or confidential banking data to a trial endpoint without approval.
+See [the CLI guide](raglab/README.md), [readiness assessment](raglab/READINESS.md),
+and [measured model comparison](raglab/FREE_MODELS_REPORT.md). Historical reports
+and fixtures remain as evidence; their earlier providers are not active choices.
+The sample bank in `data/` is fictional; `docs/` contains the four real evaluation
+documents. No UI, account access, cloud vector database, or orchestration framework.

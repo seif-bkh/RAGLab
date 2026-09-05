@@ -8,9 +8,9 @@ from decimal import Decimal, InvalidOperation
 
 from nvidia_api import NvidiaClient, NvidiaAPIError, final_content
 from provider_catalog import PROVIDERS, NoCredentialRedirects
+from pipeline_policy import validate_answer_selection
 
-PRICING_URLS = {'xkiro': 'https://api.xkiro.com/v1/models',
-                'kiosapi': 'https://kiosapi.com/api/pricing'}
+PRICING_URLS = {'xkiro': 'https://api.xkiro.com/v1/models'}
 
 
 def is_zero(value):
@@ -24,7 +24,7 @@ def is_zero(value):
 
 
 def free_eligibility(provider, model, catalog):
-    """Fail closed on missing prices, paid siblings, and mixed paid/free groups."""
+    """Fail closed on missing prices and paid siblings of the selected Qwen SKU."""
     if provider == 'xkiro':
         entries = [m for m in catalog.get('data', []) if m.get('id') == model]
         if len(entries) != 1:
@@ -36,21 +36,12 @@ def free_eligibility(provider, model, catalog):
                 and all(is_zero(prices.get(k)) for k in ('input', 'output'))
                 and all(is_zero(prices[k]) for k in ('cache_read', 'cache_write') if k in prices))
         return bool(free), 'live_zero_token_prices' if free else 'not_verified_zero_price', row
-    if provider == 'kiosapi':
-        entries = [m for m in catalog.get('data', []) if m.get('model_name') == model]
-        free = (catalog.get('success') is True and bool(entries)
-                and is_zero((catalog.get('group_ratio') or {}).get('Free'))
-                and all(set(m.get('enable_groups', [])) == {'Free'}
-                        and m.get('quota_type') == 0 and not m.get('billing_expr')
-                        and 'openai' in m.get('supported_endpoint_types', []) for m in entries))
-        # model_price=0 alone is NOT free for token-priced New API models.
-        row = {'entries': entries, 'free_group_ratio': (catalog.get('group_ratio') or {}).get('Free'),
-               'pricing_version': catalog.get('pricing_version')}
-        return bool(free), 'exclusive_zero_multiplier_free_group' if free else 'free_group_not_exclusive_or_unverified', row
     raise ValueError('Unknown gateway provider')
 
 
 def load_pricing(provider, opener=None):
+    if provider not in PRICING_URLS:
+        raise ValueError('Only the xKiro pricing endpoint is supported')
     client = opener or urllib.request.build_opener(NoCredentialRedirects())
     headers = {'Accept': 'application/json', 'User-Agent': 'RAGLab-readonly-catalog/1.0'}
     key = os.environ.get(PROVIDERS[provider]['key_env'], '').strip()
@@ -74,6 +65,7 @@ Gateway-reported labels are NOT independent upstream identity attestation.
 Only the selected, live-price-approved request SKU may be called; no fallback.
 """
     def __init__(self, provider, model, pricing, *, budget, opener=None):
+        validate_answer_selection(provider, model)
         eligible, reason, metadata = free_eligibility(provider, model, pricing['catalog'])
         if not eligible:
             raise ValueError(f'Free-only policy rejected {provider}/{model}: {reason}')

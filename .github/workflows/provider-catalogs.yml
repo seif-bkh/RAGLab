@@ -1,4 +1,4 @@
-name: Additional provider catalogs
+name: Selected Qwen catalog diagnostic
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   catalogs:
-    name: Read-only xKiro and KiosAPI catalogs
+    name: Read-only Qwen availability and pricing metadata
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -23,7 +23,6 @@ jobs:
       - name: Inspect catalogs (no documents, queries, or inference)
         env:
           XKIRO_API_KEY: ${{ secrets.XKIRO_API_KEY }}
-          KIOSAPI_API_KEY: ${{ secrets.KIOSAPI_API_KEY }}
         run: python raglab/provider_catalog.py
       - name: Publish credential-free catalog metadata
         if: always()

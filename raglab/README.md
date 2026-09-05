@@ -1,329 +1,143 @@
-# RAGLab — multilingual retrieval and grounded-answer lab
+# RAGLab — selected Qwen / Nemotron pipeline
 
-RAGLab keeps raw, inspectable provider calls and a local ChromaDB index. It has
-no web UI, authentication, transaction tools, or cloud vector store. Generation
-is now **optional**; `query` and `evaluate` still stop at retrieval.
+The supported runtime is deliberately narrow:
 
-**[Tested free-model recommendation](FREE_MODELS_REPORT.md)** and
-[separate exact NVIDIA results](NVIDIA_REPORT.md). The best measured free answer
-profile is **xKiro `qwen/qwen3.8-max:free` with original-query Nemotron retrieval**.
-It passed the small development/holdout/source-injection gates; it is not
-production-certified. Native NVIDIA defaults are retained for compatibility;
-the tested free path is an explicit provider/model choice below.
+| Role | Provider / model |
+|---|---|
+| Embeddings | NVIDIA `nvidia/nemotron-3-embed-1b`, native 2048 dimensions |
+| Retrieval | Local persistent ChromaDB, cosine, original query, top 5 |
+| Answers | xKiro `qwen/qwen3.8-max:free`, `grounded-v1`, cited evidence |
+
+No separate query translation, provider fallback, or alternate answer model is
+active. Historical experiments and immutable measurement JSON remain for audit;
+they are not supported runtime choices. See [readiness](READINESS.md) and the
+[measured comparison](FREE_MODELS_REPORT.md).
 
 ## Setup
 
-Python 3.11 is the tested interpreter.
+Python 3.11 is tested. No LangChain/LlamaIndex or provider SDK is needed.
 
 ```bash
 cd raglab
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-benchmark.txt
+pip install -r requirements.txt
 cp .env.example .env
-# Set NVIDIA_API_KEY in .env. Never commit it or paste it into logs/chat.
+# Set NVIDIA_API_KEY and XKIRO_API_KEY locally. Never commit/paste their values.
 ```
 
-`requirements.txt` is sufficient for the CLI. `requirements-benchmark.txt` adds
-sacreBLEU for chrF++ reference-translation diagnostics. Gemini, Jina, local
-Hugging Face, OpenAI, Cohere, and Voyage embedding implementations remain
-available in `config.py`; optional providers need their corresponding keys/SDKs.
-NVIDIA uses the standard library's HTTPS client, not a new orchestration SDK.
+**Existing `.env` migration:** set `ANSWER_PROVIDER=xkiro`,
+`ANSWER_MODEL=qwen/qwen3.8-max:free`, `QUERY_TRANSLATION_ENABLED=0`, and
+`QUERY_VARIANT_STRATEGY=original`. Remove obsolete provider settings. Old values
+are rejected rather than silently causing calls to a retired model. The old
+unused repository secret is not deleted automatically; it can be removed in
+GitHub Settings if no other application needs it.
 
-### Exact NVIDIA model contracts
+NVIDIA embeddings accept `passage` for documents, `query` for questions, float
+vectors and `truncate=NONE`. Use dimension `0` (native) or `2048`, not a reduced
+Matryoshka dimension. Invalid/nonfinite/zero vectors and stale spaces fail before
+storage or retrieval. Embedding model changes require a collection reset.
 
-| Role | Model ID | Contract |
-|---|---|---|
-| Embedding | `nvidia/nemotron-3-embed-1b` | `input_type=passage` for documents, `query` for questions; `encoding_format=float`; `truncate=NONE`; native 2048 dimensions |
-| Translator / answerer | `moonshotai/kimi-k3` | `reasoning_effort=low`, temperature 0, fixed seed; only final content consumed |
-| Translator / answerer | `deepseek-ai/deepseek-v4-pro-0813` | `chat_template_kwargs={"thinking": false}`; final content only |
-| Translator | `nvidia/riva-translate-4b-instruct-v2` | supported language-pair system message, e.g. `en-ar`, then raw source text; French↔Arabic uses an explicit English pivot; never sent the general LLM translation prompt |
-
-The hosted embedding endpoint does **not** accept reduced dimensions for this
-model: use `NVIDIA_EMBEDDING_DIM=0` (native default) or `2048`. Model-card claims
-about locally slicing vectors are not the hosted API contract. Oversized inputs
-fail rather than being silently truncated.
-
-Official contracts:
-[embedding](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-embed-1b-infer),
-[Kimi](https://docs.api.nvidia.com/nim/reference/moonshotai-kimi-k3-infer),
-[DeepSeek](https://build.nvidia.com/deepseek-ai/deepseek-v4-pro-0813),
-[Riva](https://docs.api.nvidia.com/nim/reference/nvidia-riva-translate-4b-instruct-v2).
-
-No catalog-based substitution is performed. In particular, results for an older
-Kimi/DeepSeek model must not be labeled as results for these IDs. Translation
-fallbacks are empty by default and forcibly disabled in benchmarks.
-
-## Inspect, ingest, retrieve
-
-Choose **one** corpus for an experiment:
+## Inspect → ingest → retrieve → answer
 
 ```bash
-# Real documents (four Arabic PDF/DOCX files)
 python main.py inspect --data-dir ../docs
 python main.py ingest --reset --data-dir ../docs
 python main.py query "What are investment deposits?" --query-lang en
-python main.py evaluate --questions questions_real.json
-
-# Fictional French/Arabic bank product sheets (separate index rebuild)
-python main.py inspect
-python main.py ingest --reset
-python main.py evaluate
+python main.py answer "Quelle est la définition du financement Salam ?" --query-lang fr
+python main.py answer "متى تأسس بنك البركة تونس؟" --query-lang ar --show-context
+python main.py evaluate --questions benchmarks/retrieval_dev.json
 ```
 
-`inspect` prints every chunk, source, language, heading, token count and notes.
-It makes no model API calls. On first use tiktoken downloads its public BPE file;
-set `TIKTOKEN_CACHE_DIR` if you want an explicit cache location. Inspection can
-fall back to an estimator with a warning; **benchmarks require the actual
-cl100k_base tokenizer**. The tokenizer identity is part of the chunk fingerprint
-so estimator-built and real-BPE-built indexes cannot be silently mixed.
+`query`/`evaluate` stop at retrieval. `answer` uses Qwen by default; explicit
+`--provider xkiro --model 'qwen/qwen3.8-max:free'` remains accepted, but no other
+provider/model is allowed. `--no-translation` is now redundant. Local vector/RRF/
+blend retrieval controls remain diagnostic options; the measured default is
+original-query vector retrieval, not hybrid search.
 
-Ingestion caches vectors after every batch. Changes to chunk parameters,
-embedding model, endpoint or dimension require `ingest --reset`. A reset deletes
-the selected local collection, not your documents or resumable embedding cache.
-A nonempty collection requires an explicit reset; additive re-ingests are refused
-before model calls so old document versions cannot silently remain under reused IDs.
-Queries and passages have distinct cache entries; same-dimensional vectors from
-different models are not interchangeable. Invalid, zero-norm, nonfinite,
-misindexed or wrong-dimensional NVIDIA vectors fail before storage.
+`inspect` makes no model calls and prints chunks, sources, language and token
+counts. The real `cl100k_base` tokenizer downloads its public BPE file on first
+use; set `TIKTOKEN_CACHE_DIR` for an explicit cache. An estimator may be used for
+inspection with a warning, but regression measurements require the real tokenizer.
 
-### Retrieval variants
+Ingestion is not additive: a nonempty collection requires `--reset`, checked
+before model calls. A reset removes the selected local collection, not documents
+or resumable embedding caches. Cache/index identities include model, endpoint,
+embedding task, dimensions and tokenizer/chunk settings. Same-sized vectors from
+different models are never treated as interchangeable.
 
-```bash
-python main.py query "What is Salam financing?" --query-lang en --no-translation
-python main.py query "What is Salam financing?" --query-lang en --variant-strategy translated
-python main.py query "What is Salam financing?" --query-lang en --hybrid
-python main.py query "What is Salam financing?" --query-lang en --hybrid-blend
-```
+## Grounding, free pricing and credentials
 
-- `original`: original query only (cross-lingual embedding baseline).
-- `best`: original plus corpus-language translations, fused by the legacy
-  per-variant relative-score method. This is a ranking heuristic, not confidence.
-- `translated`: use corpus-language queries when available; a query already in
-  the corpus language is left alone.
-- `--hybrid`: vector/BM25 reciprocal rank fusion.
-- `--hybrid-blend`: `lambda × cosine + (1-lambda) × normalized BM25`.
-- `--lang ar|fr|en`: filter both vector and keyword results by document language.
+- The model receives only the question and retrieved source context, not gold
+  answers or evaluation labels. Context is token-bounded; optional neighboring
+  chunks are from the same source, never selected by ground truth.
+- Rendered claims need source IDs and contiguous evidence quotes that match after
+  normalization. Malformed JSON, invented citations and unmatched quotes fail
+  closed. **Quote membership is not semantic entailment.**
+- Private-account/live-data questions are refused locally before provider or index
+  access. The system has no banking accounts, passwords, transaction tools or live
+  exchange-rate feed. The regex guard is not a complete security classifier.
+- Before Qwen calls, xKiro's live catalog must list the **exact** SKU at free access
+  tier and zero USD input/output/cache prices. Paid siblings and model substitutions
+  are rejected. If pricing/availability changes, fail closed—do not choose another
+  model. This is an advertised-price check, not an independent billing audit.
+- Each service receives only its own environment credential. Gateway redirects
+  are disabled; errors are redacted. No credentials or reasoning deltas are exported
+  in measurements. Bounded pacing/retries and explicit provider errors remain.
+- xKiro is a gateway and reports the requested model across routing. Its response
+  label does not independently verify an upstream engine/version. Free service
+  carries no demonstrated production SLA.
 
-CLI, evaluation and answer generation share `retrieval.py`. Retrieval scores
-cannot be treated as probabilities or used as an uncalibrated refusal threshold.
+Answer/evidence JSON is saved in `results/`; use `--output PATH` to choose a file.
+Translation and answer caches retain their historical implementation tests, but
+only the answer cache is used by the selected chat path. Cache writes are atomic
+and protected across instances **within one process**; simultaneous writer
+processes are unsupported. Local persistence is not a production backup strategy.
 
-## Query translation
-
-Change `NVIDIA_TRANSLATION_MODEL` in `.env` to any exact translator ID above.
-`QUERY_TRANSLATION_PROMPT=basic-v1` is a direct translation baseline;
-`banking-v2` adds domain terminology and entity-preserving Riva few-shots.
-No benchmark answer facts or expected substrings appear in either prompt.
-
-Kimi and DeepSeek translate numbered batches. Riva translates one source query
-per request on English-centric pairs. Its official chat template does not
-recognize `fr-ar`/`ar-fr`: these pairs use two requests (`fr-en` then `en-ar`,
-or `ar-en` then `en-fr`) with the **same Riva model**. The route and intermediate
-English text are cached and recorded. The first retrieval run caught this
-adapter bug through the wrong-script guard; no such outputs entered retrieval. Output count, numbering, nonempty text, script and numeric
-preservation are validated. Model, endpoint, source/target language and prompt
-version scope the cache. Fallback results, if you explicitly enable fallbacks,
-are stored under the **actual** model and retain provenance.
-
-For an ordinary CLI query, translation failure can degrade to the original
-query, with a warning and recorded failure. Set `QUERY_TRANSLATION_STRICT=1` to
-fail instead. Benchmarks always use strict mode and zero fallback models.
-
-HTTP retries are bounded, use pacing, respect Retry-After, and never retry
-401/403/404 as transient errors. A long Retry-After is deferred rather than
-ignored. Kimi/DeepSeek can use SSE streaming to avoid waiting for a buffered
-response. Incomplete streams, output truncation and model substitutions are
-errors, not successful results. No reasoning content is used as translation or
-an answer. Free/trial endpoints have no production latency guarantee.
-
-## Optional grounded answers
+## Tests and selected-pipeline regression
 
 ```bash
-# Native NVIDIA model path (existing default)
-python main.py answer "Which year was Bank Al Baraka Tunisia founded?" --query-lang en
-
-# Best tested free gateway profile: keep native Nemotron, no chat translation
-python main.py answer "Quelle est la définition du financement Salam ?" \
-  --query-lang fr --provider xkiro --model 'qwen/qwen3.8-max:free' --no-translation
-```
-
-`--provider xkiro|kiosapi` is explicit opt-in. The factory checks the requested
-SKU against live zero-price rules before billable embedding calls; it never
-retries a paid sibling or swaps to a different model. Set that provider's own
-key in `.env` or the environment. Private/live-account refusals happen locally,
-before pricing/provider construction or index access. KiosAPI additionally needs
-a token permitted to use its **Free** group; the tested default-group token had
-no matching channels. Ordinary NVIDIA answers remain restricted to the two
-requested Kimi/DeepSeek IDs.
-
-`answer.py` asks the selected Kimi/DeepSeek model for JSON claims, each with a
-source ID and a contiguous verbatim evidence quote. It renders only validated
-claims and citations, and saves the complete answer/evidence record in `results/`.
-A token budget bounds context. Neighbor expansion adds adjacent chunks from the
-same source, never a ground-truth-selected passage.
-
-The generator refuses unsupported questions, empty context, private-account or
-live-data requests. It has no account access, tools, passwords or transaction
-capabilities. Invalid JSON, invented citations/quotes, empty claims or truncated
-provider output fail closed. API errors are reported separately from a genuine
-"not in the documents" refusal. Use `--output PATH` to select the saved JSON.
-
-**Limits:** quote membership is not semantic entailment. A real quote can still
-be misinterpreted or cited for the wrong claim. Prompt-injection defenses and
-capability regexes are safeguards, not a security proof. Expert review and a
-larger adversarial test set remain necessary.
-
-## Reproducible comparison
-
-```bash
-# One index, three exact translators, two prompts, original-query baseline,
-# limited retrieval tuning on development, then validation on frozen holdout.
-python main.py benchmark --stage retrieval
-
-# Complete the basic cited-answer comparison for both requested answer models.
-# Successful exact-request caches are reused; this is the bounded resume scope.
-python main.py benchmark --stage all --answer-profiles grounded-v1
-
-# Also compare grounded-v1 vs grounded-v2 (+ adjacent context).
-# This is a larger experiment, not implied by a basic-profile-only result.
-python main.py benchmark --stage all
-```
-
-See [`benchmarks/README.md`](benchmarks/README.md) for datasets, constraints,
-selection rules and limitations. Important artifacts:
-
-- `results/nvidia/REPORT.md`: readable scorecard, errors, selection and gates.
-- `results/nvidia/benchmark.json`: exact configuration, hashes and measurements.
-- `results/nvidia/chunks.json`: immutable inspected chunk snapshot.
-- `results/nvidia/dev_*.json`, `holdout_*.json`: full rankings, text and variants.
-- `results/nvidia/answers_*.json`: generated claims, evidence and rubric checks.
-- `benchmark_cache/`: resumable embeddings/translations/answers, ignored by Git.
-
-The benchmark uses its **own** Chroma path and never resets the ordinary CLI
-index. Repeat runs reuse exact-input caches. A cached answer is labeled cached;
-its recorded first-call latency is not counted as a new live-call latency.
-Translation and answer caches merge new entries under per-path locks, so several
-instances within one process do not overwrite each other's work. Writes are
-atomic, but these are local artifacts, not a shared production cache service.
-Do not run simultaneous writer processes against the same files.
-
-### Metrics
-
-- hit@1/3/5: whether a matching, source-constrained evidence chunk appears in the
-  top 1/3/5. MRR@10 also rewards earlier correct ranks.
-- chrF++: similarity to authored translation references. It is not a semantic
-  or expert quality score; valid translations can have different surface forms.
-- translation constraints: numbers, required entity names, script and selected
-  negation checks. Failure examples remain inspectable.
-- answer rubric: approximate required-concept substring checks plus the named
-  source constraint, separate from citation validity and refusal rates.
-- out-of-scope retrieval scores remain observable; high similarity is not proof
-  that a source contains the requested fact.
-
-An incomplete comparison exits nonzero. **Completed** means the experiment
-finished, not that its quality gates passed or the application is production-ready.
-
-## Tests and GitHub Actions
-
-```bash
-python -m compileall -q .
-python tests_offline.py
-python -m unittest -v test_nvidia_pipeline
-python -m pip check
+pip install -r requirements-benchmark.txt  # includes reference-metric test dependency
 ./run_tests.sh --offline --no-push
+python -m pip check
 ```
 
-Regular pushes/PRs run offline checks only. The old Gemini/Jina integration is
-explicitly opt-in. The NVIDIA workflow needs only the repository's
-`NVIDIA_API_KEY` secret; it never exports that key to the sandbox or artifacts.
+Ordinary pushes run compile/offline checks only. Legacy multi-model workflow and
+runner entry points are retired. Historical low-level provider implementations
+remain as offline test fixtures/utilities, not active integrations or defaults.
 
-Run **NVIDIA model comparison** manually in Actions with mode `probe` or
-`benchmark`, or update the versioned `benchmarks/run_plan.json` on the session
-branch. The latter is useful when a connected GitHub app can push but cannot
-dispatch workflows. Ordinary code pushes do not spend model quota.
+The **Qwen and Nemotron pipeline regression** Actions workflow is explicitly
+triggered by `benchmarks/free_provider_plan.json` or manual dispatch. Its plan is
+validated to contain only xKiro Qwen, original-query retrieval and grounded-v1.
+It reuses a hash-verified native Nemotron retrieval artifact from the four real
+Arabic PDF/DOCX files: 836 chunks, size 220 / overlap 40, 2048 dimensions. It makes
+no new embedding/translation calls. All selected-model development, holdout and
+injection checks can make fresh client calls; cache usage is disclosed.
 
-Results and caches are retained as workflow artifacts/Actions caches. Small
-measurement records are also published as neutral GitHub Checks because some
-sandboxes cannot download GitHub's redirected log/artifact blobs. Neutral
-measurement checks are not passing quality gates. `report` mode republishes an
-existing run without making model calls.
+With the frozen artifact already downloaded to `results/frozen_native/`, run:
 
-## Additional provider keys: catalog checks only
+```bash
+python main.py benchmark
+# or ./run_tests.sh --benchmark
+```
 
-`provider_catalog.py` can inspect the published xKiro and KiosAPI model catalogs
-using `XKIRO_API_KEY` and `KIOSAPI_API_KEY` from the environment (or `.env` when
-python-dotenv is installed). The separate **Additional provider catalogs** Actions
-workflow uses repository secrets of those names. Its versioned trigger is
-`benchmarks/provider_catalog_plan.json`.
+The workflow downloads the artifact automatically. Artifacts expire, so future
+reproductions may need a newly versioned source snapshot. A separate read-only
+Qwen catalog diagnostic uses only `XKIRO_API_KEY`; no retired provider key is read.
 
-This makes **only GET /models requests**: no documents, embeddings or chat calls.
-Each key goes only to its own documented HTTPS endpoint; credentialed redirects
-are refused. Raw gateway error bodies/headers are not published. Results are
-saved under `results/provider_catalog/` and in a neutral, inspectable Check.
-
-A catalog listing—even HTTP 200—does not prove key validity, inference availability,
-model quality, or the actual upstream engine. Family/alias matches are reported
-separately, **never substituted** for the exact requested model IDs. xKiro's docs
-say that its response reports the requested model across routing, so checking
-that response field alone cannot establish exact upstream identity. Catalog checks alone do not activate a provider. Subsequent free-gateway
-inference is explicitly selected and reported separately from the NVIDIA benchmark.
-
-Published endpoints/docs: [xKiro](https://docs.xkiro.com/),
-[KiosAPI](https://kiosapi.mintlify.app/getting-started/quickstart).
-
-## Free gateway answer experiments
-
-`free_model_benchmark.py` and the **Free gateway RAG comparison** workflow test
-an explicit shortlist in `benchmarks/free_provider_plan.json`. This is a separate
-experiment, not a relabeling of the exact NVIDIA comparison. The user authorized
-broader models here, but **only verified zero-priced request SKUs** are eligible.
-
-- xKiro's live `/v1/models` must say `access_tier=free` and show zero USD input,
-  output and any separately priced cache tokens. A `:free` suffix alone is not
-  accepted, and is never removed to retry a paid sibling.
-- KiosAPI's public `/api/pricing` must put the exact SKU **exclusively** in `Free`,
-  with a zero group multiplier and no custom billing expression. `model_price=0`
-  by itself does **not** mean a token-priced model is free. The key must also be
-  authorized to use that group; no account/token settings are changed here.
-- Pricing is rechecked before stages and after five minutes between new calls.
-  Only each provider's own environment key is sent to its documented endpoint;
-  redirects are disabled. No paid or model fallback is performed.
-
-The workflow downloads iteration 02's immutable **original-query** retrieval
-snapshot and verifies its commit, native 2048-dimensional Nemotron model, chunk
-manifest, question hashes and source text. It makes **zero new embedding or
-translation calls**. Original-only retrieval avoids dependence on NVIDIA chat
-quota; this context differs from the earlier translated-query answer experiment.
-
-Seven fixed development cases screen up to four eligible SKUs per provider.
-Each provider's screen winner gets the complete development set; the overall
-winner is frozen before held-out generation and three source-injection tests.
-The follow-up plan (`development_mode=all`, `fresh_development=true`) compares
-all four xKiro models on fresh full development calls; selective retries of
-previous invalid outputs are not treated as a new quality improvement. KiosAPI
-is deferred until its key can use the Free routing group. See
-[the research/iteration notes](benchmarks/FREE_MODELS.md).
-The budget is 100 logical calls, with at most two HTTP attempts per call. One
-worker and bounded pacing/retries limit load. Unavailable/untested rows stay
-explicitly incomplete. Only the basic grounded-v1 answer profile is compared.
-
-Outputs go to `results/free_models/` and neutral `Free gateway results / ...`
-Checks. Successful answers are cached separately by exact request and endpoint.
-The named SKU and gateway-reported model are recorded; **upstream identities are
-not independently verified**, and promotional free service is not a production
-SLA or independent billing audit. No ordinary CLI defaults are changed by this
-experimental model selection.
+Results are saved under `results/free_models/` and as neutral GitHub Checks with
+actual claims/evidence, configurations and errors. A completed job is not a
+production certificate. Declared quality gates and `production_ready=false` are
+separate. No test labels or historical measurements are rewritten after failures.
 
 ## Production boundary
 
-This is a stronger **evaluation lab**, not a deployed banking product. Outstanding
-work includes approved model hosting/data governance, Arabic/legal expert review,
-robust PDF extraction and DOCX/PDF heading metadata, independently authored and
-larger holdout suites, load/SLA testing, authentication/authorization, ingestion
-lifecycle/versioning, observability and adversarial security testing. The NVIDIA
-trial endpoints and a small benchmark cannot establish production readiness.
+This remains a **local evaluation lab / supervised pilot**. Before a banking
+service: approved model hosting/retention and version guarantees, independent
+Arabic/French banking/legal evaluation, broader adversarial tests, robust PDF/OCR
+and structural metadata, deployment access controls/document isolation, load/SLA
+validation, backups and operational monitoring are needed. No UI, authentication,
+transaction integration or cloud vector database is added by this model cleanup.
 
-`CI_REPORT.md` preserves the previous session's historical Gemini/Jina/Qwen
-experiments; do not confuse those measurements with the new NVIDIA comparison.
-All bank names, fees and rates in `data/` are fictional sample data; the four
-files in `../docs` are the separate user-supplied real-document corpus.
+See [READINESS.md](READINESS.md) for the prioritized blockers. Only approved
+nonconfidential material should be sent to a trial/free gateway.

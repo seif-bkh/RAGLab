@@ -1,5 +1,9 @@
 # Free gateway RAG results — 5 September 2026
 
+> Historical model comparison. The supported runtime is now pinned to xKiro
+> Qwen 3.8 Max Free and native Nemotron embeddings; retired providers are removed.
+> See [current configuration](README.md) and [production readiness](READINESS.md).
+
 ## Recommendation
 
 **Best tested free option: `qwen/qwen3.8-max:free` through xKiro.**
@@ -14,9 +18,9 @@ source-injection gates. **This is a promising, measured lab configuration—not
 production certification.** Gateway model identities are not independently
 verified, the evaluation is small, and free availability/prices can change.
 
-**KiosAPI remains blocked by key routing**, not graded as poor model quality.
-The current token's requests went to `default (distributor)`, while the tested
-zero-cost SKUs were advertised only under `Free`.
+**Historical KiosAPI tests were blocked by key routing**, not graded as poor
+model quality. That provider is now removed from the supported runtime; it is
+not a dependency or a remaining action for the selected pipeline.
 
 ## Fresh, full-development comparison
 
@@ -104,11 +108,9 @@ There were also provider-reported CPU-overload errors. The earlier authenticated
 Neither observation proves that the advertised models are intrinsically bad or
 unavailable to a correctly configured token.
 
-**Required next action:** configure the KiosAPI token for the **Free** routing
-group if the account permits it, or ask KiosAPI to enable that access. If a
-replacement token is issued, update the repository's `KIOSAPI_API_KEY` secret.
-Do not paste it into chat. No account settings were changed automatically, and
-identical failed calls are now deferred rather than repeatedly retried.
+**Current status:** this integration and its secret references have been removed.
+No token/group change is needed for the selected Qwen/Nemotron pipeline. The
+following comparison status describes the historical run, not a current dependency.
 
 The overall workflow deliberately remains **incomplete** because KiosAPI is not
 fully measured and the DeepSeek arm had a provider failure. That is distinct from
@@ -162,15 +164,15 @@ See [methodology](benchmarks/FREE_MODELS.md) and [the execution plan](benchmarks
 
 ## Use the tested profile
 
-The CLI now supports explicit free-gateway answers. Ordinary NVIDIA defaults are
-not silently changed. Configure `NVIDIA_API_KEY` and `XKIRO_API_KEY` in the local
+The CLI now defaults to the selected Qwen/Nemotron pair. Other provider/model
+choices are rejected; query translation is disabled. Configure `NVIDIA_API_KEY` and `XKIRO_API_KEY` in the local
 environment or `.env`, then:
 
 ```bash
 cd raglab
 python main.py ingest --reset --data-dir ../docs
 python main.py answer "Quelle est la définition du financement Salam selon le guide interne ?" \
-  --query-lang fr --provider xkiro --model 'qwen/qwen3.8-max:free' --no-translation
+  --query-lang fr
 ```
 
 This retains native Nemotron embeddings and original-query retrieval. The answer

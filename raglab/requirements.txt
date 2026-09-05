@@ -4,13 +4,3 @@ chromadb==1.5.9
 python-dotenv==1.2.3
 pypdf==6.17.0
 tiktoken==0.14.0
-
-# Retained for the explicitly selected legacy Gemini embedding/translation provider.
-google-genai==1.75.0
-
-# Optional providers: install only if you select them. These were NOT live-tested
-# in the current NVIDIA comparison; their offline interface regressions remain.
-# openai>=1.30
-# cohere>=5.10
-# voyageai>=0.2
-# sentence-transformers>=3.2

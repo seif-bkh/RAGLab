@@ -1,4 +1,4 @@
-name: Free gateway RAG comparison
+name: Qwen and Nemotron pipeline regression
 
 on:
   push:
@@ -17,9 +17,9 @@ concurrency:
 
 jobs:
   compare:
-    name: Free xKiro and KiosAPI grounded answers
+    name: Selected Qwen grounded answers
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,7 +55,6 @@ jobs:
         working-directory: raglab
         env:
           XKIRO_API_KEY: ${{ secrets.XKIRO_API_KEY }}
-          KIOSAPI_API_KEY: ${{ secrets.KIOSAPI_API_KEY }}
           PYTHONUNBUFFERED: "1"
           TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/raglab/benchmark_cache/free_tokenizer
         run: python free_model_benchmark.py

@@ -28,7 +28,9 @@ from loader import load_all
 from store import (best_variant_merge, blend_hybrid, collection_languages,
                    get_collection, keyword_search, query_vector, rrf_merge,
                    store_chunks)
-from translate import QueryTranslator, detect_language
+from translate import detect_language
+from pipeline_policy import (ANSWER_MODEL, ANSWER_PROVIDER, validate_answer_selection,
+                             validate_retrieval_settings)
 from retrieval import retrieve, expand_neighbors
 from artifacts import write_json
 
@@ -57,22 +59,12 @@ def make_embedder(skip_sanity: bool = False):
 
 
 def make_translator(quiet: bool = False):
-    """Build the query translator when enabled, else None (original queries).
-
-    Never raises: an unavailable/failing translator simply means the lab runs
-    without query translation (and records it in the evaluation run config).
-    """
-    if not bool(getattr(cfg, "QUERY_TRANSLATION_ENABLED", False)):
-        if not quiet:
-            print("[translate] QUERY_TRANSLATION_ENABLED=False — original queries only")
-        return None
-    try:
-        return QueryTranslator(cfg)
-    except SystemExit:
-        raise  # missing SDK: let the actionable message propagate
-    except Exception as exc:  # noqa: BLE001 — degrade, never block retrieval
-        print(f"[translate] WARNING: disabled ({exc})")
-        return None
+    """The selected pipeline uses cross-lingual embeddings, not chat translation."""
+    if getattr(cfg, 'QUERY_TRANSLATION_ENABLED', False):
+        raise ValueError('Query translation is retired; set QUERY_TRANSLATION_ENABLED=0')
+    if not quiet:
+        print('[translate] disabled — original query with native Nemotron embeddings')
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -316,9 +308,8 @@ def cmd_answer(args):
 
 
 def cmd_benchmark(args):
-    from nvidia_benchmark import run
-    result = run(stage=args.stage, quality=not args.skip_translation_references,
-                 answer_profiles=args.answer_profiles)
+    from free_model_benchmark import run
+    result = run()
     return 0 if result["status"] == "completed" else 2
 
 
@@ -399,10 +390,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_answer = sub.add_parser("answer", help="generate a document-grounded, cited answer or refusal")
     p_answer.add_argument("question", nargs="+")
-    p_answer.add_argument('--provider', choices=['nvidia', 'xkiro', 'kiosapi'], default=cfg.ANSWER_PROVIDER,
-                          help='gateway choices enforce current zero-priced SKUs; no paid fallback')
-    p_answer.add_argument("--model", default=cfg.ANSWER_MODEL,
-                          help='exact provider request ID; NVIDIA remains restricted to the requested Kimi/DeepSeek IDs')
+    p_answer.add_argument('--provider', choices=[ANSWER_PROVIDER], default=cfg.ANSWER_PROVIDER,
+                          help='selected xKiro path only; live zero-price check, no paid fallback')
+    p_answer.add_argument("--model", choices=[ANSWER_MODEL], default=cfg.ANSWER_MODEL,
+                          help="selected Qwen 3.8 Max Free request ID; no substitution")
     p_answer.add_argument("--query-lang", choices=["en", "fr", "ar"], default=None)
     p_answer.add_argument("-k", type=int, default=cfg.ANSWER_TOP_K)
     p_answer.add_argument("--no-translation", action="store_true")
@@ -411,11 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_answer.add_argument("--show-context", action="store_true")
     p_answer.add_argument("--output", help="where to save the complete answer/evidence JSON")
     p_answer.set_defaults(func=cmd_answer)
-    p_bench = sub.add_parser("benchmark", help="exact-model NVIDIA comparison (uses API quota)")
-    p_bench.add_argument("--stage", choices=["retrieval", "all"], default="retrieval")
-    p_bench.add_argument("--skip-translation-references", action="store_true")
-    p_bench.add_argument('--answer-profiles', choices=['all', 'grounded-v1'], default='all',
-                         help='include both answer profiles, or resume the basic comparison only')
+    p_bench = sub.add_parser("benchmark", help="selected Qwen/Nemotron regression (frozen retrieval artifact required)")
     p_bench.set_defaults(func=cmd_benchmark)
 
     return parser
@@ -425,6 +412,10 @@ def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command in {'ingest', 'query', 'evaluate', 'answer'}:
+            validate_retrieval_settings(cfg)
+        if args.command == 'answer':
+            validate_answer_selection(args.provider, args.model)
         return args.func(args)
     except (ValueError, RuntimeError) as exc:
         if argv is not None:

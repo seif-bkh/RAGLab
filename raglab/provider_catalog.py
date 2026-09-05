@@ -1,4 +1,4 @@
-"""Read-only catalogs for explicitly named additional providers; no inference.
+"""Read-only xKiro catalog diagnostic for the selected Qwen model; no inference.
 
 Only documented HTTPS endpoints below receive their own environment key.
 Catalog presence (or HTTP 200 on a public catalog) proves neither authenticated
@@ -15,17 +15,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from artifacts import write_json
-from nvidia_api import EMBED_MODEL, TRANSLATION_MODELS
+from pipeline_policy import ANSWER_MODEL
 
 PROVIDERS = {
     'xkiro': {'base_url': 'https://api.xkiro.com/v1', 'key_env': 'XKIRO_API_KEY',
               'documentation': 'https://docs.xkiro.com/',
               'identity_note': 'Docs say the response reports the requested model across routing; not upstream identity proof.'},
-    'kiosapi': {'base_url': 'https://kiosapi.com/v1', 'key_env': 'KIOSAPI_API_KEY',
-                'documentation': 'https://kiosapi.mintlify.app/getting-started/quickstart',
-                'identity_note': 'An OpenAI-compatible catalog is not proof of exact upstream identity or inference availability.'},
+
 }
-EXACT_MODELS = [EMBED_MODEL, *TRANSLATION_MODELS]
+EXACT_MODELS = [ANSWER_MODEL]
 OUTPUT = Path(__file__).resolve().parent / 'results/provider_catalog/catalog.json'
 
 
@@ -59,7 +57,7 @@ def inspect_catalog(provider, *, opener=None):
         ids = sorted({m['id'] for m in data['data']
                       if isinstance(m, dict) and isinstance(m.get('id'), str)})
         related = [m.replace(key, '[REDACTED]') for m in ids
-                   if any(term in m.lower() for term in ('kimi', 'deepseek', 'riva', 'nemotron'))]
+                   if any(term in m.lower() for term in ('qwen3.8-max',))]
         return {**row, 'status': 'catalog_listed', 'advertised_model_count': len(ids),
                 'listed_exact_ids': [m for m in EXACT_MODELS if m in ids],
                 'absent_exact_ids': [m for m in EXACT_MODELS if m not in ids],

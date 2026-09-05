@@ -78,9 +78,4 @@ def probe(output):
 
 
 if __name__ == "__main__":
-    if "--report-only" in sys.argv:
-        report = json.loads((Path(__file__).parent / "results/nvidia/probe.json").read_text())
-        for model, result in report["models"].items():
-            annotation({"model": model, **result})
-    else:
-        sys.exit(probe(Path(__file__).parent / "results/nvidia/probe.json"))
+    raise SystemExit('This historical experiment is retired. The supported pipeline is xKiro Qwen plus Nemotron embeddings.')

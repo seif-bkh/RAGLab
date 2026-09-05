@@ -1,5 +1,10 @@
 # Free-model shortlist and safeguards
 
+> Historical experiments; not the supported runtime. Current configuration uses
+> only xKiro Qwen 3.8 Max Free and native Nemotron embeddings. See the main guide
+> and readiness assessment. Old measurements/labels remain unchanged.
+
+
 Research date: **2026-09-05**. This is an explicitly broader, gateway-reported
 answer experiment authorized after the exact NVIDIA comparison. The embeddings
 remain the frozen native `nvidia/nemotron-3-embed-1b` results.

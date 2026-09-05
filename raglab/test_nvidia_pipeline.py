@@ -19,6 +19,7 @@ from nvidia_api import (DEEPSEEK_MODEL, EMBED_MODEL, KIMI_MODEL, RIVA_MODEL,
                         NvidiaAPIError, NvidiaClient, chat_payload,
                         final_content, read_event_stream, retry_after_seconds)
 from nvidia_benchmark import make_config, selection_key
+from pipeline_policy import ANSWER_MODEL as QWEN_MODEL
 from store import ensure_fresh_chunks, get_collection, store_chunks, chunk_fp
 from translate import QueryTranslator, translation_issues
 
@@ -456,8 +457,52 @@ class Grounding(unittest.TestCase):
             self.assertEqual(len(json.loads(cfg.ANSWER_CACHE_PATH.read_text())), 8)
 
 
+class SelectedPipeline(unittest.TestCase):
+    def test_default_cli_uses_only_selected_pair_and_original_queries(self):
+        import config
+        from main import build_parser
+        args = build_parser().parse_args(['answer', 'What is Murabaha?'])
+        self.assertEqual(args.provider, 'xkiro')
+        self.assertEqual(args.model, QWEN_MODEL)
+        self.assertEqual(config.active_embedding_model(), EMBED_MODEL)
+        self.assertFalse(config.QUERY_TRANSLATION_ENABLED)
+        self.assertEqual(config.QUERY_VARIANT_STRATEGY, 'original')
+
+    def test_retired_cli_choices_are_rejected(self):
+        from main import build_parser
+        for option in (['--provider', 'kiosapi'], ['--provider', 'nvidia'], ['--model', KIMI_MODEL]):
+            with patch('sys.stderr', new_callable=io.StringIO):
+                with self.assertRaises(SystemExit):
+                    build_parser().parse_args(['answer', 'Question?', *option])
+
+    def test_stale_translation_or_embedding_settings_fail_before_io(self):
+        import config
+        from main import main
+        for setting, value in [('QUERY_TRANSLATION_ENABLED', True), ('EMBEDDING_PROVIDER', 'gemini'),
+                               ('NVIDIA_EMBEDDING_MODEL', 'wrong-model')]:
+            with patch.object(config, setting, value), patch('main.get_collection') as collection, \
+                 patch('main.make_embedder') as embedder:
+                with self.assertRaises(ValueError):
+                    main(['query', 'Question?'])
+                collection.assert_not_called()
+                embedder.assert_not_called()
+
+    def test_regression_cannot_reenable_retired_models(self):
+        from pipeline_policy import validate_regression_plan
+        plan = {'models': {'xkiro': [QWEN_MODEL]}, 'retrieval_profile': 'original', 'answer_profile': 'grounded-v1'}
+        validate_regression_plan(plan)
+        for models in ({'kiosapi': [QWEN_MODEL]}, {'xkiro': [QWEN_MODEL, 'minimax/minimax-m3:free']}):
+            with self.assertRaises(ValueError):
+                validate_regression_plan({**plan, 'models': models})
+
+    def test_legacy_benchmark_entrypoint_is_retired(self):
+        import nvidia_benchmark
+        with self.assertRaisesRegex(RuntimeError, 'retired'):
+            nvidia_benchmark.run('all')
+
+
 class FreeGatewayPolicy(unittest.TestCase):
-    def xcatalog(self, model='example/model:free'):
+    def xcatalog(self, model=QWEN_MODEL):
         return {'data': [{'id': model, 'access_tier': 'free', 'pricing': {
             'currency': 'USD', 'unit': 'per_1m_tokens', 'input': 0, 'output': 0},
             'reasoning_efforts': {'levels': ['none', 'high']}}]}
@@ -483,37 +528,34 @@ class FreeGatewayPolicy(unittest.TestCase):
     def test_xkiro_requires_free_tier_and_all_zero_prices(self):
         from free_gateway import free_eligibility
         catalog = self.xcatalog()
-        self.assertTrue(free_eligibility('xkiro', 'example/model:free', catalog)[0])
+        self.assertTrue(free_eligibility('xkiro', QWEN_MODEL, catalog)[0])
         catalog['data'][0]['access_tier'] = 'paid'
-        self.assertFalse(free_eligibility('xkiro', 'example/model:free', catalog)[0])
+        self.assertFalse(free_eligibility('xkiro', QWEN_MODEL, catalog)[0])
         catalog['data'][0]['access_tier'] = 'free'
         catalog['data'][0]['pricing']['cache_write'] = .1
-        self.assertFalse(free_eligibility('xkiro', 'example/model:free', catalog)[0])
+        self.assertFalse(free_eligibility('xkiro', QWEN_MODEL, catalog)[0])
         self.assertFalse(free_eligibility('xkiro', 'missing:free', catalog)[0])
 
-    def test_kios_zero_model_price_is_not_zero_token_pricing(self):
-        from free_gateway import free_eligibility
-        row = {'model_name': 'free-sku', 'model_price': 0, 'model_ratio': 1,
-               'quota_type': 0, 'enable_groups': ['default'], 'supported_endpoint_types': ['openai']}
-        catalog = {'success': True, 'data': [row], 'group_ratio': {'default': 1, 'Free': 0}}
-        self.assertFalse(free_eligibility('kiosapi', 'free-sku', catalog)[0])
-        row['enable_groups'] = ['Free']
-        self.assertTrue(free_eligibility('kiosapi', 'free-sku', catalog)[0])
-        row['enable_groups'] = ['Free', 'paid']
-        self.assertFalse(free_eligibility('kiosapi', 'free-sku', catalog)[0])
-        row['enable_groups'] = ['Free']
-        row['billing_expr'] = 'fixed_fee'
-        self.assertFalse(free_eligibility('kiosapi', 'free-sku', catalog)[0])
+    def test_removed_provider_and_other_models_are_rejected_before_io(self):
+        from free_gateway import FreeGatewayClient, load_pricing
+        with patch('urllib.request.build_opener') as opener:
+            with self.assertRaises(ValueError):
+                load_pricing('kiosapi')
+            with self.assertRaises(ValueError):
+                FreeGatewayClient('kiosapi', QWEN_MODEL, {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+            with self.assertRaises(ValueError):
+                FreeGatewayClient('xkiro', 'minimax/minimax-m3:free', {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+            opener.assert_not_called()
 
     def test_cli_gateway_factory_is_explicit_and_price_checked(self):
         from answer import build_answer_generator
-        cfg = make_config(ANSWER_PROVIDER='xkiro', ANSWER_MODEL='example/model:free')
+        cfg = make_config(ANSWER_PROVIDER='xkiro', ANSWER_MODEL=QWEN_MODEL)
         with patch.dict(os.environ, {'XKIRO_API_KEY': 'x-only', 'NVIDIA_API_KEY': 'nvidia-only'}), \
              patch('free_gateway.load_pricing', return_value={'catalog': self.xcatalog()}):
             generator = build_answer_generator(cfg)
         self.assertEqual(generator.client.base_url, 'https://api.xkiro.com/v1')
         self.assertEqual(generator.client.api_key, 'x-only')
-        self.assertEqual(generator.model, 'example/model:free')
+        self.assertEqual(generator.model, QWEN_MODEL)
         self.assertEqual(generator.client.budget['limit'], 1)
 
     def test_cli_private_guard_needs_no_gateway_or_index(self):
@@ -525,7 +567,7 @@ class FreeGatewayPolicy(unittest.TestCase):
                  patch('main.get_collection', side_effect=AssertionError('index access')), \
                  patch('sys.stdout', new_callable=io.StringIO):
                 code = main(['answer', 'What is my account balance?', '--provider', 'xkiro',
-                             '--model', 'example/model:free', '--query-lang', 'en', '--output', str(path)])
+                             '--model', QWEN_MODEL, '--query-lang', 'en', '--output', str(path)])
             self.assertEqual(code, 0)
             result = json.loads(path.read_text())
             self.assertEqual(result['reason'], 'private_or_live_request')
@@ -536,7 +578,7 @@ class FreeGatewayPolicy(unittest.TestCase):
         import config
         with patch.object(config, 'ANSWER_PROVIDER', 'xkiro'):
             self.assertEqual(make_config().ANSWER_PROVIDER, 'nvidia')
-        self.assertEqual(make_config(ANSWER_PROVIDER='kiosapi').ANSWER_PROVIDER, 'kiosapi')
+        self.assertEqual(make_config(ANSWER_PROVIDER='xkiro').ANSWER_PROVIDER, 'xkiro')
 
     def test_pricing_reads_scope_credentials_and_identify_the_client(self):
         from free_gateway import load_pricing
@@ -547,10 +589,10 @@ class FreeGatewayPolicy(unittest.TestCase):
         def read_price(req, timeout):
             requests.append(req)
             return PriceResponse({'data': []})
-        with patch.dict(os.environ, {'KIOSAPI_API_KEY': 'kios-only', 'XKIRO_API_KEY': 'x-only', 'NVIDIA_API_KEY': 'not-this'}):
-            load_pricing('kiosapi', opener=SimpleNamespace(open=read_price))
-        self.assertEqual(requests[0].full_url, 'https://kiosapi.com/api/pricing')
-        self.assertEqual(requests[0].get_header('Authorization'), 'Bearer kios-only')
+        with patch.dict(os.environ, {'XKIRO_API_KEY': 'x-only', 'NVIDIA_API_KEY': 'not-this'}):
+            load_pricing('xkiro', opener=SimpleNamespace(open=read_price))
+        self.assertEqual(requests[0].full_url, 'https://api.xkiro.com/v1/models')
+        self.assertEqual(requests[0].get_header('Authorization'), 'Bearer x-only')
         self.assertEqual(requests[0].get_header('User-agent'), 'RAGLab-readonly-catalog/1.0')
 
     def test_paid_sku_rejected_before_client_can_send_a_key(self):
@@ -558,11 +600,11 @@ class FreeGatewayPolicy(unittest.TestCase):
         catalog = self.xcatalog()
         catalog['data'][0]['pricing']['input'] = 1
         with self.assertRaisesRegex(ValueError, 'Free-only policy'):
-            FreeGatewayClient('xkiro', 'example/model:free', {'catalog': catalog}, budget={'used': 0, 'limit': 1})
+            FreeGatewayClient('xkiro', QWEN_MODEL, {'catalog': catalog}, budget={'used': 0, 'limit': 1})
 
     def test_gateway_key_payload_identity_and_call_budget(self):
         from free_gateway import FreeGatewayClient
-        model = 'example/model:free'
+        model = QWEN_MODEL
         with patch.dict(os.environ, {'XKIRO_API_KEY': 'x-only', 'NVIDIA_API_KEY': 'never-forward'}):
             client = FreeGatewayClient('xkiro', model, {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
         self.assertEqual(client.api_key, 'x-only')
@@ -581,14 +623,14 @@ class FreeGatewayPolicy(unittest.TestCase):
 
     def test_gateway_response_mismatch_is_not_scored_as_requested_model(self):
         from free_gateway import FreeGatewayClient
-        client = FreeGatewayClient('xkiro', 'example/model:free', {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+        client = FreeGatewayClient('xkiro', QWEN_MODEL, {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
         with patch.object(client, 'request', return_value={'model': 'different'}):
             with self.assertRaisesRegex(NvidiaAPIError, 'not attributed'):
-                client.chat('example/model:free', [])
+                client.chat(QWEN_MODEL, [])
 
     def test_price_change_stops_later_stage(self):
         from free_gateway import FreeGatewayClient
-        client = FreeGatewayClient('xkiro', 'example/model:free', {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+        client = FreeGatewayClient('xkiro', QWEN_MODEL, {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
         changed = self.xcatalog()
         changed['data'][0]['pricing']['output'] = 1
         with patch('free_gateway.load_pricing', return_value={'catalog': changed}):
@@ -597,7 +639,7 @@ class FreeGatewayPolicy(unittest.TestCase):
 
     def test_alternative_answer_models_require_explicit_client_and_allowlist(self):
         with tempfile.TemporaryDirectory() as temp:
-            cfg = make_config(ANSWER_MODEL='example/model:free', ANSWER_PROVIDER='xkiro',
+            cfg = make_config(ANSWER_MODEL=QWEN_MODEL, ANSWER_PROVIDER='xkiro',
                               ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
             with self.assertRaises(ValueError):
                 AnswerGenerator(cfg)
@@ -619,12 +661,13 @@ class ProviderCatalogs(unittest.TestCase):
                 return super().read()
         def open_catalog(req, timeout):
             requests.append(req)
-            return CatalogResponse({'data': [{'id': KIMI_MODEL}, {'id': 'deepseek/deepseek-v4-pro'},
+            return CatalogResponse({'data': [{'id': QWEN_MODEL}, {'id': 'deepseek/deepseek-v4-pro'},
                                               {'id': 'kimi-k3-alias'}]})
         with patch.dict(os.environ, {'XKIRO_API_KEY': 'xkiro-test-only', 'NVIDIA_API_KEY': 'never-send-this'}):
             row = inspect_catalog('xkiro', opener=SimpleNamespace(open=open_catalog))
-        self.assertEqual(row['listed_exact_ids'], [KIMI_MODEL])
-        self.assertIn(DEEPSEEK_MODEL, row['absent_exact_ids'])
+        self.assertEqual(row['listed_exact_ids'], [QWEN_MODEL])
+        self.assertEqual(row['absent_exact_ids'], [])
+        self.assertNotIn(DEEPSEEK_MODEL, row['listed_exact_ids'])
         self.assertEqual(requests[0].full_url, 'https://api.xkiro.com/v1/models')
         self.assertEqual(requests[0].get_header('Authorization'), 'Bearer xkiro-test-only')
         self.assertEqual(row['inference_calls'], 0)
@@ -633,7 +676,7 @@ class ProviderCatalogs(unittest.TestCase):
     def test_missing_key_does_not_make_a_request(self):
         from provider_catalog import inspect_catalog
         with patch.dict(os.environ, {}, clear=True):
-            row = inspect_catalog('kiosapi', opener=SimpleNamespace(open=lambda *a, **kw: self.fail('API call')))
+            row = inspect_catalog('xkiro', opener=SimpleNamespace(open=lambda *a, **kw: self.fail('API call')))
         self.assertEqual(row['status'], 'missing_key')
         self.assertEqual(row['catalog_requests'], 0)
 
@@ -688,8 +731,8 @@ class MeasurementReports(unittest.TestCase):
         self.assertGreaterEqual(cfg.NVIDIA_MIN_INTERVAL, 30)
         self.assertEqual(AnswerGenerator(cfg).client.max_retry_delay, cfg.NVIDIA_MAX_RETRY_DELAY)
         self.assertEqual(answer_config(DEEPSEEK_MODEL, 'grounded-v2').ANSWER_NEIGHBOR_RADIUS, 1)
-        args = build_parser().parse_args(['benchmark', '--stage', 'all', '--answer-profiles', 'grounded-v1'])
-        self.assertEqual(args.answer_profiles, 'grounded-v1')
+        args = build_parser().parse_args(['benchmark'])
+        self.assertEqual(args.command, 'benchmark')
 
     def test_verbose_retrieval_provenance_is_preserved_outside_summary(self):
         from publish_nvidia_report import report_parts

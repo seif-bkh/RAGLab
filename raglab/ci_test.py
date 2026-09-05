@@ -1098,8 +1098,4 @@ def run_main() -> None:
 
 
 if __name__ == "__main__":
-    print("=" * 78)
-    print("RAGLab CI integration test — provider:", cfg.EMBEDDING_PROVIDER,
-          "| model:", cfg.active_embedding_model())
-    print("=" * 78)
-    run_main()
+    raise SystemExit('This historical experiment is retired. The supported pipeline is xKiro Qwen plus Nemotron embeddings.')

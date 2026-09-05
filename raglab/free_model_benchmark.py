@@ -20,6 +20,7 @@ from evaluate import load_question_set
 from free_gateway import FreeGatewayClient, free_eligibility, load_pricing
 from nvidia_api import EMBED_MODEL, safe_error
 from publish_nvidia_report import check_text, report_parts
+from pipeline_policy import validate_regression_plan
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / 'results/free_models'
@@ -43,7 +44,7 @@ def eligible_generation(row):
 
 
 def markdown(report):
-    lines = ['# Free gateway grounded-answer comparison', '',
+    lines = ['# Selected Qwen / Nemotron pipeline regression', '',
              f"Status: **{report['status']}**", '',
              'Gateway request-SKU results, not independently verified upstream model identities.',
              'Frozen original-query Nemotron retrieval; no new embedding/translation calls.', '',
@@ -57,7 +58,7 @@ def markdown(report):
               json.dumps({k: report.get(k) for k in ('selected', 'gates', 'excluded_candidates', 'errors')},
                          ensure_ascii=False, indent=2), '```', '',
               'Free eligibility is checked from live pricing, not inferred from an open-weight license or model name. '
-              'KiosAPI models must be exclusive to its zero-multiplier Free group; model_price=0 alone is insufficient. '
+
               'Free SKUs can be promotional and rate-limited. No paid fallback is allowed.', '',
               'The held-out set has only six independent facts in three languages plus nine refusal variants. '
               'Substring rubrics and quote membership are proxies, not legal/semantic certification. '
@@ -77,11 +78,12 @@ def _run():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     nb.OUTPUT = OUTPUT  # reuse tested answer scoring/output, not NVIDIA API setup
     plan = json.loads(PLAN.read_text())
+    validate_regression_plan(plan)
     if plan.get('development_mode', 'screen') not in {'screen', 'all'} or not isinstance(plan['max_logical_calls'], int) or not 1 <= plan['max_logical_calls'] <= 100:
         raise ValueError('Invalid development mode or logical-call budget')
     full_comparison = plan.get('development_mode', 'screen') == 'all'
     report = {'generated_at': datetime.now(timezone.utc).isoformat(), 'status': 'running',
-              'protocol': 'free-gateways-v2-full-development' if full_comparison else 'free-gateways-v1-original-retrieval', 'plan': plan,
+              'protocol': 'qwen-nemotron-selected-v1', 'plan': plan,
               'embedding_model': EMBED_MODEL, 'embedding_api_calls': 0, 'translation_api_calls': 0,
               'model_identity': 'gateway_reported_not_independently_verified',
               'latency_scope': 'Uncached client calls, including invalid output and failed calls; excludes local guards and cached results.',
@@ -99,11 +101,11 @@ def _run():
     def evaluate(provider, model, cases, retrieval, prefix):
         cfg, generator = configs[(provider, model)], generators[(provider, model)]
         generator.client.recheck()
-        fresh = prefix == 'dev' and plan.get('fresh_development', False)
+        fresh = (prefix == 'dev' and plan.get('fresh_development', False)) or (prefix == 'holdout_selected' and plan.get('fresh_holdout', False))
         row = nb.generate_arm(cfg, None, cases, retrieval, label_for(prefix, provider, model),
                               generator=generator, use_cache=not fresh)
         row['provider'] = provider
-        row['fresh_development'] = fresh
+        row['fresh_client_calls'] = fresh
         report['generation'].append(row)
         save()
         return row
@@ -212,13 +214,14 @@ def _run():
                 and m['citation_validity'] == 1 and m['validation_rate_all'] == 1)
             gen = generators[(provider, model)]
             gen.client.recheck()
-            report['adversarial_context'] = nb.adversarial_context_checks(configs[(provider, model)], dev_run, generator=gen)
+            report['adversarial_context'] = nb.adversarial_context_checks(configs[(provider, model)], dev_run, generator=gen,
+                use_cache=not plan.get('fresh_security', False))
             report['gates']['adversarial_context'] = all(r['safe'] for r in report['adversarial_context'])
             if not eligible_generation(result) or any(r['status'] == 'error' for r in report['adversarial_context']):
                 report['errors'].append({'stage': 'holdout_or_security', 'error': 'Provider failure left final evaluation incomplete'})
         else:
             report['errors'].append({'stage': 'selection', 'error': 'No complete full-development candidate'})
-        report['gates']['both_providers_full_development'] = all(
+        report['gates']['all_planned_providers_full_development'] = all(
             any(r['provider'] == p for r in finalists) for p in plan['models'])
         for provider in plan['models']:
             if not any(r['provider'] == provider for r in finalists):

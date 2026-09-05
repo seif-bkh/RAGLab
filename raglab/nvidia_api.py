@@ -42,7 +42,7 @@ class NvidiaAPIError(RuntimeError):
 def safe_error(value):
     """Provider errors can echo requests: redact key-shaped strings defensively."""
     text = str(value)
-    for name in ('NVIDIA_API_KEY', 'XKIRO_API_KEY', 'KIOSAPI_API_KEY'):
+    for name in ('NVIDIA_API_KEY', 'XKIRO_API_KEY'):
         key = os.environ.get(name, '').strip()
         if key:
             text = text.replace(key, '[REDACTED]')

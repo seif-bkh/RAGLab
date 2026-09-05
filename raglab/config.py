@@ -1,10 +1,14 @@
 """config.py — every knob of the lab lives here, with no hidden defaults.
 
-Loads .env (if present) so embedding keys are available to the whole process.
+Loads .env (if present). The supported CLI uses only Nemotron embeddings and
+xKiro Qwen answers. Legacy constants remain for historical offline regressions;
+they are not selectable through the supported CLI.
 """
 
 import os
 from pathlib import Path
+
+from pipeline_policy import ANSWER_MODEL as SELECTED_ANSWER_MODEL, ANSWER_PROVIDER as SELECTED_ANSWER_PROVIDER
 
 # Load .env from this project folder. Missing .env is fine: we just fail
 # later, loudly, when a command actually needs a key.
@@ -30,8 +34,8 @@ CHROMA_COLLECTION_NAME = "raglab_docs"
 # ---------------------------------------------------------------------------
 # Embedding provider
 # ---------------------------------------------------------------------------
-# Change these two lines to switch providers (see .env.example and README).
-# Default: NVIDIA; the following generic model is used only for legacy providers.
+# Runtime is pinned to NVIDIA Nemotron; CLI rejects retired providers/settings.
+# The following generic model is retained only for historical offline utilities.
 # `gemini-embedding-2` is the current multilingual model (100+ languages) and
 # works with AI Studio keys. `gemini-embedding-001` (text-only, older) also
 # works; the embedder handles both automatically.
@@ -220,7 +224,7 @@ FUSION_TIE_BREAK = os.getenv("FUSION_TIE_BREAK", "same_lang_margin").strip()
 # Query translation and optional grounded generation
 # ---------------------------------------------------------------------------
 QUERY_TRANSLATION_ENABLED = os.getenv(
-    "QUERY_TRANSLATION_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+    "QUERY_TRANSLATION_ENABLED", "0").strip().lower() not in {"0", "false", "no", "off"}
 QUERY_TRANSLATION_PROVIDER = os.getenv("QUERY_TRANSLATION_PROVIDER", "nvidia").strip().lower()
 # Legacy Gemini provider remains available explicitly.
 QUERY_TRANSLATION_MODEL = os.getenv("QUERY_TRANSLATION_MODEL", "gemini-3.5-flash-lite")
@@ -231,13 +235,12 @@ QUERY_TRANSLATION_STRICT = os.getenv("QUERY_TRANSLATION_STRICT", "0") == "1"
 QUERY_TRANSLATION_BATCH_SIZE = 8
 # best = original + translated variants with the legacy normalized score merge.
 # translated = corpus-language query only; original = no translation.
-QUERY_VARIANT_STRATEGY = os.getenv("QUERY_VARIANT_STRATEGY", "best")
+QUERY_VARIANT_STRATEGY = os.getenv("QUERY_VARIANT_STRATEGY", "original")
 RETRIEVAL_CANDIDATE_K = 20
 
-# Only completed development answer arm in iteration 02; still provisional:
-# held-out generation and security testing were rate-limited, not passed.
-ANSWER_PROVIDER = os.getenv("ANSWER_PROVIDER", "nvidia").strip().lower()
-ANSWER_MODEL = os.getenv("ANSWER_MODEL", "deepseek-ai/deepseek-v4-pro-0813")
+# Selected measured profile. Old .env values are rejected, not silently used.
+ANSWER_PROVIDER = os.getenv("ANSWER_PROVIDER", SELECTED_ANSWER_PROVIDER).strip().lower()
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", SELECTED_ANSWER_MODEL)
 ANSWER_PROMPT_VERSION = os.getenv("ANSWER_PROMPT_VERSION", "grounded-v1")
 ANSWER_WORKERS = int(os.getenv("ANSWER_WORKERS", "1"))
 ANSWER_MAX_TOKENS = int(os.getenv("ANSWER_MAX_TOKENS", "4096"))
