@@ -137,3 +137,38 @@ User hit two real bugs on ST 6.0.1:
 Regression: tests_offline.py now stubs the ST 6 API (float32 rows, new
 method name) + the legacy API; 24 checks pass; the no-API suite runs in
 CI's compile-offline job.
+
+## 2026-09-05 — Qwen3-Embedding-0.6B on the real docs (n=14) — first local run
+
+User ran `./run_tests.sh --provider huggingface` (commit 1375743, full
+log pasted; GitHub copy was 16 lines due to the tee bug, now fixed).
+Ingest: 573/573 chunks, 1024-dim, 72 batches, cache hits=0 → full re-embed
+(no cache conflict: correct, provider changed).
+
+| mode | h1 | h3 | h5 | ar h1 | en h1 | fr h1 | sep gap | OOS max |
+|---|---|---|---|---|---|---|---|---|
+| Qwen3 vector | .357 | .786 | .786 | .571 | **.000** | .333 | +.0145 | .7604 |
+| Qwen3 RRF | .429 | .714 | .714 | .714 | .000 | .333 | +.0003 | .0305 |
+| Qwen3 blend λ=.7 | **.500** | .714 | .786 | **.857** | .000 | .333 | +.0410 | .8129 |
+| Qwen3 blend λ=.65 | .500 | .714 | .786 | .857 | .000 | .333 | +.0395 | .8216 |
+| Qwen3 blend λ=.75 | .429 | .714 | .786 | .714 | .000 | .333 | +.0411 | .8041 |
+| Qwen3 blend λ=.85 | .429 | .714 | .786 | .714 | .000 | .333 | +.0350 | .7866 |
+| **Gemini vector (baseline)** | **.786** | **.857** | **.929** | 1.000 | .500 | .667 | +.0147 | .7642 |
+| Gemini blend λ=.85 | .643 | .786 | .786 | – | – | – | – | – |
+
+Verdict: **Gemini-embedding-2 stays the default.** Qwen3-0.6B is clearly
+worse on this corpus (vector h1 .357 vs .786; en h1 .000 vs .500). Its
+blend (λ=.65-.7) recovers hit@1 only relative to its OWN weak vector
+baseline (.500 ≥ .357) — the CI "hit@1 recovered: YES" is therefore
+within-provider, not an improvement over Gemini.
+
+Per-question (blend λ=.7): fixed rq01 (2→1) vs Qwen3 vector; rq12 solved
+(rank 2, was MISS in Qwen3 vector); rq02 regressed badly (2→10).
+Persistent across ALL providers/modes: **rq13 (hard miss)**;
+Qwen3 additionally misses rq14 everywhere (Gemini solved it at rank 5).
+
+English queries are Qwen3-0.6B's weak spot (0/4 hit@1 in every mode) —
+likely the English "query" prompt + cross-lingual EN→AR gap; BGE-M3 or a
+larger Qwen3 variant are the candidates if we pursue local embeddings
+further. For now: keep `EMBEDDING_PROVIDER=gemini` (free hosted) as
+default; the huggingface provider remains an offline fallback (no quota).
