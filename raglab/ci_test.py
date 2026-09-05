@@ -853,6 +853,7 @@ def run_steps() -> None:
             jcnt = jcol.count()
             progress(f"[ci]   jina ingest: {jcnt} chunks, dims={jdims}")
             jina_res = {}
+            jina_runs = {}
             for mode, margs, key in (("vector", [], "vector"),
                                      ("rrf", ["--hybrid"], "rrf"),
                                      ("blend0.75", ["--hybrid-blend"],
@@ -866,6 +867,7 @@ def run_steps() -> None:
                     break
                 runj = get_latest_eval()
                 if runj is not None:
+                    jina_runs[key] = runj
                     o = runj["metrics"]["overall"]
                     jina_res[key] = (o["hit@1"], o["hit@3"], o["hit@5"])
                     progress(f"[ci]   jina {mode}: h1={o['hit@1']:.3f} "
@@ -876,9 +878,19 @@ def run_steps() -> None:
                     for k, v in jina_res.items())
                 gline = ("gemini vector " + hit3(run_real["metrics"]["overall"])
                          if run_real else "gemini vector (deferred)")
+                # The question that motivated this A/B (plus the metadata-cue
+                # case): report their vector-mode ranks explicitly.
+                jranks = ""
+                vj = jina_runs.get("vector") or {}
+                for qid in ("rq13", "rq14"):
+                    for q in (vj.get("questions") or []):
+                        if q.get("id") == qid:
+                            jranks += f"{qid}@v={q.get('correct_rank')} "
                 jina_summary = (f" || real-docs jina A/B (h1/h3/h5): "
-                                f"chunks={jcnt} {jline} (vs {gline})")
+                                f"chunks={jcnt} {jline} (vs {gline})"
+                                + (f" | {jranks.strip()}" if jranks else ""))
                 notify(f"real-docs jina: chunks={jcnt} | {jline}"
+                       + (f" | {jranks.strip()}" if jranks else "")
                        + (f" | vs gemini vector {hit3(run_real['metrics']['overall'])}"
                           if run_real else ""))
         except RuntimeError as exc:
