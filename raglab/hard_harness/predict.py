@@ -46,6 +46,13 @@ def runtime_config():
     cfg.ANSWER_CACHE_PATH = WORK/'unused_candidate_success_cache.json'
     cfg.QUERY_TRANSLATION_ENABLED = False
     cfg.QUERY_VARIANT_STRATEGY = 'original'
+    policy = read_json(PLAN_PATH)['answer_policy']
+    if policy.get('translation') is not False:
+        raise ValueError('Hard-harness candidate profile cannot enable a translation model')
+    cfg.ANSWER_TOP_K = policy['top_k']
+    cfg.ANSWER_CONTEXT_TOKENS = policy['context_tokens']
+    cfg.ANSWER_MAX_TOKENS = policy['max_tokens']
+    cfg.ANSWER_PROMPT_VERSION = policy['prompt']
     return cfg
 
 
@@ -103,6 +110,11 @@ def terminal_result(result):
     return result.get('provider_ok') is True or result.get('http_status') == 422
 
 
+def case_identity(row, answer_policy):
+    return fingerprint({'public_input':{k:row.get(k) for k in ('id','question','language','context_injections')},
+                        'retrieved_context':row['hits'], 'answer_profile':answer_policy})
+
+
 def predict_shard(shard):
     plan = read_json(PLAN_PATH)
     metadata = read_json(OUTPUT/'retrieval/manifest.json')
@@ -116,6 +128,20 @@ def predict_shard(shard):
     checkpoint = WORK/'prediction_shards'/fingerprint(metadata['public_files'])[:16]/f'{shard:02d}.jsonl'
     prior = read_jsonl(checkpoint) if checkpoint.exists() else []
     by_id = {r['id']:r for r in prior if r.get('terminal')}
+    if set(by_id)-{r['id'] for r in rows}:
+        raise ValueError('Checkpoint contains IDs outside this shard')
+    for row in rows:
+        if row['id'] in by_id and by_id[row['id']]['case_hash'] != case_identity(row,plan['answer_policy']):
+            raise ValueError('Changed input/context cannot reuse an old prediction')
+    if len(by_id)==len(rows):
+        report={'status':'predictions_complete','shard':shard,'target':100,'completed':100,
+                'reference_files_loaded':False,'dataset_public_files':metadata['public_files'],
+                'completed_checkpoint_reused':True,'new_model_calls':0,
+                'provider_models':sorted({r['provider']+'/'+r['model'] for r in by_id.values()})}
+        write_jsonl(out/'predictions.jsonl',[by_id[r['id']] for r in rows])
+        write_jsonl(out/'attempts.jsonl',[])
+        write_json(out/'manifest.json',report)
+        return report
     client = CheckpointClient('candidate',call_limit=120)
     cfg = runtime_config()
     cfg.ANSWER_MODEL = client.model
@@ -128,8 +154,7 @@ def predict_shard(shard):
     attempts = []
     try:
         for row in rows:
-            case_hash = fingerprint({'public_input':{k:row.get(k) for k in ('id','question','language','context_injections')},
-                                     'retrieved_context':row['hits'], 'answer_profile':plan['answer_policy']})
+            case_hash = case_identity(row,plan['answer_policy'])
             if row['id'] in by_id:
                 if by_id[row['id']]['case_hash'] != case_hash:
                     raise ValueError('Changed input/context cannot reuse an old prediction')

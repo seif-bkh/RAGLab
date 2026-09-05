@@ -191,6 +191,29 @@ class DatasetIntegrity(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'duplicate'):
             validate_and_split(families,units,plan)
 
+    def test_completed_prediction_shard_replays_without_any_provider(self):
+        from unittest.mock import patch
+        import hard_harness.predict as predict
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); out=root/'out'; work=root/'work'; (out/'retrieval').mkdir(parents=True)
+            policy={'top_k':5,'context_tokens':3000,'max_tokens':4096,'prompt':'grounded-v1','translation':False}
+            plan=root/'plan.json'; write_json(plan,{'answer_policy':policy})
+            metadata={'status':'retrieval_complete','public_files':{'test':{'fingerprint':'fixed'}}}
+            write_json(out/'retrieval/manifest.json',metadata)
+            rows=[{'id':f'{i}.en','family_id':str(i),'language':'en','question':f'question {i}',
+                   'hits':[],'retrieval_skipped':None} for i in range(100)]
+            write_jsonl(out/'retrieval/00.jsonl',rows)
+            prior=[{'id':r['id'],'terminal':True,'case_hash':predict.case_identity(r,policy),
+                    'provider':'xkiro','model':'original-model','result':{'status':'refused'}} for r in rows]
+            cache=work/'prediction_shards'/fingerprint(metadata['public_files'])[:16]/'00.jsonl'
+            write_jsonl(cache,prior)
+            with patch.object(predict,'OUTPUT',out),patch.object(predict,'WORK',work),patch.object(predict,'PLAN_PATH',plan), \
+                 patch.object(predict,'CheckpointClient',side_effect=AssertionError('provider must not be built')):
+                report=predict.predict_shard(0)
+            self.assertEqual(report['status'],'predictions_complete')
+            self.assertEqual(report['new_model_calls'],0)
+            self.assertEqual(read_jsonl(out/'predictions_00/predictions.jsonl'),prior)
+
     def test_invalid_outputs_are_terminal_but_quota_is_not_an_answer(self):
         from hard_harness.predict import terminal_result
         self.assertTrue(terminal_result({'provider_ok':True,'validation_ok':False,'status':'refused'}))
