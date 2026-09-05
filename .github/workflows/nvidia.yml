@@ -1,0 +1,48 @@
+name: NVIDIA model comparison
+
+on:
+  push:
+    branches: ["arena/01a071ba-raglab"]
+    paths:
+      - "raglab/nvidia_probe.py"
+      - ".github/workflows/nvidia.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Exact-model availability probe or complete benchmark"
+        type: choice
+        options: [probe, benchmark]
+        default: probe
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nvidia-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nvidia:
+    name: Exact requested NVIDIA models
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Probe exact model IDs (no fallback, no Gemini dependency)
+        working-directory: raglab
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+        run: python nvidia_probe.py
+      - name: Upload diagnostics (never keys)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raglab-nvidia-results
+          path: raglab/results/nvidia/
+          retention-days: 14
+          if-no-files-found: warn

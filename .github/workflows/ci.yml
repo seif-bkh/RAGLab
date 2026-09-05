@@ -7,6 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      legacy-integration:
+        description: "Run the historical Gemini/Jina experiments (uses API quota; NVIDIA has its own workflow)."
+        type: boolean
+        default: false
       real-only:
         description: "Skip fictional-corpus legs (Gemini free tier ~100 RPD); run only docs/ real-docs pipeline."
         required: false
@@ -52,9 +56,14 @@ jobs:
 
   # ------------------------------------------------- integration (real API)
   integration-gemini:
-    name: Full pipeline (gemini-embedding-2, real API)
+    name: Legacy Gemini/Jina experiments (opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.legacy-integration == true
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: compile-offline
+    env:
+      EMBEDDING_PROVIDER: gemini
+      QUERY_TRANSLATION_PROVIDER: gemini
     steps:
       - uses: actions/checkout@v4
 
