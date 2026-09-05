@@ -1,6 +1,9 @@
 name: NVIDIA model comparison
 
 on:
+  push:
+    branches: ["arena/01a071ba-raglab"]
+    paths: ["raglab/benchmarks/run_plan.json"]
   workflow_dispatch:
     inputs:
       mode:
@@ -32,16 +35,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Read versioned experiment plan
+        id: plan
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_SOURCE_RUN: ${{ inputs.source-run }}
+        run: |
+          python - <<'PY'
+          import json, os
+          plan = json.load(open('raglab/benchmarks/run_plan.json'))
+          mode = os.environ.get('INPUT_MODE') or plan['mode']
+          source = os.environ.get('INPUT_SOURCE_RUN') or plan.get('source_run', '')
+          assert mode in {'probe', 'benchmark', 'report'}
+          assert not source or str(source).isdigit()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'mode={mode}\nsource_run={source}\n')
+          PY
       - name: Recover existing diagnostics without any model calls
-        if: inputs.mode == 'report'
+        if: steps.plan.outputs.mode == 'report'
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN: ${{ inputs.source-run }}
+          SOURCE_RUN: ${{ steps.plan.outputs.source_run }}
         run: |
           gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name raglab-nvidia-results --dir raglab/results/nvidia
           python raglab/nvidia_probe.py --report-only
       - name: Probe exact model IDs (no fallback, no Gemini dependency)
-        if: inputs.mode == 'probe'
+        if: steps.plan.outputs.mode == 'probe'
         working-directory: raglab
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
