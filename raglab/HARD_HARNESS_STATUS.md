@@ -1,23 +1,37 @@
 # Large-harness progress — 5 September 2026
 
-**The 3,000-question dataset and final scores are not complete yet.**
+**The 3,000-question dataset and final comparison are not complete yet.**
 
-- GitHub access was restored and the saved third source audit was retrieved.
-- All 36 original PDF pages are accounted for. The Arena assistant visually
-  reviewed 21 pages total, including the 14 pages flagged in the final audit;
-  corrections are file-hash-bound in `benchmarks/hard_source_reviews.json`.
-- Reference-source preparation now passes with 230 usable evidence units across
-  all four documents. It was rebuilt from saved/visually reviewed text with
-  **zero new model calls**. This is not legal-expert certification.
-- The runtime extraction/chunk manifest remains unchanged; ingestion errors are
-  not silently fixed or converted into the answer key.
-- The base authoring plan has 900 families (650 supported, 200 out of scope,
-  50 ambiguous). A further 100 adversarial variants make 1,000 families, paired
-  across Arabic/French/English. Question/reference files remain separate.
-- Authoring, frozen-key validation, sharded prediction, semantic grading and
-  quota-resume code are implemented. The fresh JINKO credential remains selected;
-  Google fallback is available only through an explicit, confirmed plan switch.
+## Recovered checkpoint
 
-Next: publish the reviewed source checkpoint, run the nine author/audit shards,
-freeze all three question files and separate answer keys, then run/compare all
-3,000 cases. Completed responses and attempts are retained in checkpoints.
+- GitHub access is working again. The saved authoring run **33987445824** was
+  retrieved and file fingerprints verified.
+- **315 audited base scenario families (945 language-specific question/reference
+  pairs)** are retained: shard 0 has 98, shard 1 has 93, shard 2 has 70, shard 3
+  has 54. These are drafts, not yet the released 1,000-per-language dataset.
+- Twelve families require repair (mostly malformed JSON, one primary-evidence
+  mismatch). Shards 2/3 paused on provider capacity/server errors; the other five
+  shards deferred without model calls. No daily-quota exhaustion was established.
+- The source reference checkpoint remains ready: 230 evidence units, 36 original
+  PDF pages accounted for, and 21 assistant-visual reviews with hash-bound fixes.
+  This is not legal-expert certification. Runtime extraction remains unchanged.
+
+## Resume safeguards
+
+- Accepted family caches are reused. A previous-run artifact fallback restores
+  audited references if an Actions cache was evicted; source/spec checks still apply.
+- Reference author/audit requests now explicitly request a JSON object. Their
+  request-cache identity includes this mode, so malformed old responses are not
+  mistaken for repaired outputs. Already accepted references are not regenerated.
+- The answering agent's ordinary payload and completed-response caches are unchanged.
+  Candidate outputs, including invalid completed outputs, are retained as results.
+- **155 offline checks pass** (59 historical plus 96 pipeline/harness checks).
+- The harness still uses **XKIRO_API_KEY_JINKO**. Google remains inactive; any
+  switch is explicit, provenance-preserving and requires free-tier-project confirmation.
+
+## Next
+
+Resume unfinished reference families/shards, validate the full paired dataset,
+freeze separate question and answer-key files, then execute and compare all
+3,000 cases. A shared pause signal stops newly queued model work on provider
+or credential failures. No missing questions, references, or scores are fabricated.

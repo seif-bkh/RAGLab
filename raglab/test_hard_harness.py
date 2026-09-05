@@ -30,6 +30,31 @@ class FakeClient:
 
 
 class Checkpoints(unittest.TestCase):
+    def test_json_mode_changes_request_identity_but_preserves_old_candidate_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fake = FakeClient(result={'text':'{"ok":true}'})
+            fake.json_mode = False
+            client = CheckpointClient('format-test', call_limit=3, cache_root=temp, client=fake)
+            first = client.chat(ANSWER_MODEL, [])
+            fake.json_mode = True
+            second = client.chat(ANSWER_MODEL, [])
+            self.assertNotEqual(first['_harness_request_hash'], second['_harness_request_hash'])
+            self.assertEqual(fake.calls, 2)
+            fake.json_mode = False
+            self.assertTrue(client.chat(ANSWER_MODEL, [])['_harness_cached'])
+            self.assertEqual(fake.calls, 2)
+
+    def test_json_mode_is_reference_only_not_an_answerer_change(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.dict(__import__('os').environ, {'XKIRO_API_KEY_JINKO':'test-only'}), \
+             patch('hard_harness.common.load_pricing', return_value={}), \
+             patch('hard_harness.common.FreeGatewayClient', return_value=FakeClient()) as factory:
+            CheckpointClient('candidate', call_limit=2, cache_root=temp)
+            self.assertFalse(factory.call_args.kwargs['json_mode'])
+            CheckpointClient('question_author', call_limit=2, cache_root=temp)
+            self.assertTrue(factory.call_args.kwargs['json_mode'])
+
     def test_completed_response_is_reused_even_if_later_json_validation_fails(self):
         with tempfile.TemporaryDirectory() as temp:
             fake = FakeClient()

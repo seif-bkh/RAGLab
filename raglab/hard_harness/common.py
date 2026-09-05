@@ -103,7 +103,8 @@ class CheckpointClient:
                 raise HarnessPause(f'{self.credential_alias} is not configured for this harness; no older credential is used', 401)
             if self.provider == 'xkiro':
                 self.client = FreeGatewayClient(self.provider, self.model,
-                    load_pricing(self.provider, api_key=key), budget=self.budget, api_key=key)
+                    load_pricing(self.provider, api_key=key), budget=self.budget, api_key=key,
+                    json_mode=role != 'candidate')
             else:
                 from hard_harness.google_client import GoogleHarnessClient
                 self.client = GoogleHarnessClient(self.model, key,
@@ -126,9 +127,12 @@ class CheckpointClient:
         if model != self.model:
             raise ValueError('Harness model substitution is forbidden')
         # Deliberately exclude credential values/aliases from request identity.
-        key = fingerprint({'schema': 'hard-harness-request-v1', 'role': self.role,
-                           'provider': self.provider, 'endpoint': self.base_url,
-                           'model': model, 'messages': messages, 'max_tokens': max_tokens})
+        identity = {'schema': 'hard-harness-request-v1', 'role': self.role,
+                    'provider': self.provider, 'endpoint': self.base_url,
+                    'model': model, 'messages': messages, 'max_tokens': max_tokens}
+        if getattr(self.client, 'json_mode', False):
+            identity['response_format'] = 'json_object'
+        key = fingerprint(identity)
         path = self.cache_root / self.role / f'{key}.json'
         with self._lock:
             if path.exists():

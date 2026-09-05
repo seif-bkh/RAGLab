@@ -519,6 +519,17 @@ class FreeGatewayPolicy(unittest.TestCase):
                 free.run()
         self.assertEqual(native.OUTPUT, original)
 
+    def test_explicit_json_mode_does_not_change_default_chat_payload(self):
+        from free_gateway import FreeGatewayClient
+        data = {'model':QWEN_MODEL,'choices':[{'message':{'content':'{"ok":true}'},'finish_reason':'stop'}]}
+        for enabled in (False, True):
+            client = FreeGatewayClient('xkiro', QWEN_MODEL, {'catalog':self.xcatalog()},
+                                       budget={'used':0,'limit':1}, json_mode=enabled)
+            with patch.object(client, 'request', return_value=data) as request:
+                client.chat(QWEN_MODEL, [])
+                payload = request.call_args.args[1]
+                self.assertEqual(payload.get('response_format'), {'type':'json_object'} if enabled else None)
+
     def test_zero_prices_are_explicit_and_finite(self):
         from free_gateway import is_zero
         self.assertTrue(is_zero('0.000'))

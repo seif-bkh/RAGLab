@@ -115,6 +115,14 @@ jobs:
           path: .cache/hard_harness/
           key: hard-author-v1-${{ github.ref_name }}-${{ matrix.shard }}-${{ github.run_id }}
           restore-keys: hard-author-v1-${{ github.ref_name }}-${{ matrix.shard }}-
+      - name: Recover audited families from the previous run if cache was evicted
+        if: needs.plan.outputs.resume_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME_RUN: ${{ needs.plan.outputs.resume_run }}
+        run: |
+          DIR=$(printf '.cache/hard_harness/artifact_resume/%s/author_%02d' "$RESUME_RUN" ${{ matrix.shard }})
+          gh run download "$RESUME_RUN" --repo "$GITHUB_REPOSITORY" --name "hard-harness-author-${{ matrix.shard }}" --dir "$DIR" || echo 'Previous shard artifact unavailable; request caches are still retained.'
       - id: paths
         run: echo "output_dir=$(printf 'raglab/results/hard_harness/author_%02d' ${{ matrix.shard }})" >> "$GITHUB_OUTPUT"
       - name: Check for a shared quota pause before authoring

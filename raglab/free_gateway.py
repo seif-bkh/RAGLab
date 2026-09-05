@@ -64,7 +64,7 @@ class FreeGatewayClient(NvidiaClient):
 Gateway-reported labels are NOT independent upstream identity attestation.
 Only the selected, live-price-approved request SKU may be called; no fallback.
 """
-    def __init__(self, provider, model, pricing, *, budget, opener=None, api_key=None):
+    def __init__(self, provider, model, pricing, *, budget, opener=None, api_key=None, json_mode=False):
         validate_answer_selection(provider, model)
         eligible, reason, metadata = free_eligibility(provider, model, pricing['catalog'])
         if not eligible:
@@ -74,6 +74,7 @@ Only the selected, live-price-approved request SKU may be called; no fallback.
         self._checked_at = time.monotonic()
         self.model_metadata = metadata
         self.budget = budget
+        self.json_mode = bool(json_mode)
         settings = PROVIDERS[provider]
         key = os.environ.get(settings['key_env'], '') if api_key is None else api_key
         super().__init__(base_url=settings['base_url'], api_key=key,
@@ -106,6 +107,8 @@ Only the selected, live-price-approved request SKU may be called; no fallback.
         self.budget['used'] += 1
         payload = {'model': model, 'messages': messages, 'temperature': 0,
                    'max_tokens': max_tokens, 'stream': True}
+        if self.json_mode:
+            payload['response_format'] = {'type': 'json_object'}
         if self.provider == 'xkiro':
             levels = (self.model_metadata.get('reasoning_efforts') or {}).get('levels', [])
             effort = next((x for x in ('none', 'off', 'disabled', 'minimal', 'low') if x in levels), None)

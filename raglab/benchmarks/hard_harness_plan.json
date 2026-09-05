@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "07-focused-families-and-financial-terminology",
+  "revision": "08-resume-audited-families-with-json-mode",
   "phase": "author",
   "languages": [
     "ar",
@@ -48,5 +48,6 @@
   "answer_shard_size": 100,
   "random_seed": 20260905,
   "source_runtime_manifest": "807785db25fb798499e67f12f59589f6db33792e88cb00cf104752853046e60e",
-  "sources_run": "33985662461"
+  "sources_run": "33985662461",
+  "resume_run": "33987445824"
 }

@@ -274,6 +274,23 @@ def author_shard(shard):
             except ValueError:
                 continue
             reusable[family['id']] = {'family':family,'audit':review,'reused_from':'paired-author-v2-span-ids'}
+    archived = WORK/'artifact_resume'/str(plan.get('resume_run','none'))/f'author_{shard:02d}'
+    if (archived/'manifest.json').exists() and (archived/'families.jsonl').exists() and (archived/'reference_audit.jsonl').exists():
+        archived_manifest = read_json(archived/'manifest.json')
+        if archived_manifest.get('source_manifest') == read_json(OUTPUT/'sources/manifest.json')['gold_unit_manifest']:
+            reviewed = {d['id']:d for d in read_jsonl(archived/'reference_audit.jsonl')}
+            for family in read_jsonl(archived/'families.jsonl'):
+                identifier = family.get('id')
+                if identifier not in specs_by_id or family.get('authoring_version') not in {'paired-author-v2-span-ids', AUTHOR_VERSION}:
+                    continue
+                audit = reviewed.get(identifier,{})
+                if audit.get('approved') is not True or audit.get('issues'):
+                    continue
+                try:
+                    validate_family(family,specs_by_id[identifier],units)
+                except ValueError:
+                    continue
+                reusable[identifier]={'family':family,'audit':audit,'reused_from_artifact_run':plan.get('resume_run')}
     author = auditor = None
     rows, audits, rejected, unresolved, unresolved_drafts = [], [], [], [], []
     summary = {'status':'running','shard':shard,'target_families':len(assigned),'families':0,
