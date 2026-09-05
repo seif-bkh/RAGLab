@@ -235,7 +235,17 @@ class BaseEmbedder:
             key = cache_key(self.model, text, input_type)
             entry = self.cache.get(key)
             if entry is not None:
-                results[i] = entry["embedding"]
+                cached = entry["embedding"]
+                # Guard against corrupted/NaN cache entries (e.g. from an
+                # interrupted provider response): chroma rejects NaN vectors
+                # with a cryptic numpy error, so fail here with the input.
+                if not _finite_vector(cached):
+                    raise RuntimeError(
+                        f"embedding cache has an invalid vector for "
+                        f"{text[:120]!r} (cache invalid; delete "
+                        f"{self.cache.path.name} and re-ingest with --reset)"
+                    )
+                results[i] = cached
                 self.cache_hits += 1
             elif key in seen_keys:
                 results[i] = results[seen_keys[key]]  # duplicate inside this call
@@ -324,6 +334,20 @@ class BaseEmbedder:
         for line in lines:
             print(f"[sanity]  {line}")
         return vectors
+
+
+def _finite_vector(v) -> bool:
+    """True if v is a non-empty list of finite floats (usable by chroma)."""
+    if not isinstance(v, list) or not v:
+        return False
+    try:
+        for x in v:
+            f = float(x)
+            if f != f:  # NaN
+                return False
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def cosine(a: list, b: list) -> float:

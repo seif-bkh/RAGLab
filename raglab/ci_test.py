@@ -523,6 +523,9 @@ def run_steps() -> None:
     real_docs_dir = str((cfg.PROJECT_DIR.parent / "docs").resolve())
     progress(f"\n[ci] STEP 8 — ingest --reset --data-dir {real_docs_dir}")
     real_ready = False
+    # Bind the run variables up-front: later legs (jina A/B) compare against
+    # them, and the Gemini leg may defer (quota) before they are assigned.
+    run_real = run_real_h = run_real_b = None
     try:
         rc = main.main(["ingest", "--reset", "--data-dir", real_docs_dir,
                         "--skip-sanity-check"])
@@ -849,7 +852,6 @@ def run_steps() -> None:
             jcol = get_collection(cfg, reset=False)
             jcnt = jcol.count()
             progress(f"[ci]   jina ingest: {jcnt} chunks, dims={jdims}")
-            notify(f"real-docs jina: embedder dims={jdims} | {jsan}")
             jina_res = {}
             for mode, margs, key in (("vector", [], "vector"),
                                      ("rrf", ["--hybrid"], "rrf"),
