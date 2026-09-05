@@ -1,0 +1,39 @@
+name: Additional provider catalogs
+
+on:
+  push:
+    branches: ["arena/01a071ba-raglab"]
+    paths: ["raglab/benchmarks/provider_catalog_plan.json"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  catalogs:
+    name: Read-only xKiro and KiosAPI catalogs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Inspect catalogs (no documents, queries, or inference)
+        env:
+          XKIRO_API_KEY: ${{ secrets.XKIRO_API_KEY }}
+          KIOSAPI_API_KEY: ${{ secrets.KIOSAPI_API_KEY }}
+        run: python raglab/provider_catalog.py
+      - name: Publish credential-free catalog metadata
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python raglab/provider_catalog.py --publish
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: raglab-provider-catalogs
+          path: raglab/results/provider_catalog/
+          retention-days: 14
+          if-no-files-found: warn

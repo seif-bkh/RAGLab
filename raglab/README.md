@@ -233,6 +233,29 @@ sandboxes cannot download GitHub's redirected log/artifact blobs. Neutral
 measurement checks are not passing quality gates. `report` mode republishes an
 existing run without making model calls.
 
+## Additional provider keys: catalog checks only
+
+`provider_catalog.py` can inspect the published xKiro and KiosAPI model catalogs
+using `XKIRO_API_KEY` and `KIOSAPI_API_KEY` from the environment (or `.env` when
+python-dotenv is installed). The separate **Additional provider catalogs** Actions
+workflow uses repository secrets of those names. Its versioned trigger is
+`benchmarks/provider_catalog_plan.json`.
+
+This makes **only GET /models requests**: no documents, embeddings or chat calls.
+Each key goes only to its own documented HTTPS endpoint; credentialed redirects
+are refused. Raw gateway error bodies/headers are not published. Results are
+saved under `results/provider_catalog/` and in a neutral, inspectable Check.
+
+A catalog listing—even HTTP 200—does not prove key validity, inference availability,
+model quality, or the actual upstream engine. Family/alias matches are reported
+separately, **never substituted** for the exact requested model IDs. xKiro's docs
+say that its response reports the requested model across routing, so checking
+that response field alone cannot establish exact upstream identity. These are
+not active pipeline providers and are not folded into the NVIDIA benchmark.
+
+Published endpoints/docs: [xKiro](https://docs.xkiro.com/),
+[KiosAPI](https://kiosapi.mintlify.app/getting-started/quickstart).
+
 ## Production boundary
 
 This is a stronger **evaluation lab**, not a deployed banking product. Outstanding

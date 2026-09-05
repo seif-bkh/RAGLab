@@ -393,6 +393,52 @@ class Grounding(unittest.TestCase):
             self.assertEqual(len(json.loads(cfg.ANSWER_CACHE_PATH.read_text())), 8)
 
 
+class ProviderCatalogs(unittest.TestCase):
+    def test_catalog_matches_literal_ids_not_families_and_scopes_keys(self):
+        from provider_catalog import inspect_catalog
+        requests = []
+        class CatalogResponse(Response):
+            def read(self, limit=None):
+                return super().read()
+        def open_catalog(req, timeout):
+            requests.append(req)
+            return CatalogResponse({'data': [{'id': KIMI_MODEL}, {'id': 'deepseek/deepseek-v4-pro'},
+                                              {'id': 'kimi-k3-alias'}]})
+        with patch.dict(os.environ, {'XKIRO_API_KEY': 'xkiro-test-only', 'NVIDIA_API_KEY': 'never-send-this'}):
+            row = inspect_catalog('xkiro', opener=SimpleNamespace(open=open_catalog))
+        self.assertEqual(row['listed_exact_ids'], [KIMI_MODEL])
+        self.assertIn(DEEPSEEK_MODEL, row['absent_exact_ids'])
+        self.assertEqual(requests[0].full_url, 'https://api.xkiro.com/v1/models')
+        self.assertEqual(requests[0].get_header('Authorization'), 'Bearer xkiro-test-only')
+        self.assertEqual(row['inference_calls'], 0)
+        self.assertNotIn('xkiro-test-only', json.dumps(row))
+
+    def test_missing_key_does_not_make_a_request(self):
+        from provider_catalog import inspect_catalog
+        with patch.dict(os.environ, {}, clear=True):
+            row = inspect_catalog('kiosapi', opener=SimpleNamespace(open=lambda *a, **kw: self.fail('API call')))
+        self.assertEqual(row['status'], 'missing_key')
+        self.assertEqual(row['catalog_requests'], 0)
+
+    def test_gateway_error_body_cannot_export_credentials(self):
+        from provider_catalog import inspect_catalog
+        key = 'nonstandard-secret-without-recognizable-prefix'
+        def fail(*args, **kwargs):
+            raise urllib.error.HTTPError('https://api.xkiro.com/v1/models', 401, key,
+                                         {}, io.BytesIO(('echoed key: ' + key).encode()))
+        with patch.dict(os.environ, {'XKIRO_API_KEY': key}):
+            row = inspect_catalog('xkiro', opener=SimpleNamespace(open=fail))
+        self.assertEqual(row['http_status'], 401)
+        self.assertNotIn(key, json.dumps(row))
+
+    def test_credentialed_redirects_are_refused(self):
+        from provider_catalog import NoCredentialRedirects
+        import urllib.request
+        request = urllib.request.Request('https://api.xkiro.com/v1/models', headers={'Authorization': 'Bearer secret'})
+        with self.assertRaises(urllib.error.HTTPError):
+            NoCredentialRedirects().redirect_request(request, None, 302, 'Found', {}, 'https://untrusted.example/models')
+
+
 class MeasurementReports(unittest.TestCase):
     def test_source_invalid_literal_constraints_are_rejected(self):
         from nvidia_benchmark import BENCHMARKS, validate_translation_references

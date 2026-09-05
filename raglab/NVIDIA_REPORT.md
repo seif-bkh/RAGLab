@@ -16,9 +16,10 @@ end-to-end evaluation is not complete, and this is not production-ready.**
   injection testing were interrupted by HTTP 429 responses. Their missing
   measurements must not be presented as passed tests or as model-quality scores.
 
-A third, serial **basic-profile** comparison is prepared using cached successes.
-A GitHub authentication interruption initially blocked its push. Access has now
-been restored and the run can resume; **no iteration-03 results are available yet**.
+A third, serial **basic-profile** comparison is now running using cached successes
+([run 33972170903](https://github.com/seif-bkh/RAGLab/actions/runs/33972170903)).
+A GitHub authentication interruption was resolved. **No iteration-03 results
+are available yet**.
 Additional provider keys have been mentioned, but they will not be sent to
 unverified endpoints or silently substituted into these NVIDIA measurements.
 
@@ -30,7 +31,7 @@ unverified endpoints or silently substituted into these NVIDIA measurements.
 | Iteration 01: retrieval | [Run 33969545639](https://github.com/seif-bkh/RAGLab/actions/runs/33969545639), [measurements](reports/nvidia_iteration_01.json) | Original/Kimi retrieval measured; DeepSeek timeout, invalid direct Riva pair routing and a reference-test rate limit prevented completion |
 | Iteration 02: all stages | [Run 33970405295](https://github.com/seif-bkh/RAGLab/actions/runs/33970405295), [measurements](reports/nvidia_iteration_02.json) | All translators and their selected-prompt reference suites completed; answer/security testing incomplete |
 | Report recovery | [Run 33971261399](https://github.com/seif-bkh/RAGLab/actions/runs/33971261399) | Successful; no model calls. The original compact summary was 60,204 bytes, exceeding the publisher's 60,000-byte guard |
-| Iteration 03 | [Versioned plan](benchmarks/run_plan.json) | Prepared for resumed execution; no results yet |
+| Iteration 03 | [Run 33972170903](https://github.com/seif-bkh/RAGLab/actions/runs/33972170903), [plan](benchmarks/run_plan.json) | In progress; no results yet |
 
 Iteration 02 ran commit `be5f4448b09cd8905db6eaaf718d215bf4036e11`.
 Recovery published neutral measurement Checks, not passing quality certifications.
@@ -163,8 +164,8 @@ optional JSON claims with verbatim evidence/citation validation. Invalid outputs
 fail closed; provider failures are distinct from “not in the documents.” No
 orchestration framework, UI, account access or cloud vector database was added.
 
-**106 offline checks pass** (59 legacy + 47 NVIDIA/pipeline/report tests), together
-with compilation and `pip check`. The latest completed remote CI also passed
+**110 offline checks pass** (59 legacy + 51 pipeline/report/provider-catalog tests), together
+with compilation and `pip check`. Remote CI has also passed
 ([run 33971261523](https://github.com/seif-bkh/RAGLab/actions/runs/33971261523));
 newer changes have also passed the local checks and are being pushed for CI. Offline/CI success is not a live
 model-quality or security certificate.
