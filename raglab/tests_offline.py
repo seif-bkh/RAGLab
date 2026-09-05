@@ -832,4 +832,63 @@ except Exception as _e:  # noqa: BLE001
 check("empty collection: no fingerprint required",
       _fp_empty, "")
 
+
+# --- store_chunks: degenerate vectors are dropped LOUDLY, never stored ------
+# chroma's add() rejects NaN/inf/zero with a cryptic numpy error; the store
+# layer must filter them (with the chunk id + text in the drop log) instead
+# of crashing the ingest or hiding a bad vector inside the collection.
+from types import SimpleNamespace  # noqa: E402
+
+from store import store_chunks  # noqa: E402
+
+
+class _StoreCol:
+    def __init__(self):
+        self.records = []
+
+    def count(self):
+        return len(self.records)
+
+    def add(self, ids, embeddings, documents, metadatas):
+        self.records.extend(zip(ids, embeddings, documents, metadatas))
+
+
+class _Chunk:
+    def __init__(self, idx, text):
+        self.source = "t.txt"
+        self.index = idx
+        self.text = text
+        self.language = "ar"
+        self.heading = f"h{idx}"
+        self.origin = "data/"
+        self.section_type = "content"
+        self.token_count = max(1, len(text) // 4)
+
+
+_tmp_drop = TemporaryDirectory()  # keep alive: GC would delete the dir
+
+
+class StoreCfg(FpCfg):
+    STORE_BATCH_SIZE = 100
+    RESULTS_DIR = Path(_tmp_drop.name)
+    INDEX_EXCLUDE_BOILERPLATE = False
+
+    @staticmethod
+    def active_embedding_model():
+        return "test-model"
+
+
+sc = _StoreCol()
+store_chunks(sc, [
+    (_Chunk(0, "good chunk with a proper vector"), [0.25] * 4),
+    (_Chunk(1, "degenerate chunk"), [0.0] * 4),  # zero-norm -> chroma NaN
+], StoreCfg())
+check("store_chunks drops invalid vectors loudly",
+      len(sc.records) == 1
+      and sc.records[0][0] == "t.txt::chunk_0000"
+      and StoreCfg.RESULTS_DIR.joinpath("dropped_vectors.json").exists()
+      and "chunk_0001" in StoreCfg.RESULTS_DIR.joinpath(
+          "dropped_vectors.json").read_text(encoding="utf-8"),
+      f"stored={len(sc.records)} records")
+
 sys.exit(0 if ok else 1)

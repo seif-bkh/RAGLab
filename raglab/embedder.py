@@ -363,7 +363,16 @@ def _vector_issue(v) -> str | None:
     crash at add() time. NaN is caught right away; infinity and zero-norm
     must be rejected too or they hide inside chroma.
     """
-    if not isinstance(v, list) or not v:
+    if not isinstance(v, list):
+        # numpy rows (local sentence-transformers) arrive as ndarray.
+        if hasattr(v, "tolist"):
+            try:
+                v = v.tolist()
+            except Exception:  # noqa: BLE001 — scalar/other: reject below
+                return "empty"
+        else:
+            return "empty"
+    if not v:
         return "empty"
     try:
         vals = [float(x) for x in v]

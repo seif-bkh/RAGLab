@@ -10,6 +10,7 @@ Keyword fallback: a plain BM25 implementation over the stored chunk texts
 by reciprocal rank fusion (RRF).
 """
 
+import json
 import math
 import re
 from collections import Counter
@@ -18,6 +19,7 @@ from datetime import datetime, timezone
 import chromadb
 
 from chunker import chunk_fingerprint
+from embedder import _vector_issue
 
 # ---------------------------------------------------------------------------
 # Collection handling
@@ -145,10 +147,41 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
 
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     total = len(kept)
+    dropped_total = 0
 
     for start in range(0, total, cfg.STORE_BATCH_SIZE):
         batch = kept[start : start + cfg.STORE_BATCH_SIZE]
 
+        bad: list[dict] = []
+        filtered = []
+        for chunk, embedding in batch:
+            issue = _vector_issue(embedding)
+            if issue is None:
+                filtered.append((chunk, embedding))
+            else:
+                # chroma rejects a degenerate vector with a cryptic numpy
+                # error ("0-dimensional array nan"); drop it LOUDLY with its
+                # chunk id instead of hiding it or crashing the whole ingest.
+                bad.append({
+                    "id": f"{chunk.source}::chunk_{chunk.index:04d}",
+                    "issue": issue,
+                    "source": chunk.source,
+                    "chunk_index": chunk.index,
+                    "text": chunk.text[:300],
+                })
+        if bad:
+            dropped_total += len(bad)
+            print(f"[store] WARNING: dropping {len(bad)} chunk(s) with "
+                  f"invalid vectors ({', '.join(b['issue'] for b in bad)}):")
+            for b in bad:
+                print(f"[store]   drop {b['id']} [{b['issue']}] "
+                      f"{b['text'][:100]!r}")
+            drop_path = cfg.RESULTS_DIR / "dropped_vectors.json"
+            drop_path.parent.mkdir(parents=True, exist_ok=True)
+            drop_path.write_text(
+                json.dumps(bad, ensure_ascii=False, indent=1),
+                encoding="utf-8")
+        batch = filtered
         ids, embeddings, documents, metadatas = [], [], [], []
         for chunk, embedding in batch:
             ids.append(f"{chunk.source}::chunk_{chunk.index:04d}")
@@ -168,12 +201,17 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
                 "chunk_fp": chunk_fp(cfg),
             })
 
-        collection.add(ids=ids, embeddings=embeddings,
-                       documents=documents, metadatas=metadatas)
-        print(f"[store] added {min(start + len(batch), total)}/{total} records")
+        if ids:
+            collection.add(ids=ids, embeddings=embeddings,
+                           documents=documents, metadatas=metadatas)
+            print(f"[store] added {min(start + len(batch), total)}/{total} records"
+                  + (f" (dropped {len(bad)} invalid)" if bad else ""))
 
-    print(f"[store] done | stored {total} of {len(chunks_with_embeddings)} chunk(s) | "
-          f"collection count={collection.count()}")
+    print(f"[store] done | stored {total - dropped_total} of "
+          f"{len(chunks_with_embeddings)} chunk(s)"
+          + (f" ({dropped_total} invalid dropped)"
+             if dropped_total else "")
+          + f" | collection count={collection.count()}")
     return collection.count()
 
 
