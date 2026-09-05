@@ -556,9 +556,17 @@ def run_steps() -> None:
             if not holders:
                 covered_ok = False
                 unreachable.append(case["id"])
+                # Where does the phrase split? Print which chunks hold its
+                # prefix vs suffix (25 chars each) so the boundary is visible.
+                pre, suf = nsub[:25], nsub[-25:]
+                pre_h = [ids_all[i] for i, t in enumerate(norm_all)
+                         if pre in t]
+                suf_h = [ids_all[i] for i, t in enumerate(norm_all)
+                         if suf in t]
                 progress(f"[ci]   diag {case['id']}: UNREACHABLE — expected "
                          "substring not inside ANY chunk (chunking/"
-                         "extraction issue, not ranking)")
+                         "extraction issue, not ranking) | prefix in: "
+                         f"{pre_h[:3]} | suffix in: {suf_h[:3]}")
                 continue
             correct_id = ids_all[holders[0]]
             m = metas_all[holders[0]] or {}

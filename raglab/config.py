@@ -108,8 +108,8 @@ EMBEDDING_CACHE_PATH = PROJECT_DIR / "embeddings_cache.json"
 # ---------------------------------------------------------------------------
 # Chunking
 # ---------------------------------------------------------------------------
-CHUNK_SIZE_TOKENS = 220
-CHUNK_OVERLAP_TOKENS = 40
+CHUNK_SIZE_TOKENS = int(os.getenv("CHUNK_SIZE_TOKENS", "220"))
+CHUNK_OVERLAP_TOKENS = int(os.getenv("CHUNK_OVERLAP_TOKENS", "40"))
 SPLIT_ON_HEADINGS_FIRST = True
 # Overlap is applied at SENTENCE boundaries (never mid-sentence): the tail of
 # a chunk is a list of whole trailing sentences, so the next chunk never opens
