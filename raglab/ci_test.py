@@ -135,6 +135,7 @@ def delta_str(run: dict, baseline: dict) -> str:
 # --- hybrid-blend lambda sweep -----------------------------------------------
 SWEEP_LAMBDAS = (0.55, 0.65, 0.75, 0.85, 0.95)
 REAL_SWEEP_LAMBDAS = (0.65, 0.75, 0.85)
+TIEBREAK_MODES = ("variant_order", "same_lang_margin", "raw")
 
 
 def qrank(run: dict, qid: str):
@@ -359,163 +360,69 @@ def run_steps() -> None:
 
 
     if not REAL_ONLY:
-        # --- 5. Evaluate (vector-only baseline) -------------------------------------
+        # --- 5. Mode × tie-break A/B: vector | rrf | blend ----------------------
+        # The first mode embeds every query variant (~46 API inputs); all the
+        # remaining modes AND the lambda sweep reuse the on-disk cache, so the
+        # entire comparison costs zero additional embedding API calls.
         CURRENT_STEP = "evaluate"
-        progress("\n[ci] STEP 5 — evaluate (questions.json, vector-only)")
-        rc = main.main(["evaluate", "--skip-sanity-check"])
-        check("evaluate exits 0", rc == 0, f"rc={rc}")
+        progress("\n[ci] STEP 5 — evaluation A/B (vector | rrf | blend) x "
+                 f"tie-break {', '.join(TIEBREAK_MODES)} "
+                 "(cached embeddings, no extra API calls)")
+        ab_rows: list[tuple[str, dict]] = []
+        for tie in TIEBREAK_MODES:
+            old_tie = cfg.FUSION_TIE_BREAK
+            cfg.FUSION_TIE_BREAK = tie
+            runs: dict[str, dict] = {}
+            for mode_label, mode_args in (("vector", []),
+                                          ("rrf", ["--hybrid"]),
+                                          ("blend", ["--hybrid-blend"])):
+                rc = main.main(["evaluate", *mode_args,
+                                "--skip-sanity-check"])
+                check(f"{tie}/{mode_label} evaluate exits 0", rc == 0,
+                      f"rc={rc}")
+                run_m = get_latest_eval()
+                check(f"{tie}/{mode_label} results JSON written",
+                      run_m is not None)
+                if run_m is None:
+                    continue
+                check(f"{tie}/{mode_label} records tie-break",
+                      run_m["config"].get("fusion_tie_break") == tie,
+                      f"got={run_m['config'].get('fusion_tie_break')}")
+                shutil.copy(
+                    sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
+                    cfg.RESULTS_DIR / f"tie_{tie}_{mode_label}.json")
+                o = run_m["metrics"]["overall"]
+                runs[mode_label] = run_m
+                progress(f"[ci]   tie={tie:<18} {mode_label:<7} "
+                         f"h1={o['hit@1']:.3f} h3={o['hit@3']:.3f} "
+                         f"h5={o['hit@5']:.3f} (n={o['n']})")
+            cfg.FUSION_TIE_BREAK = old_tie
+            if "blend" in runs and "vector" in runs and "rrf" in runs:
+                ab_rows.append((tie, runs))
 
-        v_metrics = v_sep = None
-        run = get_latest_eval()
-        check("timestamped results JSON written", run is not None,
-              f"results_dir={cfg.RESULTS_DIR}")
-        if run:
-            metrics = run["metrics"]
-            check("metrics sections present",
-                  {"overall", "by_category", "by_language", "separation", "out_of_scope"}
-                  <= set(metrics))
-            check("run config records model + chunking params",
-                  run["config"].get("embedding_model") == cfg.EMBEDDING_MODEL
-                  and "chunk_size_tokens" in run["config"])
-            check("run config records query translation status",
-                  "query_translation_enabled" in run["config"])
-            check("per-question records include hits",
-                  bool(run.get("questions"))
-                  and all("hits" in q and "category" in q for q in run["questions"]))
-            check("per-question records include query variants",
-                  bool(run.get("questions"))
-                  and all("query_variants" in q for q in run["questions"]))
-            # Printable conclusions for the log + compact annotations (GitHub
-            # shows at most 10 annotations per step, so vector and hybrid runs
-            # share compressed lines).
-            v_metrics = metrics
-            v_sep = sep = metrics["separation"]
-            overall = metrics["overall"]
-            oos = metrics["out_of_scope"]
-            progress(f"\n[ci] CONCLUSION — overall hit rates:"
-                     f"  hit@1={overall['hit@1']:.3f}  hit@3={overall['hit@3']:.3f}"
-                     f"  hit@5={overall['hit@5']:.3f}  (n={overall['n']})")
-            xl = [q for q in run.get("questions", [])
-                  if q.get("category") == "cross-lingual"]
-            if xl:
-                progress("[ci]   cross-lingual detail (translation variants):")
-                for q in xl:
-                    progress(f"[ci]     {q['id']} {q.get('language')}"
-                             f"->{q.get('expected_lang')} "
-                             f"correct_rank={q.get('correct_rank')} "
-                             f"correct_variant={q.get('correct_variant')} "
-                             f"top_variant={q.get('top_variant')} "
-                             f"variants="
-                             f"{[v['label'] for v in q.get('query_variants', [])]}")
-            for cat, d in sorted(metrics["by_category"].items()):
-                progress(f"[ci]   category {cat:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
-                         f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
-            for lang, d in sorted(metrics["by_language"].items()):
-                progress(f"[ci]   language {lang:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
-                         f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
-            progress(f"[ci]   separation  correct={sep['mean_correct_score']:.4f} "
-                     f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
-                     f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f}")
-            # One compact annotation line (GitHub shows at most 10 per step).
-            notify(f"evaluation: vector | {eval_summary(run)}")
-            misses = [q for q in run["questions"]
-                      if not q["is_out_of_scope"] and q["correct_rank"] is None]
-            for q in misses:
-                progress(f"[ci]   MISS  {q['id']} [{q['language']}/{q['category']}] "
-                         f"not in top {run['config']['retrieval_top_k']} — "
-                         f"{q['question'][:70]}")
-                # What DID come back instead? Top 3 hits (log-level only).
-                top = q["hits"][:3]
-                parts = []
-                for h in top:
-                    sid = h.get("id", "?")
-                    if "::" in sid:
-                        sid = sid.split("::", 1)[1]
-                    score = h.get("score")
-                    score_s = f"{score:.4f}" if isinstance(score, (int, float)) else "?"
-                    heading = (h.get("heading") or "").replace("\n", " ")
-                    snippet = (h.get("text") or "").replace("\n", " ")[:42]
-                    parts.append(
-                        f"#{h['rank']} {sid} sim={score_s} "
-                        f"{h.get('language') or '?'} "
-                        f"v={h.get('variant') or '?'} h='{heading[:20]}' "
-                        f"txt='{snippet}...'"
-                    )
-                progress(f"[ci]     " + " | ".join(parts))
-
-        # --- 5b. Hybrid A/B: same questions, vector + BM25 RRF per variant ---------
-        CURRENT_STEP = "hybrid-evaluate"
-        progress("\n[ci] STEP 6 — hybrid evaluation "
-                 "(vector + BM25 RRF, translated variants)")
-        # eval_*.json names have 1-second precision; the hybrid run could overwrite
-        # the vector file, so preserve it under a clearly-labelled copy.
-        vector_files = sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))
-        if vector_files:
-            shutil.copy(vector_files[-1], cfg.RESULTS_DIR / "eval_000_vector_ab.json")
-        rc = main.main(["evaluate", "--hybrid", "--skip-sanity-check"])
-        check("hybrid evaluate exits 0", rc == 0, f"rc={rc}")
-        run_h = get_latest_eval()
-        check("hybrid results JSON written", run_h is not None)
-        if run_h:
-            check("hybrid run records hybrid=True",
-                  run_h["config"].get("hybrid") is True)
-            m_h = run_h["metrics"]
-            o_h = m_h["overall"]
-            s_h = m_h["separation"]
-            oos_h = m_h["out_of_scope"]
-
-            progress(f"\n[ci] HYBRID — overall hit rates:"
-                     f"  hit@1={o_h['hit@1']:.3f}  hit@3={o_h['hit@3']:.3f}"
-                     f"  hit@5={o_h['hit@5']:.3f}  (n={o_h['n']})")
-            for cat, d in sorted(m_h["by_category"].items()):
-                progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
-                         f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                         f"hit@5={d['hit@5']:.3f}")
-            for lang, d in sorted(m_h["by_language"].items()):
-                progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
-                         f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                         f"hit@5={d['hit@5']:.3f}")
-            progress(f"[ci]   separation  correct={s_h['mean_correct_score']:.4f} "
-                     f"best_incorrect={s_h['mean_best_incorrect_score']:.4f} "
-                     f"gap={s_h['gap_mean_correct_minus_best_incorrect']:.4f}")
-            d = delta_str(run_h, run) if v_metrics is not None else ""
-            notify(f"evaluation: rrf {d} | {eval_summary(run_h)}")
-
-        # --- 5c. Score-blend A/B: vector + BM25 weighted blend per variant --------
-        CURRENT_STEP = "blend-evaluate"
-        progress("\n[ci] STEP 7 — blend evaluation "
-                 "(vector + BM25 score-blend, translated variants)")
-        rc = main.main(["evaluate", "--hybrid-blend", "--skip-sanity-check"])
-        check("blend evaluate exits 0", rc == 0, f"rc={rc}")
-        run_b = get_latest_eval()
-        check("blend results JSON written", run_b is not None)
-        if run_b:
-            check("blend run records retrieval_mode=blend",
-                  run_b["config"].get("retrieval_mode") == "blend")
-            m_b = run_b["metrics"]
-            progress(f"\n[ci] BLEND — overall hit rates:"
-                     f"  hit@1={m_b['overall']['hit@1']:.3f}  "
-                     f"hit@3={m_b['overall']['hit@3']:.3f}  "
-                     f"hit@5={m_b['overall']['hit@5']:.3f}  "
-                     f"(n={m_b['overall']['n']})")
-            for cat, d in sorted(m_b["by_category"].items()):
-                progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
-                         f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                         f"hit@5={d['hit@5']:.3f}")
-            for lang, d in sorted(m_b["by_language"].items()):
-                progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
-                         f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                         f"hit@5={d['hit@5']:.3f}")
-            d = delta_str(run_b, run) if v_metrics is not None else ""
-            notify(f"evaluation: blend {d} | {eval_summary(run_b)}")
-            # Preserve the default-lambda run, then sweep lambda. All lambdas
-            # reuse the cached query embeddings (zero extra API calls).
-            files = sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))
-            if files:
-                shutil.copy(files[-1], cfg.RESULTS_DIR / "eval_002_blend_ab.json")
-            blend_sweep((), "fictional", run, run_h, run_b, "q10",
-                        SWEEP_LAMBDAS)
-
+        if not ab_rows:
+            check("at least one tie-break A/B row recorded", False)
+        else:
+            notify("fictional modes A/B (h1/h3/h5): " + " | ".join(
+                f"{tie} v={hit3(r['vector']['metrics']['overall'])} "
+                f"r={hit3(r['rrf']['metrics']['overall'])} "
+                f"b={hit3(r['blend']['metrics']['overall'])}"
+                for tie, r in ab_rows))
+            best_tie, best = max(ab_rows, key=lambda t: (
+                t[1]["blend"]["metrics"]["overall"]["hit@1"],
+                t[1]["blend"]["metrics"]["overall"]["hit@3"],
+                t[1]["blend"]["metrics"]["overall"]["hit@5"]))
+            cfg.FUSION_TIE_BREAK = best_tie
+            notify(f"fictional best tie-break: {best_tie} "
+                   f"(blend h1="
+                   f"{best['blend']['metrics']['overall']['hit@1']:.3f} "
+                   f"| vector h1="
+                   f"{best['vector']['metrics']['overall']['hit@1']:.3f}"
+                   f" | rrf h1="
+                   f"{best['rrf']['metrics']['overall']['hit@1']:.3f})")
+            # Lambda sweep under the winning tie-break + acceptance verdict.
+            blend_sweep((), "fictional", best["vector"], best["rrf"],
+                        best["blend"], "q10", SWEEP_LAMBDAS)
 
     # --- 6b. REAL documents (docs/): ingest + vector/hybrid evaluation --------
     # The user's real corpus: BCT circular 2019-08, internal Islamic-banking

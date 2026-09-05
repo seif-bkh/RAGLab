@@ -100,6 +100,18 @@ EVAL_TOP_K = 20                # how many hits evaluation records per question
 # both.
 HYBRID_BLEND_LAMBDA = float(os.getenv("HYBRID_BLEND_LAMBDA", "0.7"))
 
+# Tie-break policy for best_variant_merge when two DIFFERENT chunks each top
+# their own query variant (both relative_score == 1.0):
+#   - "variant_order": original-language variant first (old behavior; the
+#      translated champion is demoted even when it holds the answer);
+#   - "raw"          : highest raw score wins (fixed cross-lingual top-1 but
+#      reintroduced the same-language score bias and hurt verbatim hit@1);
+#   - "same_lang_margin": prefer the champion whose query language matches the
+#      chunk's language, then the champion with the biggest relative margin
+#      over its variant's second-best (a sharp answer beats a broad match).
+# CI measures all three with cached embeddings and keeps the best (reported).
+FUSION_TIE_BREAK = os.getenv("FUSION_TIE_BREAK", "same_lang_margin").strip()
+
 # ---------------------------------------------------------------------------
 # Query translation (cross-lingual retrieval) — EXPERIMENTAL
 # ---------------------------------------------------------------------------

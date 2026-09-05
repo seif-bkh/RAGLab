@@ -192,7 +192,10 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
                     blend_hybrid(vector_hits, kw_hits, lambd=lambd)[:top_k])
 
         fused = best_variant_merge(variant_hit_lists, score_key=score_key,
-                                   labels=[v["label"] for v in variants])
+                                   labels=[v["label"] for v in variants],
+                                   tie_break=getattr(
+                                       cfg, "FUSION_TIE_BREAK",
+                                       "same_lang_margin"))
         hits = fused[:top_k]
 
         is_oos = case["category"] == "out-of-scope"
@@ -261,6 +264,8 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
             "hybrid": mode == "rrf",
             "retrieval_mode": mode,
             "hybrid_blend_lambda": lambd,
+            "fusion_tie_break": getattr(cfg, "FUSION_TIE_BREAK",
+                                        "same_lang_margin"),
             "query_translation_enabled": translation_enabled,
             "query_translation_model": translator.model if translation_enabled else None,
             # Each variant's scores are normalized by its own best match, then

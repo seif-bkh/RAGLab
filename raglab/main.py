@@ -234,9 +234,12 @@ def cmd_query(args) -> int:
                      "blend": "blend_score"}[mode]
         hits = best_variant_merge(
             variant_hit_lists, score_key=score_key,
-            labels=[v["label"] for v in variants])[:k]
+            labels=[v["label"] for v in variants],
+            tie_break=getattr(cfg, "FUSION_TIE_BREAK",
+                              "same_lang_margin"))[:k]
         print(f"[query] fused {len(hits)} hit(s) from {len(variants)} "
-              f"variant(s) (best-score fusion)")
+              f"variant(s) (best-score fusion, tie_break="
+              f"{cfg.FUSION_TIE_BREAK})")
     else:
         hits = variant_hit_lists[0]
         print(f"[query] retrieved {len(hits)} hit(s)")

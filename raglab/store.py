@@ -255,7 +255,8 @@ def _variant_lang(label: str) -> str:
 
 
 def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
-                       labels: list = None) -> list:
+                       labels: list = None,
+                       tie_break: str = "same_lang_margin") -> list:
     """Language-normalized best-score fusion across query-language variants.
 
     Raw scores are NOT comparable across variants: the original (same-language)
@@ -273,10 +274,24 @@ def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
 
     score_key selects the comparable score within a variant: "similarity"
     (cosine) for vector-only retrieval, "rrf_score" for hybrid.
+
+    tie_break decides rank 1 when two DIFFERENT chunks each top their own
+    variant (both relative_score == 1.0) — see config.FUSION_TIE_BREAK.
     """
     if not variant_hit_lists:
         return []
     labels = [str(l) for l in (labels or range(len(variant_hit_lists)))]
+    # Confidence margin of each variant's own top-1: how clearly its best
+    # match tops its second-best (relative scores). Used by the
+    # "same_lang_margin" tie-break; a sharp answer beats a broad match.
+    margins: dict[str, float] = {}
+    for label, hits in zip(labels, variant_hit_lists):
+        rels = sorted(((h.get(score_key) or 0.0) for h in hits if h.get(score_key)
+                       is not None and h.get(score_key) > 0), reverse=True)
+        if len(rels) >= 2 and rels[0] > 0:
+            margins[label] = 1.0 - rels[1] / rels[0]
+        else:
+            margins[label] = 0.0
     fused: dict[str, dict] = {}
     for v_idx, (label, hits) in enumerate(zip(labels, variant_hit_lists)):
         # Normalization constant: best score inside THIS variant.
@@ -304,6 +319,7 @@ def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
                 "variant_ranks": {},
                 "_variant_order": v_idx,
                 "_best_same_lang": False,
+                "_winner_margin": 0.0,
             })
             entry["variant_ranks"][label] = hit["rank"]
             # Keep the best raw value of EACH score type so hybrid entries
@@ -331,22 +347,34 @@ def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
                 entry["from_variant"] = label
                 entry["_variant_order"] = v_idx
                 entry["_best_same_lang"] = same_lang
+                entry["_winner_margin"] = margins.get(label, 0.0)
 
     merged = [e for e in fused.values() if e["relative_score"] is not None]
     # Tie-break order matters: two DIFFERENT chunks can each be the top-1 of a
-    # different query variant (both relative_score == 1.0). Sorting by variant
-    # order then hands rank 1 to the ORIGINAL-language variant even when a
-    # translated variant's champion is the actual answer chunk (observed as
-    # cross-lingual hit@1 drops in the hybrid modes). The translated variant
-    # searching in the chunk's own language scores absolutely higher, so break
-    # such ties by the raw score; variant order stays as the last resort.
-    merged.sort(key=lambda e: (-e["relative_score"],
-                               -(e.get("best_score") or 0.0),
-                               e["_variant_order"]))
+    # different query variant (both relative_score == 1.0). Measured in CI:
+    #  - variant_order: translated champions demoted → cross-lingual h1 drops;
+    #  - raw: cross-variant absolute scores are biased (same-language queries
+    #    score higher) → verbatim/same-language h1 drops;
+    #  - same_lang_margin: prefer the champion whose query language matches
+    #    the chunk's language, then the clearest champion (largest relative
+    #    margin over its variant's second-best). Default; CI keeps the table.
+    def _tie_key(e):
+        if tie_break == "raw":
+            return (-e["relative_score"], -(e.get("best_score") or 0.0),
+                    e["_variant_order"])
+        if tie_break == "variant_order":
+            return (-e["relative_score"], e["_variant_order"],
+                    -(e.get("best_score") or 0.0))
+        same = 0 if e["_best_same_lang"] else 1
+        return (-e["relative_score"], same, -e["_winner_margin"],
+                -(e.get("best_score") or 0.0), e["_variant_order"])
+
+    merged.sort(key=_tie_key)
     for rank, entry in enumerate(merged, start=1):
         entry["rank"] = rank
         entry.pop("_variant_order", None)
         entry.pop("_best_same_lang", None)
+        entry.pop("_winner_margin", None)
     return merged
 
 
