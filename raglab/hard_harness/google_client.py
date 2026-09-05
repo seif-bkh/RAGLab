@@ -60,7 +60,7 @@ class GoogleHarnessClient:
             raise NvidiaAPIError('The selected Google harness credential is missing',401)
         self.model, self.api_key = model, key
         self.base_url = BASE_URL
-        self.timeout, self.attempts, self.min_interval, self.max_retry_delay = 120, 2, 6, 60
+        self.timeout, self.attempts, self.min_interval, self.max_retry_delay = 120, 3, 6, 60
         self.calls = 0
         self.budget = budget
         self.opener = opener or urllib.request.build_opener(NoCredentialRedirects())
@@ -118,10 +118,10 @@ class GoogleHarnessClient:
                 raise
             # Quota/auth errors prompt a switch instead of spending more of a
             # different project/account silently. Only transient transport gets
-            # one bounded retry.
+            # bounded retries with capacity backoff.
             if error.status_code in {401,402,403,429} or not error.retryable or attempt+1==self.attempts:
                 raise error
-            pause=error.retry_after if error.retry_after is not None else 2
+            pause=error.retry_after if error.retry_after is not None else min(60,30*(2**attempt))
             if pause>self.max_retry_delay:
                 raise error
             time.sleep(pause)

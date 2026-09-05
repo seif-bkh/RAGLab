@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "09-google-reference-fallback-user-confirmed",
+  "revision": "10-resume-google-capacity-and-reference-fixes",
   "phase": "author",
   "languages": [
     "ar",
@@ -54,7 +54,7 @@
   "random_seed": 20260905,
   "source_runtime_manifest": "807785db25fb798499e67f12f59589f6db33792e88cb00cf104752853046e60e",
   "sources_run": "33985662461",
-  "resume_run": "33987445824",
+  "resume_run": "33995452874",
   "candidate_llm": {
     "provider": "xkiro",
     "model": "qwen/qwen3.8-max:free",

@@ -160,7 +160,7 @@ def validate_family(family, spec, units):
         if 'span_ids' in quote:
             spans = {r['id']:r['text'] for r in evidence_spans(units[uid]['text'])}
             ids = quote['span_ids']
-            if not isinstance(ids,list) or not ids or len(ids)>4 or any(i not in spans for i in ids):
+            if not isinstance(ids,list) or not ids or len(ids)>8 or any(i not in spans for i in ids):
                 raise ValueError(f"{spec['id']}: invalid evidence span IDs for {uid}")
             for identifier in dict.fromkeys(ids):
                 resolved.append({'unit_id':uid,'span_id':identifier,'quote':spans[identifier], 'quote_resolved_by':'source_span_id'})
@@ -208,7 +208,8 @@ def author_messages(specs, units, prior_error='', previous_draft=None):
               'Conversational Arabic may use light Tunisian phrasing but remain Arabic script; French/English should sound natural. '
               'Minor typos must not alter essential numbers, entities or negation; all language versions must retain the same intended problem. '
               'For supported cases, answer solely from the supplied original-source units; '
-              'select provided evidence span IDs (E1, E2, etc.) under the correct unit_id; never type or paraphrase a quote. '
+              'select up to eight provided evidence span IDs (E1, E2, etc.) per unit_id; never type or paraphrase a quote. '
+              'Cite every location needed for the answer, including another unit if a required fact occurs there. '
               'The compiler copies the selected original text exactly. At least one evidence item must use the assigned primary_unit_id. '
               'Do not use outside knowledge. '
               'Terminology: مضاربة = Mudaraba / Moudaraba (French); مشاركة = Musharaka / Moucharaka (French); '

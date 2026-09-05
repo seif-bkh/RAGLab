@@ -178,6 +178,36 @@ class GoogleFallbackPolicy(unittest.TestCase):
         with self.assertRaises(ValueError):
             GoogleHarnessClient('some-paid-model','dummy',free_project_confirmed=True,budget={'used':0,'limit':1})
 
+    def test_google_capacity_retry_is_bounded_and_quota_does_not_retry(self):
+        import io, urllib.error
+        from unittest.mock import patch
+        from hard_harness.google_client import GoogleHarnessClient
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self,*args): return False
+            def read(self):
+                return json.dumps({'candidates':[{'finishReason':'STOP','content':{'parts':[{'text':'{"ok":true}'}]}}],
+                                   'modelVersion':'gemini-3.1-flash-lite'}).encode()
+        seen=[]
+        def capacity_then_success(*args,**kwargs):
+            seen.append(1)
+            if len(seen)<3:
+                raise urllib.error.HTTPError('https://generativelanguage.googleapis.com',503,'busy',{},io.BytesIO(b'busy'))
+            return Response()
+        client=GoogleHarnessClient('gemini-3.1-flash-lite','test-key',free_project_confirmed=True,
+                                  budget={'used':0,'limit':2},opener=SimpleNamespace(open=capacity_then_success))
+        with patch('hard_harness.google_client.time.sleep') as sleep:
+            self.assertEqual(client.chat(client.model,[])['text'],'{"ok":true}')
+            self.assertEqual(client.calls,3)
+            waits=[c.args[0] for c in sleep.call_args_list]
+            self.assertIn(30,waits); self.assertIn(60,waits)
+        def quota(*args,**kwargs):
+            raise urllib.error.HTTPError('https://generativelanguage.googleapis.com',429,'quota',{},io.BytesIO(b'quota'))
+        client.opener=SimpleNamespace(open=quota)
+        with patch('hard_harness.google_client.time.sleep'):
+            with self.assertRaises(NvidiaAPIError): client.chat(client.model,[])
+        self.assertEqual(client.calls,4)  # one quota attempt, never a hidden project switch
+
     def test_google_translates_only_explicit_messages_and_local_images(self):
         from hard_harness.google_client import google_payload
         messages=[{'role':'system','content':'policy'},image_message('read source',b'image')]
