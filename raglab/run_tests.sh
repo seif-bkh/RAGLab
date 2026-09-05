@@ -89,9 +89,12 @@ run_all() {
     "$PY" ci_test.py
 }
 
+# Tee the ACTUAL test output into the log (not only header/footer): the
+# pushed log must carry the full suite so results are checkable afterwards.
+# ${PIPESTATUS[0]} preserves run_all's exit code through the pipe.
 set +e
-run_all
-status=$?
+run_all 2>&1 | tee -a "$LOG"
+status=${PIPESTATUS[0]}
 {
     echo
     echo "-------------------------------------------------------------------"
