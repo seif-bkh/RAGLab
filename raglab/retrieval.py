@@ -1,6 +1,6 @@
 """One retrieval path shared by query, evaluation, and grounded answers."""
 from store import (best_variant_merge, blend_hybrid, collection_languages,
-                   keyword_search, query_vector, rrf_merge)
+                   keyword_search, query_vector, rrf_merge, ensure_fresh_chunks)
 from translate import detect_language
 
 
@@ -14,6 +14,7 @@ def retrieve(cfg, embedder, collection, text, *, language=None, translator=None,
     strategy = variant_strategy or getattr(cfg, "QUERY_VARIANT_STRATEGY", "best")
     if strategy not in {"original", "best", "translated"}:
         raise ValueError(f"Unknown query variant strategy {strategy!r}")
+    ensure_fresh_chunks(collection, cfg)  # refuse stale spaces before any model call
     language = language or detect_language(text)
     corpus_langs = [lang_filter] if lang_filter else collection_languages(collection)
     if translator is not None and strategy != "original":
@@ -40,6 +41,12 @@ def retrieve(cfg, embedder, collection, text, *, language=None, translator=None,
                     blend_hybrid(hits, keywords, lambd=lambd))[:candidates]
         lists.append(hits)
     score_key = {"vector": "similarity", "rrf": "rrf_score", "blend": "blend_score"}[mode]
+    if len(lists) == 1:
+        # No fusion is needed. Preserve even zero/negative cosine hits and
+        # their original ordering rather than dividing by a nonpositive max.
+        label = variants[0]["label"]
+        return [dict(h, from_variant=label, variant_ranks={label: h["rank"]})
+                for h in lists[0][:top_k]], variants
     hits = best_variant_merge(lists, score_key=score_key, labels=[v["label"] for v in variants],
                               tie_break=getattr(cfg, "FUSION_TIE_BREAK", "same_lang_margin"))
     return hits[:top_k], variants

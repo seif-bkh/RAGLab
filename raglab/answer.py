@@ -6,6 +6,7 @@ access, web lookup, or transactions are available to the generator.
 """
 import json
 import re
+import threading
 from pathlib import Path
 
 from artifacts import fingerprint, write_json
@@ -148,6 +149,7 @@ class AnswerGenerator:
             stream=getattr(cfg, "NVIDIA_CHAT_STREAM", False))
         self.cache_path = Path(cfg.ANSWER_CACHE_PATH)
         self.cache = {}
+        self._cache_lock = threading.Lock()
         if self.cache_path.exists():
             try:
                 data = json.loads(self.cache_path.read_text(encoding="utf-8"))
@@ -175,7 +177,8 @@ class AnswerGenerator:
         key = fingerprint({"model": self.model, "prompt_version": self.prompt_version,
                            "endpoint": getattr(self.client, "base_url", "injected"),
                            "messages": messages, "max_tokens": max_tokens})
-        cached = self.cache.get(key) if use_cache else None
+        with self._cache_lock:
+            cached = self.cache.get(key) if use_cache else None
         try:
             if cached:
                 response = cached
@@ -192,8 +195,9 @@ class AnswerGenerator:
             return {**base, "status": "refused", "reason": "invalid_output", "validation_ok": False,
                     "answer": REFUSALS[language], "error": safe_error(exc)}
         if not cached and use_cache:
-            self.cache[key] = response
-            write_json(self.cache_path, self.cache)
+            with self._cache_lock:
+                self.cache[key] = response
+                write_json(self.cache_path, self.cache)
         answer = "\n".join(c["text"] + " " + " ".join(f"[{s}]" for s in
                            dict.fromkeys(e["source_id"] for e in c["evidence"])) for c in claims)
         return {**base, "status": "answered" if claims else "refused",

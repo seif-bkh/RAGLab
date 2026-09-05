@@ -145,6 +145,11 @@ def cmd_ingest(args) -> int:
         print("[ingest] no chunks produced; nothing to do")
         return 1
 
+    if not args.reset:
+        existing = get_collection(cfg, reset=False)
+        if existing.count():
+            raise RuntimeError("Collection is nonempty. Use python main.py ingest --reset to replace its snapshot safely.")
+
     embedder = make_embedder(skip_sanity=args.skip_sanity_check)
 
     print(f"\n[ingest] embedding {len(chunks)} chunk(s) "
@@ -155,11 +160,6 @@ def cmd_ingest(args) -> int:
           f"API calls={embedder.api_calls} | dimension={len(embeddings[0])}")
 
     collection = get_collection(cfg, reset=args.reset)
-    if collection.count() > 0 and not args.reset:
-        print(f"[ingest] WARNING: collection already holds {collection.count()} record(s); "
-              "chunk ids are deterministic, so re-adding the same chunks does not create "
-              "duplicates, but metadata from an older ingest (e.g. timestamps) may remain. "
-              "Use --reset for a guaranteed clean rebuild.")
 
     pairs = list(zip(chunks, embeddings))
     store_chunks(collection, pairs, cfg)
@@ -419,6 +419,8 @@ def main(argv=None) -> int:
     try:
         return args.func(args)
     except (ValueError, RuntimeError) as exc:
+        if argv is not None:
+            raise  # programmatic runners retain their quota/error handling
         print(f"[main] ERROR: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

@@ -1,7 +1,9 @@
 """Query translation with explicit provenance and model-specific NIM prompts.
 
 Kimi/DeepSeek translate numbered batches. Riva receives its documented
-source-target system tag and RAW source text, one query per call. A failed
+supported source-target system tag and RAW source text, one query per call.
+French↔Arabic is explicitly routed through English with the SAME Riva model;
+its published chat template does not recognize fr-ar/ar-fr tags. A failed
 translation is never silently counted as a successful translated variant.
 Benchmarks set strict=True and forbid fallback. CLI retrieval can degrade to
 its original query, recording the failure. No credentials are stored here.
@@ -121,6 +123,8 @@ class QueryTranslator:
         self.last_error = ""
         self._client = None
         self._provenance = {}
+        self._pivot_intermediates = {}
+        self.rejected_outputs = []
         self.available = self._make_client()
 
     def _make_client(self):
@@ -146,8 +150,11 @@ class QueryTranslator:
         return True
 
     def _identity(self, model, source):
-        return fingerprint({"schema": 2, "provider": self.provider, "endpoint": self.base_url,
-                            "model": model, "source": source, "prompt": self.prompt_version})
+        fields = {"schema": 2, "provider": self.provider, "endpoint": self.base_url,
+                  "model": model, "source": source, "prompt": self.prompt_version}
+        if model == RIVA_MODEL:
+            fields["routing"] = "english-pivot-v1"  # invalidate unsupported direct-pair caches
+        return fingerprint(fields)
 
     def _fail(self, message):
         self.failures += 1
@@ -198,7 +205,10 @@ class QueryTranslator:
                             raise ValueError("Translation response count mismatch")
                         issues = [translation_issues(t, v, target) for t, v in zip(clean, translated)]
                         if any(issues):
-                            raise ValueError(f"Translation invariant failure: {issues}")
+                            self.rejected_outputs.append({"model": model, "source": language, "target": target,
+                                                          "inputs": clean, "outputs": translated, "issues": issues})
+                            raise ValueError(f"Translation invariant failure {language}->{target}: {issues}; "
+                                             f"output preview={translated[0][:180]!r}")
                         self.active_model = model
                         if model != self.model:
                             print(f"[translate] FALLBACK requested={self.model} actual={model}")
@@ -212,7 +222,12 @@ class QueryTranslator:
                     results[i] = value
                     metadata = {"model": self.active_model, "requested_model": self.model,
                                 "provider": self.provider, "source": language,
-                                "prompt_version": self.prompt_version}
+                                "prompt_version": self.prompt_version,
+                                "route": [language, "en", target] if self.active_model == RIVA_MODEL and
+                                    language != "en" and target != "en" else [language, target]}
+                    intermediate = self._pivot_intermediates.get((texts[i], language, target))
+                    if intermediate:
+                        metadata["intermediate_text"] = intermediate
                     self.cache.put(self._identity(self.active_model, language), target, texts[i], value, **metadata)
                     self._provenance[(texts[i], language, target)] = metadata
                 self.cache.save()
@@ -224,6 +239,17 @@ class QueryTranslator:
 
     def _translate_batch(self, model, texts, source, target):
         if model == RIVA_MODEL:
+            if source != "en" and target != "en":
+                # Official template only enumerates English-centric pairs.
+                # Unsupported pair tags fall back to a generic translation
+                # expert and lose the target language — don't send those tags.
+                middle = self._translate_batch(model, texts, source, "en")
+                if any(translation_issues(t, m, "en") for t, m in zip(texts, middle)):
+                    raise ValueError("Riva English pivot failed source/number validation")
+                result = self._translate_batch(model, middle, "en", target)
+                for text, english in zip(texts, middle):
+                    self._pivot_intermediates[(text, source, target)] = english
+                return result
             outputs = []
             for text in texts:
                 messages = [{"role": "system", "content": f"{source}-{target}"}]
@@ -300,7 +326,9 @@ class QueryTranslator:
                 variants.append({"label": f"{target}(translated)", "lang": target,
                                  "translated": True, "text": text,
                                  "model": meta.get("model", self.active_model),
-                                 "prompt_version": self.prompt_version})
+                                 "prompt_version": self.prompt_version,
+                                 "route": meta.get("route", [query_lang, target]),
+                                 "intermediate_text": meta.get("intermediate_text")})
         return variants
 
     def summary(self):

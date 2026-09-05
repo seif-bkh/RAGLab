@@ -74,7 +74,7 @@ NVIDIA_EMBEDDING_BATCH_SIZE = int(os.getenv("NVIDIA_EMBEDDING_BATCH_SIZE", "32")
 NVIDIA_EMBEDDING_CACHE_PATH = PROJECT_DIR / os.getenv(
     "NVIDIA_EMBEDDING_CACHE_FILE", "embeddings_cache_nvidia.json")
 NVIDIA_TRANSLATION_MODEL = os.getenv("NVIDIA_TRANSLATION_MODEL",
-                                    "deepseek-ai/deepseek-v4-pro-0813")
+                                    "moonshotai/kimi-k3")
 # Empty by default. Benchmarks always disable fallback: an unavailable model
 # is an incomplete experiment, never another model's score under its name.
 NVIDIA_TRANSLATION_FALLBACK_MODELS = os.getenv("NVIDIA_TRANSLATION_FALLBACK_MODELS", "")
@@ -226,7 +226,7 @@ QUERY_TRANSLATION_PROVIDER = os.getenv("QUERY_TRANSLATION_PROVIDER", "nvidia").s
 QUERY_TRANSLATION_MODEL = os.getenv("QUERY_TRANSLATION_MODEL", "gemini-3.5-flash-lite")
 QUERY_TRANSLATION_FALLBACK_MODELS = os.getenv("QUERY_TRANSLATION_FALLBACK_MODELS", "gemini-3.6-flash")
 QUERY_TRANSLATION_CACHE_PATH = PROJECT_DIR / "translations_cache.json"
-QUERY_TRANSLATION_PROMPT = os.getenv("QUERY_TRANSLATION_PROMPT", "basic-v1")
+QUERY_TRANSLATION_PROMPT = os.getenv("QUERY_TRANSLATION_PROMPT", "banking-v2")
 QUERY_TRANSLATION_STRICT = os.getenv("QUERY_TRANSLATION_STRICT", "0") == "1"
 QUERY_TRANSLATION_BATCH_SIZE = 8
 # best = original + translated variants with the legacy normalized score merge.
@@ -234,8 +234,9 @@ QUERY_TRANSLATION_BATCH_SIZE = 8
 QUERY_VARIANT_STRATEGY = os.getenv("QUERY_VARIANT_STRATEGY", "best")
 RETRIEVAL_CANDIDATE_K = 20
 
-ANSWER_MODEL = os.getenv("ANSWER_MODEL", "deepseek-ai/deepseek-v4-pro-0813")
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", "moonshotai/kimi-k3")
 ANSWER_PROMPT_VERSION = os.getenv("ANSWER_PROMPT_VERSION", "grounded-v1")
+ANSWER_WORKERS = int(os.getenv("ANSWER_WORKERS", "2"))
 ANSWER_MAX_TOKENS = int(os.getenv("ANSWER_MAX_TOKENS", "4096"))
 ANSWER_CONTEXT_TOKENS = int(os.getenv("ANSWER_CONTEXT_TOKENS", "3000"))
 ANSWER_TOP_K = int(os.getenv("ANSWER_TOP_K", "5"))

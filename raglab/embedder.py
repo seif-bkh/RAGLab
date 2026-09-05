@@ -18,7 +18,7 @@ Behaviour (all of it explicit and printable):
   sha256(model + input_type + text), so metadata-only re-ingests cost nothing
   and document/query embeddings of identical text never collide.
 
-Gemini specifics (default provider, Google AI Studio key, free tier):
+Legacy Gemini specifics (explicit provider selection):
 - `gemini-embedding-2`: does NOT support `task_type`. Per Google docs, task
   instructions go in the prompt (see GEMINI_USE_TASK_PROMPTS in config.py),
   and each input must be wrapped in a Content object, otherwise multiple
@@ -171,6 +171,7 @@ class BaseEmbedder:
     def __init__(self, cfg):
         self.cfg = cfg
         self.model = cfg.active_embedding_model()
+        self.cache_identity = embedding_fingerprint(cfg)
         self.batch_size = cfg.EMBEDDING_BATCH_SIZE
         self.max_retries = cfg.EMBEDDING_MAX_RETRIES
         self.retry_base_delay = cfg.EMBEDDING_RETRY_BASE_DELAY

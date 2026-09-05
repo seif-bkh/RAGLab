@@ -166,10 +166,12 @@ class NvidiaClient:
                             json.loads(resp.read().decode("utf-8")))
                 if not isinstance(data, dict):
                     raise NvidiaAPIError("NVIDIA returned a non-object JSON response", 422)
+                seconds = round(time.monotonic() - started, 3)
                 self.events.append({"model": (payload or {}).get("model"),
-                                    "attempts": attempt + 1,
-                                    "seconds": round(time.monotonic() - started, 3),
+                                    "attempts": attempt + 1, "seconds": seconds,
                                     "usage": data.get("usage") or {}})
+                # Per-response timing stays correct even with concurrent calls.
+                data["_request_seconds"] = seconds
                 return data
             except urllib.error.HTTPError as exc:
                 raw = exc.read()
@@ -186,7 +188,8 @@ class NvidiaClient:
                 raise error
             delay = error.retry_after
             if delay is None:
-                delay = min(self.max_retry_delay, 2 ** attempt + random.uniform(0, 0.25))
+                base = 15 if error.status_code == 429 else 1
+                delay = min(self.max_retry_delay, base * 2 ** attempt + random.uniform(0, 0.25))
             if delay > self.max_retry_delay:
                 # Don't retry BEFORE a long Retry-After; defer to a later run.
                 raise error
@@ -212,7 +215,7 @@ class NvidiaClient:
         return {"text": content, "requested_model": model, "served_model": served,
                 "usage": data.get("usage") or {},
                 "finish_reason": choice.get("finish_reason"),
-                "seconds": self.events[-1]["seconds"] if self.events else None}
+                "seconds": data.get("_request_seconds")}
 
     def models(self):
         data = self.request("models")

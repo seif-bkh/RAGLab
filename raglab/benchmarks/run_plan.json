@@ -1,1 +1,1 @@
-{"mode": "benchmark", "stage": "retrieval", "iteration": "01-exact-models-frozen-corpus"}
+{"mode": "benchmark", "stage": "all", "iteration": "02-riva-supported-pairs-and-grounded-answers"}

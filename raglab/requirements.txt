@@ -1,25 +1,16 @@
-# Minimal, deliberate dependency list. No orchestration frameworks (no LangChain, no LlamaIndex).
-chromadb>=1.0,<2
-python-dotenv>=1.0
-pypdf>=4.0
-tiktoken>=0.7
+# Direct dependencies pinned to the versions tested on Python 3.11 in this session.
+# No LangChain/LlamaIndex. NVIDIA uses stdlib HTTPS; no NVIDIA SDK is required.
+chromadb==1.5.9
+python-dotenv==1.2.3
+pypdf==6.17.0
+tiktoken==0.14.0
 
-# Official Google client — default embedding provider for AI Studio keys
-# (EMBEDDING_PROVIDER = "gemini", model `gemini-embedding-2` in config.py).
-google-genai>=1.0,<2
+# Retained for the explicitly selected legacy Gemini embedding/translation provider.
+google-genai==1.75.0
 
-# --- Optional providers -----------------------------------------------
-# Uncomment exactly one line when you switch EMBEDDING_PROVIDER in config.py.
-# For EMBEDDING_PROVIDER = "openai"  -> model e.g. text-embedding-3-large:
+# Optional providers: install only if you select them. These were NOT live-tested
+# in the current NVIDIA comparison; their offline interface regressions remain.
 # openai>=1.30
-# For EMBEDDING_PROVIDER = "cohere"  -> model e.g. `embed-multilingual-v3.0`:
 # cohere>=5.10
-# For EMBEDDING_PROVIDER = "voyage"  -> model e.g. `voyage-multilingual-2`:
 # voyageai>=0.2
-
-# For EMBEDDING_PROVIDER = "huggingface" (LOCAL, free, no API key, no quota).
-# Recommended model (default): Qwen/Qwen3-Embedding-0.6B (Apache-2.0, 1024 dims,
-# 32K context, 100+ languages incl. Arabic). Alternative: BAAI/bge-m3 (MIT).
-# Installs torch — CPU wheels are used automatically on machines without CUDA.
 # sentence-transformers>=3.2
-

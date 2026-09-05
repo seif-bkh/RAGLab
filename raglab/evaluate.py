@@ -196,6 +196,7 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
                 "label": v["label"], "lang": v.get("lang"),
                 "translated": v["translated"], "text": v["text"],
                 "model": v.get("model"), "prompt_version": v.get("prompt_version"),
+                "route": v.get("route"), "intermediate_text": v.get("intermediate_text"),
             } for v in variants],
             "top_variant": hits[0].get("from_variant") if hits else None,
             "hits": [{
