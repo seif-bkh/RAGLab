@@ -7,6 +7,7 @@ import base64
 import json
 import re
 import time
+import threading
 import urllib.error
 import urllib.request
 
@@ -15,6 +16,8 @@ from provider_catalog import NoCredentialRedirects
 
 ALLOWED_FREE_TIER_MODELS = {'gemini-3.1-flash-lite'}
 BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
+_PACE_LOCK = threading.Lock()
+_LAST_REQUEST = {}
 
 
 def google_payload(messages, max_tokens):
@@ -57,7 +60,7 @@ class GoogleHarnessClient:
             raise NvidiaAPIError('The selected Google harness credential is missing',401)
         self.model, self.api_key = model, key
         self.base_url = BASE_URL
-        self.timeout, self.attempts, self.min_interval, self.max_retry_delay = 120, 2, 5, 60
+        self.timeout, self.attempts, self.min_interval, self.max_retry_delay = 120, 2, 6, 60
         self.calls = 0
         self.budget = budget
         self.opener = opener or urllib.request.build_opener(NoCredentialRedirects())
@@ -74,9 +77,11 @@ class GoogleHarnessClient:
         payload = google_payload(messages,max_tokens)
         start = time.monotonic()
         for attempt in range(self.attempts):
-            delay = self.min_interval-(time.monotonic()-self.last_call)
-            if delay>0: time.sleep(delay)
-            self.last_call = time.monotonic()
+            with _PACE_LOCK:
+                delay = self.min_interval-(time.monotonic()-_LAST_REQUEST.get(self.base_url,0))
+                if delay>0: time.sleep(delay)
+                self.last_call = time.monotonic()
+                _LAST_REQUEST[self.base_url] = self.last_call
             request = urllib.request.Request(f'{BASE_URL}/models/{model}:generateContent',
                 data=json.dumps(payload).encode(),method='POST',
                 headers={'x-goog-api-key':self.api_key,'Content-Type':'application/json','User-Agent':'RAGLab-hard-harness/1.0'})

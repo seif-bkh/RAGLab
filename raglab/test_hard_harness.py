@@ -30,6 +30,34 @@ class FakeClient:
 
 
 class Checkpoints(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        plan = Path(temporary.name)/'plan.json'
+        write_json(plan, {'llm':{'provider':'xkiro','model':ANSWER_MODEL,'credential_secret':'XKIRO_API_KEY_JINKO'},
+                          'google_fallback_authorized':True,'google_fallback_active':False})
+        patched = patch('hard_harness.common.PLAN_PATH', plan)
+        patched.start()
+        self.addCleanup(patched.stop)
+
+    def test_reference_provider_switch_does_not_switch_candidate_target(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            plan=Path(temp)/'plan.json'
+            write_json(plan,{'llm':{'provider':'google','model':'gemini-3.1-flash-lite',
+                                  'credential_secret':'GEMINI_API_KEY','free_tier_project_confirmed':True},
+                             'candidate_llm':{'provider':'xkiro','model':ANSWER_MODEL,'credential_secret':'XKIRO_API_KEY_JINKO'},
+                             'google_fallback_authorized':True,'google_fallback_active':True})
+            with patch('hard_harness.common.PLAN_PATH',plan):
+                reference=CheckpointClient('question_author',call_limit=1,cache_root=temp,client=FakeClient())
+                candidate=CheckpointClient('candidate',call_limit=1,cache_root=temp,client=FakeClient())
+            self.assertEqual(reference.provider,'google')
+            self.assertEqual(reference.model,'gemini-3.1-flash-lite')
+            self.assertEqual(candidate.provider,'xkiro')
+            self.assertEqual(candidate.model,ANSWER_MODEL)
+            self.assertEqual(candidate.credential_alias,'XKIRO_API_KEY_JINKO')
+
     def test_json_mode_changes_request_identity_but_preserves_old_candidate_cache(self):
         with tempfile.TemporaryDirectory() as temp:
             fake = FakeClient(result={'text':'{"ok":true}'})

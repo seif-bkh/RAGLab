@@ -76,7 +76,7 @@ class CheckpointClient:
     def __init__(self, role, *, call_limit, cache_root=WORK / 'requests', client=None):
         self.role = role
         self.plan = read_json(PLAN_PATH)
-        profile = self.plan['llm']
+        profile = self.plan.get('candidate_llm',self.plan['llm']) if role == 'candidate' else self.plan['llm']
         if profile['provider'] == 'xkiro':
             if profile['model'] != ANSWER_MODEL:
                 raise HarnessPause('The xKiro harness profile must use the selected Qwen SKU')
@@ -90,6 +90,14 @@ class CheckpointClient:
         self.model = profile['model']
         self.provider = profile['provider']
         self.credential_alias = profile['credential_secret']
+        supplied_alias = os.environ.get('HARNESS_CREDENTIAL_ALIAS')
+        approved_aliases = profile.get('credential_aliases', [self.credential_alias])
+        permitted_aliases = ({'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'} if self.provider == 'xkiro'
+                             else {'GEMINI_API_KEY','GOOGLE_API_KEY'})
+        if not set(approved_aliases) <= permitted_aliases:
+            raise HarnessPause('Credential aliases must belong to the selected provider')
+        if supplied_alias and supplied_alias in approved_aliases:
+            self.credential_alias = supplied_alias
         self.cache_root = Path(cache_root)
         self._lock = threading.RLock()
         self.budget = {'used': 0, 'limit': call_limit}

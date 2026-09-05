@@ -25,9 +25,11 @@
   mistaken for repaired outputs. Already accepted references are not regenerated.
 - The answering agent's ordinary payload and completed-response caches are unchanged.
   Candidate outputs, including invalid completed outputs, are retained as results.
-- **156 offline checks pass** (59 historical plus 97 pipeline/harness checks).
-- The harness still uses **XKIRO_API_KEY_JINKO**. Google remains inactive; any
-  switch is explicit, provenance-preserving and requires free-tier-project confirmation.
+- **157 offline checks pass** (59 historical plus 98 pipeline/harness checks).
+- The user confirmed a **Google free-tier project** for unfinished reference
+  authoring/auditing. The reference profile now requests Gemini 3.1 Flash-Lite
+  using an available approved Google secret alias; candidate answers remain
+  targeted at xKiro Qwen with JINKO. Saved Qwen references retain their provenance.
 
 ## Latest retry
 
@@ -40,13 +42,14 @@ All 315 audited families remain in earlier artifacts and per-family caches.
 Checkpoint export now includes **all** validated cached families before retrying
 an earlier gap, so a pause cannot make later cached IDs disappear from an artifact.
 
-Google fallback is awaiting free-tier-project confirmation. If enabled for
-reference work, it will not be presented as Qwen-only authoring or silently
-change the ordinary answering application.
+Google reference fallback is now explicitly authorized and configured. It is
+not presented as Qwen-only authoring and does not change the ordinary answering
+application. Google requests are globally paced across author/auditor clients,
+with one active reference shard to respect shared free-tier limits.
 
 ## Next
 
-After an explicit provider decision, resume unfinished reference families/shards, validate the full paired dataset,
+Resume unfinished reference families/shards with the confirmed reference provider, validate the full paired dataset,
 freeze separate question and answer-key files, then execute and compare all
 3,000 cases. A shared pause signal stops newly queued model work on provider
 or credential failures. No missing questions, references, or scores are fabricated.

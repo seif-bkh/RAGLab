@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "08-resume-audited-families-with-json-mode",
+  "revision": "09-google-reference-fallback-user-confirmed",
   "phase": "author",
   "languages": [
     "ar",
@@ -23,9 +23,14 @@
     "Circulaire_BCT_2019-08.pdf": 40
   },
   "llm": {
-    "provider": "xkiro",
-    "model": "qwen/qwen3.8-max:free",
-    "credential_secret": "XKIRO_API_KEY_JINKO"
+    "provider": "google",
+    "model": "gemini-3.1-flash-lite",
+    "credential_secret": "GEMINI_API_KEY",
+    "credential_aliases": [
+      "GEMINI_API_KEY",
+      "GOOGLE_API_KEY"
+    ],
+    "free_tier_project_confirmed": true
   },
   "embedding": {
     "provider": "nvidia",
@@ -34,7 +39,7 @@
   },
   "quota_policy": "Checkpoint every response and completed case. Pause and ask the user before changing provider/credential profile; never silently replay another model as Qwen.",
   "google_fallback_authorized": true,
-  "google_fallback_active": false,
+  "google_fallback_active": true,
   "reference_policy": "Original PDF page images and logical DOCX text define draft references; runtime extraction stays unchanged for the agent. Freeze separate answer keys before prediction. Model-authored/audited keys are not expert-certified.",
   "answer_policy": {
     "top_k": 5,
@@ -49,5 +54,11 @@
   "random_seed": 20260905,
   "source_runtime_manifest": "807785db25fb798499e67f12f59589f6db33792e88cb00cf104752853046e60e",
   "sources_run": "33985662461",
-  "resume_run": "33987445824"
+  "resume_run": "33987445824",
+  "candidate_llm": {
+    "provider": "xkiro",
+    "model": "qwen/qwen3.8-max:free",
+    "credential_secret": "XKIRO_API_KEY_JINKO"
+  },
+  "google_scope": "Unfinished reference authoring and auditing only; restore candidate_llm for answering unless the user explicitly approves a further switch."
 }
