@@ -406,6 +406,31 @@ class Grounding(unittest.TestCase):
             self.assertFalse(gen.answer('What year?', hits, 'en')['cached'])
             self.assertEqual(len(calls), 2)
 
+    def test_fresh_answer_trial_neither_reads_nor_replaces_cached_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
+            calls = []
+            def chat(*args, **kwargs):
+                calls.append(1)
+                return {'text': json.dumps(self.valid), 'seconds': len(calls)}
+            generator = AnswerGenerator(cfg, SimpleNamespace(chat=chat))
+            hits = [{'id': 'a', 'text': self.sources[0]['text']}]
+            generator.answer('What year?', hits, 'en')
+            before = cfg.ANSWER_CACHE_PATH.read_bytes()
+            fresh = generator.answer('What year?', hits, 'en', use_cache=False)
+            self.assertFalse(fresh['cached'])
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(cfg.ANSWER_CACHE_PATH.read_bytes(), before)
+            self.assertTrue(generator.answer('What year?', hits, 'en')['cached'])
+
+    def test_invalid_model_output_retains_observed_latency(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
+            generator = AnswerGenerator(cfg, SimpleNamespace(chat=lambda *a, **kw: {'text': 'not JSON', 'seconds': 7.5}))
+            result = generator.answer('What year?', [{'id': 'a', 'text': self.sources[0]['text']}], 'en')
+            self.assertFalse(result['validation_ok'])
+            self.assertEqual(result['seconds'], 7.5)
+
     def test_distinct_answer_generators_preserve_each_others_cache_entries(self):
         with tempfile.TemporaryDirectory() as temp:
             cfg = make_config(ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
@@ -436,6 +461,18 @@ class FreeGatewayPolicy(unittest.TestCase):
         return {'data': [{'id': model, 'access_tier': 'free', 'pricing': {
             'currency': 'USD', 'unit': 'per_1m_tokens', 'input': 0, 'output': 0},
             'reasoning_efforts': {'levels': ['none', 'high']}}]}
+
+    def test_free_runner_restores_native_output_path_on_failure(self):
+        import free_model_benchmark as free
+        import nvidia_benchmark as native
+        original = native.OUTPUT
+        def fail():
+            native.OUTPUT = Path('/temporary-free-output')
+            raise RuntimeError('test interruption')
+        with patch.object(free, '_run', side_effect=fail):
+            with self.assertRaises(RuntimeError):
+                free.run()
+        self.assertEqual(native.OUTPUT, original)
 
     def test_zero_prices_are_explicit_and_finite(self):
         from free_gateway import is_zero

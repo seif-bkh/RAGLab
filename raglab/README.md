@@ -285,6 +285,11 @@ quota; this context differs from the earlier translated-query answer experiment.
 Seven fixed development cases screen up to four eligible SKUs per provider.
 Each provider's screen winner gets the complete development set; the overall
 winner is frozen before held-out generation and three source-injection tests.
+The follow-up plan (`development_mode=all`, `fresh_development=true`) compares
+all four xKiro models on fresh full development calls; selective retries of
+previous invalid outputs are not treated as a new quality improvement. KiosAPI
+is deferred until its key can use the Free routing group. See
+[the research/iteration notes](benchmarks/FREE_MODELS.md).
 The budget is 100 logical calls, with at most two HTTP attempts per call. One
 worker and bounded pacing/retries limit load. Unavailable/untested rows stay
 explicitly incomplete. Only the basic grounded-v1 answer profile is compared.

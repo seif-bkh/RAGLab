@@ -199,7 +199,7 @@ def answer_metrics(rows):
             "uncached_api_latency_n": len(latencies)}
 
 
-def generate_arm(cfg, collection, cases, retrieval_run, label, *, generator=None):
+def generate_arm(cfg, collection, cases, retrieval_run, label, *, generator=None, use_cache=True):
     generator = generator or AnswerGenerator(cfg)
     rows, provider_errors = [], 0
     by_id = {q["id"]: q for q in retrieval_run["questions"]}
@@ -239,7 +239,7 @@ def generate_arm(cfg, collection, cases, retrieval_run, label, *, generator=None
         while pending or next_index < len(cases):
             while len(pending) < workers and next_index < len(cases) and provider_errors < 2:
                 case = cases[next_index]
-                future = pool.submit(generator.answer, case["question"], prepared[next_index], case["language"])
+                future = pool.submit(generator.answer, case["question"], prepared[next_index], case["language"], use_cache=use_cache)
                 pending[future] = next_index
                 next_index += 1
             if not pending:

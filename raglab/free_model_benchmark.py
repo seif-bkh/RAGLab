@@ -66,13 +66,25 @@ def markdown(report):
 
 
 def run():
+    previous_output = nb.OUTPUT
+    try:
+        return _run()
+    finally:
+        nb.OUTPUT = previous_output
+
+
+def _run():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     nb.OUTPUT = OUTPUT  # reuse tested answer scoring/output, not NVIDIA API setup
     plan = json.loads(PLAN.read_text())
+    if plan.get('development_mode', 'screen') not in {'screen', 'all'} or not isinstance(plan['max_logical_calls'], int) or not 1 <= plan['max_logical_calls'] <= 100:
+        raise ValueError('Invalid development mode or logical-call budget')
+    full_comparison = plan.get('development_mode', 'screen') == 'all'
     report = {'generated_at': datetime.now(timezone.utc).isoformat(), 'status': 'running',
-              'protocol': 'free-gateways-v1-original-retrieval', 'plan': plan,
+              'protocol': 'free-gateways-v2-full-development' if full_comparison else 'free-gateways-v1-original-retrieval', 'plan': plan,
               'embedding_model': EMBED_MODEL, 'embedding_api_calls': 0, 'translation_api_calls': 0,
               'model_identity': 'gateway_reported_not_independently_verified',
+              'latency_scope': 'Uncached client calls, including invalid output and failed calls; excludes local guards and cached results.',
               'generation': [], 'pricing_checks': [], 'excluded_candidates': [], 'errors': [], 'gates': {},
               'production_ready': False}
     budget = {'used': 0, 'limit': plan['max_logical_calls']}
@@ -87,8 +99,11 @@ def run():
     def evaluate(provider, model, cases, retrieval, prefix):
         cfg, generator = configs[(provider, model)], generators[(provider, model)]
         generator.client.recheck()
-        row = nb.generate_arm(cfg, None, cases, retrieval, label_for(prefix, provider, model), generator=generator)
+        fresh = prefix == 'dev' and plan.get('fresh_development', False)
+        row = nb.generate_arm(cfg, None, cases, retrieval, label_for(prefix, provider, model),
+                              generator=generator, use_cache=not fresh)
         row['provider'] = provider
+        row['fresh_development'] = fresh
         report['generation'].append(row)
         save()
         return row
@@ -129,6 +144,11 @@ def run():
             raise ValueError('Invalid development screen IDs')
         configs, finalists = {}, []
         for provider, models in plan['models'].items():
+            if provider in plan.get('skip_providers', {}):
+                report['errors'].append({'stage': 'provider_deferred', 'provider': provider,
+                                        'error': plan['skip_providers'][provider]})
+                save()
+                continue
             try:
                 pricing = load_pricing(provider)
                 write_json(OUTPUT / f'pricing_{provider}.json', pricing)
@@ -152,20 +172,23 @@ def run():
                     client = FreeGatewayClient(provider, model, pricing, budget=budget)
                     gen = AnswerGenerator(cfg, client, approved_models=(model,))
                     configs[(provider, model)], generators[(provider, model)] = cfg, gen
-                    row = evaluate(provider, model, screen, dev_run, 'screen')
+                    row = evaluate(provider, model, dev if full_comparison else screen,
+                                   dev_run, 'dev' if full_comparison else 'screen')
                     if eligible_generation(row):
                         screens.append(row)
                     else:
-                        report['errors'].append({'stage': 'screen', 'provider': provider, 'model': model,
-                                                  'error': 'Provider failures or incomplete screen'})
+                        report['errors'].append({'stage': 'development' if full_comparison else 'screen', 'provider': provider, 'model': model,
+                                                  'error': 'Provider failures or incomplete candidate evaluation'})
                     if any(q['result'].get('http_status') == 401 for q in row['questions']):
                         report['errors'].append({'stage': 'provider_auth', 'provider': provider,
                                                 'error': '401: remaining models skipped; check this provider key'})
                         break
                 except Exception as exc:
-                    report['errors'].append({'stage': 'screen', 'provider': provider, 'model': model, 'error': safe_error(exc)})
+                    report['errors'].append({'stage': 'development' if full_comparison else 'screen', 'provider': provider, 'model': model, 'error': safe_error(exc)})
                 save()
-            if screens:
+            if full_comparison:
+                finalists.extend(screens)
+            elif screens:
                 chosen = max(screens, key=selection_key)
                 try:
                     full = evaluate(provider, chosen['model'], dev, dev_run, 'dev')
@@ -178,6 +201,9 @@ def run():
             winner = max(finalists, key=selection_key)
             provider, model = winner['provider'], winner['model']
             report['selected'] = {'provider': provider, 'model': model, 'prompt': 'grounded-v1', 'retrieval': 'original'}
+            metrics = winner['metrics']
+            report['gates']['development_answers'] = bool((metrics['answer_rubric_pass'] or 0) >= .9
+                and metrics['correct_refusal_rate'] == 1 and metrics['validation_rate_all'] == 1)
             save()  # selection frozen before any held-out answer calls
             result = evaluate(provider, model, holdout, held_run, 'holdout_selected')
             m = result['metrics']
@@ -194,6 +220,10 @@ def run():
             report['errors'].append({'stage': 'selection', 'error': 'No complete full-development candidate'})
         report['gates']['both_providers_full_development'] = all(
             any(r['provider'] == p for r in finalists) for p in plan['models'])
+        for provider in plan['models']:
+            if not any(r['provider'] == provider for r in finalists):
+                report['errors'].append({'stage': 'provider_completeness', 'provider': provider,
+                                        'error': 'No complete full-development candidate; this provider is not fully measured'})
         report['status'] = 'completed' if not report['errors'] else 'incomplete'
     except Exception as exc:
         report['status'] = 'blocked'

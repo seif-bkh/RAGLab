@@ -6,6 +6,7 @@ access, web lookup, or transactions are available to the generator.
 """
 import json
 import re
+import time
 from pathlib import Path
 
 from artifacts import cache_lock, fingerprint, write_json
@@ -192,6 +193,7 @@ class AnswerGenerator:
             if use_cache and key not in self.cache:
                 self.cache.update(self._read_cache())
             cached = self.cache.get(key) if use_cache else None
+        call_started = time.monotonic()
         try:
             if cached:
                 response = cached
@@ -202,13 +204,16 @@ class AnswerGenerator:
         except Exception as exc:
             return {**base, "status": "error", "reason": "provider_error", "provider_ok": False,
                     "validation_ok": False, "answer": ERRORS[language], "error": safe_error(exc),
+                    "seconds": round(time.monotonic() - call_started, 3),
                     "http_status": getattr(exc, 'status_code', None),
                     "retry_after_s": getattr(exc, 'retry_after', None)}
         try:
             claims = validate_answer(response["text"], sources)
         except (ValueError, KeyError, TypeError) as exc:
             return {**base, "status": "refused", "reason": "invalid_output", "validation_ok": False,
-                    "answer": REFUSALS[language], "error": safe_error(exc)}
+                    "answer": REFUSALS[language], "error": safe_error(exc),
+                    "seconds": response.get('seconds', 0) if isinstance(response, dict) else 0,
+                    "served_model": response.get('served_model') if isinstance(response, dict) else None}
         if not cached and use_cache:
             with self._cache_lock:
                 self.cache = {**self._read_cache(), key: response}
