@@ -296,6 +296,8 @@ def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
                 "similarity": None,
                 "rrf_score": None,
                 "keyword_score": None,
+                "blend_score": None,
+                "kw_norm": None,
                 "best_score": None,
                 "relative_score": None,
                 "from_variant": None,
@@ -306,7 +308,8 @@ def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
             entry["variant_ranks"][label] = hit["rank"]
             # Keep the best raw value of EACH score type so hybrid entries
             # stay recognizably hybrid; ranking uses the RELATIVE score.
-            for key in ("similarity", "rrf_score", "keyword_score"):
+            for key in ("similarity", "rrf_score", "keyword_score",
+                        "blend_score", "kw_norm"):
                 raw = hit.get(key)
                 if raw is not None and (entry[key] is None or raw > entry[key]):
                     entry[key] = raw
@@ -337,6 +340,71 @@ def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
         entry.pop("_variant_order", None)
         entry.pop("_best_same_lang", None)
     return merged
+
+
+def blend_hybrid(vector_hits: list, keyword_hits: list,
+                 lambd: float = 0.7) -> list:
+    """Score-blend fusion: score = lambda*cosine + (1-lambda)*normalized BM25.
+
+    Why: RRF is rank-only and rank-less chunks can beat fact chunks; a score
+    blend keeps the dense similarity as the primary signal and uses BM25 as a
+    boost. BM25 magnitudes depend on the query (no upper bound), so keyword
+    scores are normalized by their OWN max inside this variant (same
+    normalization idea as best_variant_merge); cosine is already in [0,1].
+
+    - vector-only chunks: keyword part 0.0;
+    - keyword-only chunks: cosine part 0.0 (they can still rank on BM25);
+    - every hit keeps its raw similarity / keyword_score for transparency,
+      plus "blend_score" (the fused value used for ranking) and "kw_norm".
+    Deterministic tie-break: higher similarity first, then id.
+    """
+    if not vector_hits:
+        return list(keyword_hits)
+    if not keyword_hits:
+        out = [dict(h, blend_score=h.get("similarity") or 0.0,
+                    kw_norm=0.0, keyword_score=None) for h in vector_hits]
+        return _rank_by_blend(out)
+
+    kw_by_id = {h["id"]: h for h in keyword_hits}
+    max_kw = max((h.get("keyword_score") or 0.0) for h in keyword_hits) or 1.0
+
+    merged: dict[str, dict] = {}
+    for h in vector_hits:
+        entry = dict(h)
+        entry["blend_score"] = 0.0
+        entry["kw_norm"] = 0.0
+        merged[h["id"]] = entry
+    for h in keyword_hits:
+        entry = merged.setdefault(h["id"], {
+            "id": h["id"],
+            "text": h["text"],
+            "metadata": h["metadata"],
+            "rank": None,
+            "similarity": None,
+            "distance": None,
+            "blend_score": 0.0,
+            "kw_norm": 0.0,
+        })
+        entry.setdefault("keyword_score", 0.0)
+        if (h.get("keyword_score") or 0.0) > (entry.get("keyword_score") or 0.0):
+            entry["keyword_score"] = h.get("keyword_score")
+
+    for entry in merged.values():
+        sim = entry.get("similarity") or 0.0
+        kw = entry.get("keyword_score") or 0.0
+        entry["kw_norm"] = min(1.0, kw / max_kw)
+        entry["blend_score"] = lambd * sim + (1.0 - lambd) * entry["kw_norm"]
+    return _rank_by_blend(list(merged.values()))
+
+
+def _rank_by_blend(entries: list) -> list:
+    """Sort by blend_score desc (tie: similarity desc, then id) and number ranks."""
+    entries.sort(key=lambda e: (-(e.get("blend_score") or 0.0),
+                                -(e.get("similarity") or 0.0),
+                                str(e.get("id"))))
+    for rank, entry in enumerate(entries, start=1):
+        entry["rank"] = rank
+    return entries
 
 
 def rrf_merge(vector_hits: list, keyword_hits: list, k: int = 60) -> list:

@@ -88,6 +88,37 @@ def xl_detail_str(r: dict) -> str:
         if q.get("category") == "cross-lingual")
 
 
+def eval_summary(run: dict) -> str:
+    """ONE compact annotation line for one evaluation run.
+
+    GitHub shows at most 10 annotations per workflow step, and the whole
+    ci_test.py runs as a single step, so every mode/corpus pair gets exactly
+    one line: main hit rates + categories + languages + separation + the
+    per-cross-lingual-question detail. Verbose per-category/per-language
+    tables stay in the progress log / results artifact.
+    """
+    m = run["metrics"]
+    o = m["overall"]
+    s = m["separation"]
+    oos = m["out_of_scope"]
+    return (
+        f"h1/h3/h5={hit3(o)} (n={o['n']}) | cats: {cats_str(m)} | "
+        f"langs: {langs_str(m)} | sep_gap="
+        f"{s['gap_mean_correct_minus_best_incorrect']:.4f} "
+        f"oos_max_top1={oos['max_top1_score']:.4f} "
+        f"(oos_n={oos['n']}) | xl: {xl_detail_str(run) or '-'}"
+    )
+
+
+def delta_str(run: dict, baseline: dict) -> str:
+    """"(Δ vs baseline −/+/-)" for h1/h3/h5."""
+    b = baseline["metrics"]["overall"]
+    c = run["metrics"]["overall"]
+    return (f"(Δ {c['hit@1'] - b['hit@1']:+.3f}/"
+            f"{c['hit@3'] - b['hit@3']:+.3f}/"
+            f"{c['hit@5'] - b['hit@5']:+.3f})")
+
+
 def check(label: str, ok: bool, detail: str = "") -> bool:
     print(f"[ci] {'PASS' if ok else 'FAIL'}  {label}" + (f"  ({detail})" if detail else ""))
     if not ok:
@@ -108,13 +139,13 @@ def run_steps() -> None:
     global CURRENT_STEP
     # --- 1. Offline inspect (no API calls) -----------------------------------
     CURRENT_STEP = "inspect"
-    progress("\n[ci] STEP 1/9 — inspect (load + chunk, offline)")
+    progress("\n[ci] STEP 1 — inspect (load + chunk, offline)")
     rc = main.main(["inspect"])
     check("inspect exits 0", rc == 0, f"rc={rc}")
 
     # --- 2. Startup report + 3-language sanity check (1 small API call) ------
     CURRENT_STEP = "sanity"
-    progress("\n[ci] STEP 2/9 — embedding sanity check (provider/model/dimension + "
+    progress("\n[ci] STEP 2 — embedding sanity check (provider/model/dimension + "
              "EN/FR/AR pairwise cosine)")
     embedder = main.make_embedder(skip_sanity=False)
     expected_dim = int(getattr(cfg, "GEMINI_OUTPUT_DIMENSIONALITY", 0) or 0) or None
@@ -127,7 +158,7 @@ def run_steps() -> None:
 
     # --- 3. Ingest (real embeddings, --reset) ---------------------------------
     CURRENT_STEP = "ingest"
-    progress("\n[ci] STEP 3/9 — ingest --reset")
+    progress("\n[ci] STEP 3 — ingest --reset")
     rc = main.main(["ingest", "--reset", "--skip-sanity-check"])
     check("ingest exits 0", rc == 0, f"rc={rc}")
     check("embedding cache written", cfg.EMBEDDING_CACHE_PATH.exists())
@@ -165,7 +196,7 @@ def run_steps() -> None:
 
     # --- 4. Query: vector-only + hybrid with language filter -------------------
     CURRENT_STEP = "query"
-    progress("\n[ci] STEP 4/9 — query (vector + hybrid + lang filter + translation)")
+    progress("\n[ci] STEP 4 — query (vector + hybrid + lang filter + translation)")
 
     # 4a. Query translation plumbing (cross-lingual experiment). Two batched
     # calls warm the cache; `evaluate` below then reuses it, so the API cost
@@ -224,7 +255,7 @@ def run_steps() -> None:
 
     # --- 5. Evaluate (vector-only baseline) -------------------------------------
     CURRENT_STEP = "evaluate"
-    progress("\n[ci] STEP 5/9 — evaluate (questions.json, vector-only)")
+    progress("\n[ci] STEP 5 — evaluate (questions.json, vector-only)")
     rc = main.main(["evaluate", "--skip-sanity-check"])
     check("evaluate exits 0", rc == 0, f"rc={rc}")
 
@@ -279,22 +310,8 @@ def run_steps() -> None:
         progress(f"[ci]   separation  correct={sep['mean_correct_score']:.4f} "
                  f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
                  f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f}")
-        # One compact line for overall/categories/languages (annotation budget).
-        notify(f"evaluation: overall h1/h3/h5={hit3(overall)} (n={overall['n']}) | "
-               f"cats: {cats_str(metrics)} | langs: {langs_str(metrics)}")
-        notify(f"evaluation: separation correct={sep['mean_correct_score']:.4f} "
-               f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
-               f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f} "
-               f"oos_max_top1={oos['max_top1_score']:.4f} "
-               f"oos_mean_top1={oos['mean_top1_score']:.4f} (oos_n={oos['n']})")
-        xl_detail = xl_detail_str(run)
-        sl_detail = " | ".join(
-            f"{q['id']} {q.get('language')} rank={q.get('correct_rank')} "
-            f"via={q.get('correct_variant') or '-'}"
-            for q in run.get("questions", [])
-            if q.get("category") in ("verbatim", "paraphrase"))
-        # One compact line (GitHub shows at most 10 annotations per step).
-        notify(f"evaluation: detail  xl: {xl_detail or '-'}  sl: {sl_detail or '-'}")
+        # One compact annotation line (GitHub shows at most 10 per step).
+        notify(f"evaluation: vector | {eval_summary(run)}")
         misses = [q for q in run["questions"]
                   if not q["is_out_of_scope"] and q["correct_rank"] is None]
         for q in misses:
@@ -322,7 +339,7 @@ def run_steps() -> None:
 
     # --- 5b. Hybrid A/B: same questions, vector + BM25 RRF per variant ---------
     CURRENT_STEP = "hybrid-evaluate"
-    progress("\n[ci] STEP 6/9 — hybrid evaluation "
+    progress("\n[ci] STEP 6 — hybrid evaluation "
              "(vector + BM25 RRF, translated variants)")
     # eval_*.json names have 1-second precision; the hybrid run could overwrite
     # the vector file, so preserve it under a clearly-labelled copy.
@@ -341,9 +358,6 @@ def run_steps() -> None:
         s_h = m_h["separation"]
         oos_h = m_h["out_of_scope"]
 
-        def delta(a, b):
-            return None if a is None or b is None else a - b
-
         progress(f"\n[ci] HYBRID — overall hit rates:"
                  f"  hit@1={o_h['hit@1']:.3f}  hit@3={o_h['hit@3']:.3f}"
                  f"  hit@5={o_h['hit@5']:.3f}  (n={o_h['n']})")
@@ -358,24 +372,36 @@ def run_steps() -> None:
         progress(f"[ci]   separation  correct={s_h['mean_correct_score']:.4f} "
                  f"best_incorrect={s_h['mean_best_incorrect_score']:.4f} "
                  f"gap={s_h['gap_mean_correct_minus_best_incorrect']:.4f}")
-        if v_metrics is not None:
-            o_v = v_metrics["overall"]
-            s_v = v_sep
-            notify(f"evaluation: hybrid h1/h3/h5={hit3(o_h)} "
-                   f"(Δ vs vector "
-                   f"{delta(o_h['hit@1'], o_v['hit@1']):+.3f}/"
-                   f"{delta(o_h['hit@3'], o_v['hit@3']):+.3f}/"
-                   f"{delta(o_h['hit@5'], o_v['hit@5']):+.3f}) | "
-                   f"cats: {cats_str(m_h)} | langs: {langs_str(m_h)}")
-            notify(f"evaluation: hybrid sep gap="
-                   f"{s_h['gap_mean_correct_minus_best_incorrect']:.4f} "
-                   f"(vector {s_v['gap_mean_correct_minus_best_incorrect']:.4f}; "
-                   f"oos_max_top1={oos_h['max_top1_score']:.4f}) | "
-                   f"xl detail: {xl_detail_str(run_h) or '-'}")
-        else:
-            notify(f"evaluation: hybrid h1/h3/h5={hit3(o_h)} "
-                   f"(no vector baseline in this run) | "
-                   f"cats: {cats_str(m_h)} | langs: {langs_str(m_h)}")
+        d = delta_str(run_h, run) if v_metrics is not None else ""
+        notify(f"evaluation: rrf {d} | {eval_summary(run_h)}")
+
+    # --- 5c. Score-blend A/B: vector + BM25 weighted blend per variant --------
+    CURRENT_STEP = "blend-evaluate"
+    progress("\n[ci] STEP 7 — blend evaluation "
+             "(vector + BM25 score-blend, translated variants)")
+    rc = main.main(["evaluate", "--hybrid-blend", "--skip-sanity-check"])
+    check("blend evaluate exits 0", rc == 0, f"rc={rc}")
+    run_b = get_latest_eval()
+    check("blend results JSON written", run_b is not None)
+    if run_b:
+        check("blend run records retrieval_mode=blend",
+              run_b["config"].get("retrieval_mode") == "blend")
+        m_b = run_b["metrics"]
+        progress(f"\n[ci] BLEND — overall hit rates:"
+                 f"  hit@1={m_b['overall']['hit@1']:.3f}  "
+                 f"hit@3={m_b['overall']['hit@3']:.3f}  "
+                 f"hit@5={m_b['overall']['hit@5']:.3f}  "
+                 f"(n={m_b['overall']['n']})")
+        for cat, d in sorted(m_b["by_category"].items()):
+            progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
+                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                     f"hit@5={d['hit@5']:.3f}")
+        for lang, d in sorted(m_b["by_language"].items()):
+            progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
+                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                     f"hit@5={d['hit@5']:.3f}")
+        d = delta_str(run_b, run) if v_metrics is not None else ""
+        notify(f"evaluation: blend {d} | {eval_summary(run_b)}")
 
     # --- 6b. REAL documents (docs/): ingest + vector/hybrid evaluation --------
     # The user's real corpus: BCT circular 2019-08, internal Islamic-banking
@@ -383,7 +409,7 @@ def run_steps() -> None:
     # question set lives in questions_real.json.
     CURRENT_STEP = "real-docs-ingest"
     real_docs_dir = str((cfg.PROJECT_DIR.parent / "docs").resolve())
-    progress(f"\n[ci] STEP 7/9 — ingest --reset --data-dir {real_docs_dir}")
+    progress(f"\n[ci] STEP 8 — ingest --reset --data-dir {real_docs_dir}")
     rc = main.main(["ingest", "--reset", "--data-dir", real_docs_dir,
                     "--skip-sanity-check"])
     check("real-docs ingest exits 0", rc == 0, f"rc={rc}")
@@ -396,12 +422,10 @@ def run_steps() -> None:
           str(sorted(langs_real)))
     check("real-docs metadata complete",
           bool(metas_real) and required_fields <= set(metas_real[0]))
-    notify(f"real-docs: stored={count_real} chunks, languages="
-           f"{sorted(langs_real)} (4 Arabic documents: 2 DOCX + 2 PDF)")
 
     # 6b.1 vector evaluation on the REAL question set
     CURRENT_STEP = "real-evaluate"
-    progress("\n[ci] STEP 8/9 — evaluate --questions questions_real.json "
+    progress("\n[ci] STEP 9 — evaluate --questions questions_real.json "
              "(vector-only)")
     rc = main.main(["evaluate", "--questions", "questions_real.json",
                     "--skip-sanity-check"])
@@ -427,16 +451,12 @@ def run_steps() -> None:
             progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
                      f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
                      f"hit@5={d['hit@5']:.3f}")
-        notify(f"real-docs: vector h1/h3/h5={hit3(o_real)} (n={o_real['n']}) | "
-               f"cats: {cats_str(m_real)} | langs: {langs_str(m_real)}")
-        notify(f"real-docs: vector sep gap="
-               f"{s_real['gap_mean_correct_minus_best_incorrect']:.4f} "
-               f"oos_max_top1={oos_real['max_top1_score']:.4f} | "
-               f"xl detail: {xl_detail_str(run_real) or '-'}")
+        notify(f"real-docs: vector | stored={count_real} chunks "
+               f"langs={sorted(langs_real)} | {eval_summary(run_real)}")
 
     # 6b.2 hybrid evaluation on the REAL question set
     CURRENT_STEP = "real-hybrid-evaluate"
-    progress("\n[ci] STEP 9/9 — evaluate --hybrid --questions questions_real.json")
+    progress("\n[ci] STEP 10 — evaluate --hybrid --questions questions_real.json")
     rc = main.main(["evaluate", "--hybrid", "--questions", "questions_real.json",
                     "--skip-sanity-check"])
     check("real-docs hybrid evaluate exits 0", rc == 0, f"rc={rc}")
@@ -453,26 +473,35 @@ def run_steps() -> None:
         progress(f"\n[ci] REAL-DOCS (hybrid) — overall hit rates:"
                  f"  hit@1={o_rh['hit@1']:.3f}  hit@3={o_rh['hit@3']:.3f}"
                  f"  hit@5={o_rh['hit@5']:.3f}  (n={o_rh['n']})")
-        if run_real is not None:
-            delta = (f" (Δ vs vector "
-                     f"{o_rh['hit@1'] - o_real['hit@1']:+.3f}/"
-                     f"{o_rh['hit@3'] - o_real['hit@3']:+.3f}/"
-                     f"{o_rh['hit@5'] - o_real['hit@5']:+.3f})")
-            sep_ref = (f"(vector "
-                       f"{s_real['gap_mean_correct_minus_best_incorrect']:.4f}; ")
-        else:
-            delta = ""
-            sep_ref = ""
-        notify(f"real-docs: hybrid h1/h3/h5={hit3(o_rh)}{delta} | "
-               f"cats: {cats_str(m_rh)} | langs: {langs_str(m_rh)}")
-        notify(f"real-docs: hybrid sep gap="
-               f"{s_rh['gap_mean_correct_minus_best_incorrect']:.4f} "
-               f"{sep_ref}oos_max_top1={oos_rh['max_top1_score']:.4f}) | "
-               f"xl detail: {xl_detail_str(run_real_h) or '-'}")
+        d = delta_str(run_real_h, run_real) if run_real is not None else ""
+        notify(f"real-docs: rrf {d} | {eval_summary(run_real_h)}")
+
+    # 6b.3 blend evaluation on the REAL question set
+    CURRENT_STEP = "real-blend-evaluate"
+    progress("\n[ci] STEP 11 — evaluate --hybrid-blend --questions questions_real.json")
+    rc = main.main(["evaluate", "--hybrid-blend", "--questions",
+                    "questions_real.json", "--skip-sanity-check"])
+    check("real-docs blend evaluate exits 0", rc == 0, f"rc={rc}")
+    run_real_b = get_latest_eval()
+    check("real-docs blend results JSON written", run_real_b is not None)
+    if run_real_b:
+        check("real-docs blend run records retrieval_mode=blend",
+              run_real_b["config"].get("retrieval_mode") == "blend")
+        shutil.copy(
+            sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
+            cfg.RESULTS_DIR / "eval_005_real_blend_ab.json")
+        m_rb = run_real_b["metrics"]
+        progress(f"\n[ci] REAL-DOCS (blend) — overall hit rates:"
+                 f"  hit@1={m_rb['overall']['hit@1']:.3f}  "
+                 f"hit@3={m_rb['overall']['hit@3']:.3f}  "
+                 f"hit@5={m_rb['overall']['hit@5']:.3f}  "
+                 f"(n={m_rb['overall']['n']})")
+        d = delta_str(run_real_b, run_real) if run_real is not None else ""
+        notify(f"real-docs: blend {d} | {eval_summary(run_real_b)}")
 
     # --- 7. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"
-    progress("\n[ci] STEP 10/10 — answer.py stub")
+    progress("\n[ci] STEP 12 — answer.py stub")
     import answer  # noqa: E402
     stub = answer.generate_answer("test", [])
     check("answer stub returns placeholder", "[STUB]" in stub)

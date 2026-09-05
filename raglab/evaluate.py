@@ -21,8 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from loader import normalize_arabic, normalize_text
-from store import (best_variant_merge, collection_languages, keyword_search,
-                   query_vector, rrf_merge)
+from store import (best_variant_merge, blend_hybrid, collection_languages,
+                   keyword_search, query_vector, rrf_merge)
 
 VALID_CATEGORIES = {"verbatim", "paraphrase", "cross-lingual", "out-of-scope"}
 
@@ -125,15 +125,23 @@ def find_correct_any_lang(case: dict, hits: list) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool,
-                   top_k: int, translator=None) -> dict:
+def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
+                   top_k: int = 20, translator=None) -> dict:
     """Embed every question, retrieve, decide hit/miss, build the full run dict.
+
+    mode selects the per-variant retrieval:
+      - "vector": dense cosine only;
+      - "rrf"    : vector + BM25 fused by reciprocal rank fusion;
+      - "blend"  : vector + BM25 fused by weighted score blend
+                   (HYBRID_BLEND_LAMBDA * cosine + (1-lambda) * normalized BM25).
 
     When translator is not None, each query is also translated into every
     corpus language (query variants); results are fused per chunk by their
     best score across variants (store.best_variant_merge), so a chunk wins on
     the language in which it matches best.
     """
+    if mode not in {"vector", "rrf", "blend"}:
+        raise ValueError(f"unknown retrieval mode {mode!r}")
     corpus_langs = collection_languages(collection)
     translation_enabled = bool(
         translator is not None and getattr(cfg, "QUERY_TRANSLATION_ENABLED", False)
@@ -144,7 +152,11 @@ def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool,
     else:
         print("[evaluate] query translation disabled (original queries only)")
     print(f"[evaluate] running {len(cases)} question(s) | "
-          f"hybrid={hybrid} | recording top_k={top_k}")
+          f"mode={mode} | blend_lambda="
+          f"{getattr(cfg, 'HYBRID_BLEND_LAMBDA', 0.7):.2f} | "
+          f"recording top_k={top_k}")
+    score_key = {"vector": "similarity", "rrf": "rrf_score",
+                 "blend": "blend_score"}[mode]
 
     per_question = []
     for case in cases:
@@ -164,15 +176,19 @@ def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool,
         for variant in variants:
             q_embedding = embedder.embed_query(variant["text"])
             vector_hits = query_vector(collection, q_embedding, k=top_k)
-            if hybrid:
+            if mode == "vector":
+                variant_hit_lists.append(vector_hits)
+            elif mode == "rrf":
                 kw_hits = keyword_search(collection, variant["text"], k=top_k)
                 variant_hit_lists.append(
                     rrf_merge(vector_hits, kw_hits,
                               k=cfg.RRF_RANK_CONSTANT)[:top_k])
-            else:
-                variant_hit_lists.append(vector_hits)
+            else:  # blend
+                kw_hits = keyword_search(collection, variant["text"], k=top_k)
+                variant_hit_lists.append(
+                    blend_hybrid(vector_hits, kw_hits,
+                                 lambd=cfg.HYBRID_BLEND_LAMBDA)[:top_k])
 
-        score_key = "rrf_score" if hybrid else "similarity"
         fused = best_variant_merge(variant_hit_lists, score_key=score_key,
                                    labels=[v["label"] for v in variants])
         hits = fused[:top_k]
@@ -181,13 +197,9 @@ def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool,
         correct_hit = None if is_oos else find_correct_hit(case, hits)
         any_lang_hit = None if is_oos else find_correct_any_lang(case, hits)
 
-        # "score" is the metric that determined the ranking in this mode:
-        # cosine similarity for vector-only, RRF score for hybrid.
-        if hybrid:
-            # rrf_merge always fills rrf_score; similarity may be missing.
-            score_of = lambda h: h.get("rrf_score")
-        else:
-            score_of = lambda h: h.get("similarity")
+        # "score" is the metric that determined the ranking in this mode.
+        def score_of(h, _key=score_key):
+            return h.get(_key)
 
         record = {
             "id": case["id"],
@@ -215,6 +227,8 @@ def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool,
                 "similarity": h.get("similarity"),
                 "keyword_score": h.get("keyword_score"),
                 "rrf_score": h.get("rrf_score"),
+                "blend_score": h.get("blend_score"),
+                "kw_norm": h.get("kw_norm"),
                 "score": score_of(h),
                 "text": h["text"],
             } for h in hits],
@@ -242,7 +256,9 @@ def run_evaluation(cfg, embedder, collection, cases: list, hybrid: bool,
             "chunk_overlap_tokens": cfg.CHUNK_OVERLAP_TOKENS,
             "split_on_headings_first": cfg.SPLIT_ON_HEADINGS_FIRST,
             "retrieval_top_k": top_k,
-            "hybrid": hybrid,
+            "hybrid": mode == "rrf",
+            "retrieval_mode": mode,
+            "hybrid_blend_lambda": getattr(cfg, "HYBRID_BLEND_LAMBDA", 0.7),
             "query_translation_enabled": translation_enabled,
             "query_translation_model": translator.model if translation_enabled else None,
             # Each variant's scores are normalized by its own best match, then

@@ -92,6 +92,14 @@ RETRIEVAL_TOP_K = 5            # default for `query`
 RRF_RANK_CONSTANT = 60         # k used in reciprocal rank fusion: 1 / (k + rank)
 EVAL_TOP_K = 20                # how many hits evaluation records per question
 
+# Score-blend hybrid (`--hybrid-blend`): score = LAMBDA * cosine +
+# (1 - LAMBDA) * normalized BM25 (BM25 normalized by its own max per query
+# variant). 1.0 = pure vector; 0.0 = pure keyword. Dense similarity stays the
+# primary signal, BM25 boosts chunks sharing query tokens — the experiment
+# after RRF showed RRF trades hit@1 for hit@3/5, so the blend aims to keep
+# both.
+HYBRID_BLEND_LAMBDA = float(os.getenv("HYBRID_BLEND_LAMBDA", "0.7"))
+
 # ---------------------------------------------------------------------------
 # Query translation (cross-lingual retrieval) — EXPERIMENTAL
 # ---------------------------------------------------------------------------

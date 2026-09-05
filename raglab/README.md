@@ -231,6 +231,13 @@ printed warning rather than mixed in.
 - `--hybrid`: runs a plain **BM25** implementation (`store.keyword_search`)
   over stored chunk texts alongside the vector search and merges the two
   rankings by **reciprocal rank fusion** (`1/(k + rank)` per list, summed).
+- `--hybrid-blend`: the alternative fusion — **weighted score blend**
+  `score = λ·cosine + (1−λ)·BM25_normalized` (`HYBRID_BLEND_LAMBDA`, default
+  0.7). BM25 has no upper bound, so its scores are normalized by their own
+  max per query variant; dense similarity stays the primary signal and BM25
+  is a boost. RRF is rank-only (it lifts token-matching chunks above the
+  fact chunk); the blend aims to keep both. Use `--hybrid-blend` anywhere
+  `--hybrid` works (`query` and `evaluate`).
 
 ### Query translation — cross-lingual retrieval (experimental, `translate.py`)
 
@@ -305,7 +312,7 @@ provider, model and top-k so runs are comparable after you change settings.
 | Switch embedding provider | set `EMBEDDING_PROVIDER` + `EMBEDDING_MODEL` in `config.py`, uncomment the matching `requirements.txt` line, `pip install -r requirements.txt`, set the provider key in `.env` |
 | Change Gemini model / dimensions | edit `EMBEDDING_MODEL` / `GEMINI_OUTPUT_DIMENSIONALITY`, then `ingest --reset` (embedding spaces are incompatible) |
 | A/B task prompts on `gemini-embedding-2` | flip `GEMINI_USE_TASK_PROMPTS`, then `ingest --reset` |
-| Tune retrieval | `RETRIEVAL_TOP_K`, `RRF_RANK_CONSTANT`, `EVAL_TOP_K` in `config.py` |
+| Tune retrieval | `RETRIEVAL_TOP_K`, `RRF_RANK_CONSTANT`, `EVAL_TOP_K`, `HYBRID_BLEND_LAMBDA` in `config.py` |
 | Toggle query translation | `QUERY_TRANSLATION_ENABLED` in `config.py`, or `--no-translation` on `query` / `evaluate` |
 | Change translation model | edit `QUERY_TRANSLATION_MODEL` (e.g. `gemini-3.6-flash`); `QUERY_TRANSLATION_FALLBACK_MODELS` is tried in order when the primary errors |
 

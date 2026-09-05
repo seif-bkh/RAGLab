@@ -22,8 +22,9 @@ from embedder import build_embedder
 from evaluate import (load_question_set, prepare_query_text, print_report,
                       run_evaluation, save_run)
 from loader import load_all
-from store import (best_variant_merge, collection_languages, get_collection,
-                   keyword_search, query_vector, rrf_merge, store_chunks)
+from store import (best_variant_merge, blend_hybrid, collection_languages,
+                   get_collection, keyword_search, query_vector, rrf_merge,
+                   store_chunks)
 from translate import QueryTranslator, detect_language
 
 
@@ -191,7 +192,9 @@ def cmd_query(args) -> int:
     k = args.k
     lang = args.lang
     translator = None if args.no_translation else make_translator()
-    print(f"[query] k={k} | lang_filter={lang or 'none'} | hybrid={args.hybrid} | "
+    mode = "blend" if args.hybrid_blend else ("rrf" if args.hybrid else "vector")
+    print(f"[query] k={k} | lang_filter={lang or 'none'} | mode={mode} | "
+          f"blend_lambda={cfg.HYBRID_BLEND_LAMBDA:.2f} | "
           f"translation={'on' if translator else 'off'}")
 
     # Original query + translations into each corpus language (best-score
@@ -217,13 +220,18 @@ def cmd_query(args) -> int:
         print(f"[query] embedded variant {variant['label']} "
               f"dimension={len(q_embedding)}")
         v_hits = query_vector(collection, q_embedding, k=k, lang=lang)
-        if args.hybrid:
+        if mode == "rrf":
             kw_hits = keyword_search(collection, variant["text"], k=k)
             v_hits = rrf_merge(v_hits, kw_hits, k=cfg.RRF_RANK_CONSTANT)[:k]
+        elif mode == "blend":
+            kw_hits = keyword_search(collection, variant["text"], k=k)
+            v_hits = blend_hybrid(v_hits, kw_hits,
+                                  lambd=cfg.HYBRID_BLEND_LAMBDA)[:k]
         variant_hit_lists.append(v_hits)
 
     if len(variant_hit_lists) > 1:
-        score_key = "rrf_score" if args.hybrid else "similarity"
+        score_key = {"vector": "similarity", "rrf": "rrf_score",
+                     "blend": "blend_score"}[mode]
         hits = best_variant_merge(
             variant_hit_lists, score_key=score_key,
             labels=[v["label"] for v in variants])[:k]
@@ -249,6 +257,11 @@ def cmd_query(args) -> int:
                   f"(score / best score of its variant)")
         if hit.get("keyword_score") is not None:
             print(f"BM25 score : {hit['keyword_score']:.4f}")
+        if hit.get("kw_norm") is not None:
+            print(f"BM25 norm  : {hit['kw_norm']:.4f}  (score / max of variant)")
+        if hit.get("blend_score") is not None:
+            print(f"blend score: {hit['blend_score']:.4f}  "
+                  f"(lambda*cosine + (1-lambda)*BM25_norm)")
         if hit.get("rrf_score") is not None:
             print(f"RRF score  : {hit['rrf_score']:.4f}  (1/(k+rank) fusion)")
         print(f"language   : {meta.get('language')}")
@@ -286,8 +299,9 @@ def cmd_evaluate(args) -> int:
 
     embedder = make_embedder(skip_sanity=args.skip_sanity_check)
     translator = None if args.no_translation else make_translator()
+    mode = "blend" if args.hybrid_blend else ("rrf" if args.hybrid else "vector")
     run = run_evaluation(cfg, embedder, collection, cases,
-                         hybrid=args.hybrid, top_k=args.top_k,
+                         mode=mode, top_k=args.top_k,
                          translator=translator)
     print_report(run)
     save_run(run, cfg.RESULTS_DIR)
@@ -332,8 +346,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_query.add_argument("--query-lang", choices=["en", "fr", "ar"], default=None,
                          dest="query_lang",
                          help="language of the question (default: auto-detected)")
-    p_query.add_argument("--hybrid", action="store_true", default=False,
-                         help="merge BM25 keyword search with vector search by RRF")
+    qmode = p_query.add_mutually_exclusive_group()
+    qmode.add_argument("--hybrid", action="store_true", default=False,
+                       help="merge BM25 with vector search by RRF")
+    qmode.add_argument("--hybrid-blend", action="store_true", default=False,
+                       dest="hybrid_blend",
+                       help="score-blend BM25 with vector search "
+                            f"(lambda={cfg.HYBRID_BLEND_LAMBDA:.2f})")
     p_query.add_argument("--no-translation", action="store_true", default=False,
                          dest="no_translation",
                          help="disable query translation (original query only)")
@@ -343,8 +362,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_query.set_defaults(func=cmd_query)
 
     p_eval = sub.add_parser("evaluate", help="run questions.json and report metrics")
-    p_eval.add_argument("--hybrid", action="store_true", default=False,
-                        help="use vector + BM25 RRF fusion for evaluation")
+    emode = p_eval.add_mutually_exclusive_group()
+    emode.add_argument("--hybrid", action="store_true", default=False,
+                       help="use vector + BM25 RRF fusion for evaluation")
+    emode.add_argument("--hybrid-blend", action="store_true", default=False,
+                       dest="hybrid_blend",
+                       help="use vector + BM25 score-blend fusion for evaluation "
+                            f"(lambda={cfg.HYBRID_BLEND_LAMBDA:.2f})")
     p_eval.add_argument("--top-k", type=int, default=cfg.EVAL_TOP_K,
                         help=f"hits recorded per question (default {cfg.EVAL_TOP_K})")
     p_eval.add_argument("--questions", default=None, metavar="PATH",
