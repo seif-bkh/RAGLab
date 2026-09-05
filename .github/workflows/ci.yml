@@ -96,15 +96,19 @@ jobs:
                  --jq '[.artifacts[] | select(.name=="raglab-embed-cache" and .expired==false)][0].id' || true)
           if [ -n "$ART" ] && [ "$ART" != "null" ]; then
             gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART/zip" > /tmp/cache.zip || true
-            mkdir -p /tmp/cachex && (cd /tmp/cachex && unzip -o -q /tmp/cache.zip) || true
-            if [ -s /tmp/cachex/embeddings_cache.json ]; then
-              cp /tmp/cachex/embeddings_cache.json ./embeddings_cache.json
+            mkdir -p /tmp/cachex && (cd /tmp/cachex && unzip -o -q /tmp/cache.zip || true) || true
+            # upload-artifact keeps the workspace-relative path, so locate the
+            # file anywhere in the zip instead of assuming a flat layout.
+            CACHE_FILE=$(find /tmp/cachex -name embeddings_cache.json | head -1 || true)
+            if [ -n "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
+              cp "$CACHE_FILE" ./embeddings_cache.json
               echo "restored embedding cache (artifact $ART, $(wc -c < embeddings_cache.json) bytes)"
             else
-              echo "cache artifact downloaded but empty — starting fresh"
+              echo "embedding cache artifact existed but file was missing — starting fresh"
             fi
-            if [ -s /tmp/cachex/translations_cache.json ]; then
-              cp /tmp/cachex/translations_cache.json ./translations_cache.json
+            TFILE=$(find /tmp/cachex -name translations_cache.json | head -1 || true)
+            if [ -n "$TFILE" ] && [ -s "$TFILE" ]; then
+              cp "$TFILE" ./translations_cache.json
               echo "restored translation cache ($(wc -c < translations_cache.json) bytes)"
             fi
           else
@@ -114,10 +118,13 @@ jobs:
                  --jq '[.artifacts[] | select(.name=="raglab-translation-cache" and .expired==false)][0].id' || true)
           if [ -n "$TART" ] && [ "$TART" != "null" ]; then
             gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$TART/zip" > /tmp/tcache.zip || true
-            mkdir -p /tmp/tcachex && (cd /tmp/tcachex && unzip -o -q /tmp/tcache.zip) || true
-            if [ -s /tmp/tcachex/translations_cache.json ]; then
-              cp /tmp/tcachex/translations_cache.json ./translations_cache.json
-              echo "restored translation cache (artifact $TART)"
+            mkdir -p /tmp/tcachex && (cd /tmp/tcachex && unzip -o -q /tmp/tcache.zip || true) || true
+            TFILE=$(find /tmp/tcachex -name translations_cache.json | head -1 || true)
+            if [ -n "$TFILE" ] && [ -s "$TFILE" ]; then
+              cp "$TFILE" ./translations_cache.json
+              echo "restored translation cache (artifact $TART, $(wc -c < translations_cache.json) bytes)"
+            else
+              echo "translation cache artifact existed but file was missing — starting fresh"
             fi
           fi
 

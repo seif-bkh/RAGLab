@@ -413,10 +413,13 @@ def run_steps() -> None:
         if not ab_rows:
             check("at least one tie-break A/B row recorded", False)
         else:
-            notify("fictional modes A/B (h1/h3/h5): " + " | ".join(
-                f"{tie} v={hit3(r['vector']['metrics']['overall'])} "
-                f"r={hit3(r['rrf']['metrics']['overall'])} "
+            notify("fictional modes A/B (h1/h3/h5, q10 rank): " + " | ".join(
+                f"{tie} v={hit3(r['vector']['metrics']['overall'])}"
+                f"@q10={qrank(r['vector'], 'q10')} "
+                f"r={hit3(r['rrf']['metrics']['overall'])}"
+                f"@q10={qrank(r['rrf'], 'q10')} "
                 f"b={hit3(r['blend']['metrics']['overall'])}"
+                f"@q10={qrank(r['blend'], 'q10')}"
                 for tie, r in ab_rows))
             best_tie, best = max(ab_rows, key=lambda t: (
                 t[1]["blend"]["metrics"]["overall"]["hit@1"],
