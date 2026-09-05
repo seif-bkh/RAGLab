@@ -79,12 +79,15 @@ call; not recommended).
    an environment, not a variable), with the exact name. The workflow writes
    it to `.env` (gitignored, never logged) and runs `raglab/ci_test.py`, which drives
    the real pipeline: sanity check → `ingest --reset` → vector + hybrid
-   `query` → `evaluate` — asserting mechanics (dimension, chunk counts,
-   metadata fields, results JSON shape). Retrieval *quality* is not a test
+   `query` → `evaluate` (vector-only) → `evaluate --hybrid` — asserting
+   mechanics (dimension, chunk counts, metadata fields, results JSON shape).
+   The final two runs are an A/B: same questions with query translation
+   enabled, vector-only vs vector + BM25 RRF, and the compact annotations
+   report both plus the delta. Retrieval *quality* is not a test
    failure criterion: the evaluation metrics (hit rates, separation,
    out-of-scope max) are printed to the log as the report, and the results
-   JSON is uploaded as a build artifact. Trigger it at any time with
-   **Run workflow** (Actions tab).
+   JSON for both runs is uploaded as a build artifact. Trigger it at any time
+   with **Run workflow** (Actions tab).
 
 To skip the API-backed job locally or on a fork, just don't configure the
 secret — the workflow fails with a clear message naming the expected secret.

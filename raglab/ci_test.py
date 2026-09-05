@@ -18,6 +18,7 @@ from the uploaded artifact even if the raw log cannot be fetched.
 
 import glob
 import json
+import shutil
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -54,6 +55,39 @@ def notify(line: str) -> None:
     print(f"::notice::{line}", flush=True)
 
 
+def hit3(d: dict) -> str:
+    """'hit@1/hit@3/hit@5' as one compact string."""
+    return f"{d['hit@1']:.3f}/{d['hit@3']:.3f}/{d['hit@5']:.3f}"
+
+
+def cats_str(m: dict) -> str:
+    """Compact per-category hit rates."""
+    return " ".join(
+        f"{c}=h1:{m['by_category'][c]['hit@1']:.3f}/"
+        f"h3:{m['by_category'][c]['hit@3']:.3f}/"
+        f"h5:{m['by_category'][c]['hit@5']:.3f}"
+        for c in sorted(m["by_category"]))
+
+
+def langs_str(m: dict) -> str:
+    """Compact per-language hit rates."""
+    return " ".join(
+        f"{l}=h1:{m['by_language'][l]['hit@1']:.3f}/"
+        f"h3:{m['by_language'][l]['hit@3']:.3f}/"
+        f"h5:{m['by_language'][l]['hit@5']:.3f}"
+        for l in sorted(m["by_language"]))
+
+
+def xl_detail_str(r: dict) -> str:
+    """Per cross-lingual question: rank + which query variant found it."""
+    return " | ".join(
+        f"{q['id']} {q.get('language')}->{q.get('expected_lang')} "
+        f"rank={q.get('correct_rank')} via={q.get('correct_variant') or '-'} "
+        f"top={q.get('top_variant') or '-'}"
+        for q in r.get("questions", [])
+        if q.get("category") == "cross-lingual")
+
+
 def check(label: str, ok: bool, detail: str = "") -> bool:
     print(f"[ci] {'PASS' if ok else 'FAIL'}  {label}" + (f"  ({detail})" if detail else ""))
     if not ok:
@@ -74,13 +108,13 @@ def run_steps() -> None:
     global CURRENT_STEP
     # --- 1. Offline inspect (no API calls) -----------------------------------
     CURRENT_STEP = "inspect"
-    progress("\n[ci] STEP 1/6 — inspect (load + chunk, offline)")
+    progress("\n[ci] STEP 1/7 — inspect (load + chunk, offline)")
     rc = main.main(["inspect"])
     check("inspect exits 0", rc == 0, f"rc={rc}")
 
     # --- 2. Startup report + 3-language sanity check (1 small API call) ------
     CURRENT_STEP = "sanity"
-    progress("\n[ci] STEP 2/6 — embedding sanity check (provider/model/dimension + "
+    progress("\n[ci] STEP 2/7 — embedding sanity check (provider/model/dimension + "
              "EN/FR/AR pairwise cosine)")
     embedder = main.make_embedder(skip_sanity=False)
     expected_dim = int(getattr(cfg, "GEMINI_OUTPUT_DIMENSIONALITY", 0) or 0) or None
@@ -93,7 +127,7 @@ def run_steps() -> None:
 
     # --- 3. Ingest (real embeddings, --reset) ---------------------------------
     CURRENT_STEP = "ingest"
-    progress("\n[ci] STEP 3/6 — ingest --reset")
+    progress("\n[ci] STEP 3/7 — ingest --reset")
     rc = main.main(["ingest", "--reset", "--skip-sanity-check"])
     check("ingest exits 0", rc == 0, f"rc={rc}")
     check("embedding cache written", cfg.EMBEDDING_CACHE_PATH.exists())
@@ -131,7 +165,7 @@ def run_steps() -> None:
 
     # --- 4. Query: vector-only + hybrid with language filter -------------------
     CURRENT_STEP = "query"
-    progress("\n[ci] STEP 4/6 — query (vector + hybrid + lang filter + translation)")
+    progress("\n[ci] STEP 4/7 — query (vector + hybrid + lang filter + translation)")
 
     # 4a. Query translation plumbing (cross-lingual experiment). Two batched
     # calls warm the cache; `evaluate` below then reuses it, so the API cost
@@ -188,12 +222,13 @@ def run_steps() -> None:
                     "--k", "5", "--hybrid", "--lang", "fr", "--skip-sanity-check"])
     check("hybrid query exits 0", rc == 0, f"rc={rc}")
 
-    # --- 5. Evaluate -----------------------------------------------------------
+    # --- 5. Evaluate (vector-only baseline) -------------------------------------
     CURRENT_STEP = "evaluate"
-    progress("\n[ci] STEP 5/6 — evaluate (questions.json)")
+    progress("\n[ci] STEP 5/7 — evaluate (questions.json, vector-only)")
     rc = main.main(["evaluate", "--skip-sanity-check"])
     check("evaluate exits 0", rc == 0, f"rc={rc}")
 
+    v_metrics = v_sep = None
     run = get_latest_eval()
     check("timestamped results JSON written", run is not None,
           f"results_dir={cfg.RESULTS_DIR}")
@@ -213,9 +248,12 @@ def run_steps() -> None:
         check("per-question records include query variants",
               bool(run.get("questions"))
               and all("query_variants" in q for q in run["questions"]))
-        # Printable conclusions for the log.
+        # Printable conclusions for the log + compact annotations (GitHub
+        # shows at most 10 annotations per step, so vector and hybrid runs
+        # share compressed lines).
+        v_metrics = metrics
+        v_sep = sep = metrics["separation"]
         overall = metrics["overall"]
-        sep = metrics["separation"]
         oos = metrics["out_of_scope"]
         progress(f"\n[ci] CONCLUSION — overall hit rates:"
                  f"  hit@1={overall['hit@1']:.3f}  hit@3={overall['hit@3']:.3f}"
@@ -232,41 +270,24 @@ def run_steps() -> None:
                          f"top_variant={q.get('top_variant')} "
                          f"variants="
                          f"{[v['label'] for v in q.get('query_variants', [])]}")
-        notify(f"evaluation: overall hit@1={overall['hit@1']:.3f} "
-               f"hit@3={overall['hit@3']:.3f} hit@5={overall['hit@5']:.3f} "
-               f"(n={overall['n']})")
         for cat, d in sorted(metrics["by_category"].items()):
             progress(f"[ci]   category {cat:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
                      f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
-        cats = " ".join(f"{c}=h1:{metrics['by_category'][c]['hit@1']:.3f}/"
-                        f"h3:{metrics['by_category'][c]['hit@3']:.3f}/"
-                        f"h5:{metrics['by_category'][c]['hit@5']:.3f}"
-                        for c in sorted(metrics["by_category"]))
-        notify(f"evaluation: categories  {cats}")
         for lang, d in sorted(metrics["by_language"].items()):
             progress(f"[ci]   language {lang:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
                      f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
-        langs = " ".join(f"{l}=h1:{metrics['by_language'][l]['hit@1']:.3f}/"
-                         f"h3:{metrics['by_language'][l]['hit@3']:.3f}/"
-                         f"h5:{metrics['by_language'][l]['hit@5']:.3f}"
-                         for l in sorted(metrics["by_language"]))
-        notify(f"evaluation: languages  {langs}")
         progress(f"[ci]   separation  correct={sep['mean_correct_score']:.4f} "
                  f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
                  f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f}")
+        # One compact line for overall/categories/languages (annotation budget).
+        notify(f"evaluation: overall h1/h3/h5={hit3(overall)} (n={overall['n']}) | "
+               f"cats: {cats_str(metrics)} | langs: {langs_str(metrics)}")
         notify(f"evaluation: separation correct={sep['mean_correct_score']:.4f} "
                f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
                f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f} "
                f"oos_max_top1={oos['max_top1_score']:.4f} "
                f"oos_mean_top1={oos['mean_top1_score']:.4f} (oos_n={oos['n']})")
-        # Per-question diagnostics (compact annotations; verbose detail below
-        # in the progress log, kept in the uploaded results artifact).
-        xl_detail = " | ".join(
-            f"{q['id']} {q.get('language')}->{q.get('expected_lang')} "
-            f"rank={q.get('correct_rank')} via={q.get('correct_variant') or '-'} "
-            f"top={q.get('top_variant') or '-'}"
-            for q in run.get("questions", [])
-            if q.get("category") == "cross-lingual")
+        xl_detail = xl_detail_str(run)
         sl_detail = " | ".join(
             f"{q['id']} {q.get('language')} rank={q.get('correct_rank')} "
             f"via={q.get('correct_variant') or '-'}"
@@ -299,9 +320,66 @@ def run_steps() -> None:
                 )
             progress(f"[ci]     " + " | ".join(parts))
 
-    # --- 6. Answer stub exists (regression guard) ------------------------------
+    # --- 5b. Hybrid A/B: same questions, vector + BM25 RRF per variant ---------
+    CURRENT_STEP = "hybrid-evaluate"
+    progress("\n[ci] STEP 6/7 — hybrid evaluation "
+             "(vector + BM25 RRF, translated variants)")
+    # eval_*.json names have 1-second precision; the hybrid run could overwrite
+    # the vector file, so preserve it under a clearly-labelled copy.
+    vector_files = sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))
+    if vector_files:
+        shutil.copy(vector_files[-1], cfg.RESULTS_DIR / "eval_000_vector_ab.json")
+    rc = main.main(["evaluate", "--hybrid", "--skip-sanity-check"])
+    check("hybrid evaluate exits 0", rc == 0, f"rc={rc}")
+    run_h = get_latest_eval()
+    check("hybrid results JSON written", run_h is not None)
+    if run_h:
+        check("hybrid run records hybrid=True",
+              run_h["config"].get("hybrid") is True)
+        m_h = run_h["metrics"]
+        o_h = m_h["overall"]
+        s_h = m_h["separation"]
+        oos_h = m_h["out_of_scope"]
+
+        def delta(a, b):
+            return None if a is None or b is None else a - b
+
+        progress(f"\n[ci] HYBRID — overall hit rates:"
+                 f"  hit@1={o_h['hit@1']:.3f}  hit@3={o_h['hit@3']:.3f}"
+                 f"  hit@5={o_h['hit@5']:.3f}  (n={o_h['n']})")
+        for cat, d in sorted(m_h["by_category"].items()):
+            progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
+                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                     f"hit@5={d['hit@5']:.3f}")
+        for lang, d in sorted(m_h["by_language"].items()):
+            progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
+                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                     f"hit@5={d['hit@5']:.3f}")
+        progress(f"[ci]   separation  correct={s_h['mean_correct_score']:.4f} "
+                 f"best_incorrect={s_h['mean_best_incorrect_score']:.4f} "
+                 f"gap={s_h['gap_mean_correct_minus_best_incorrect']:.4f}")
+        if v_metrics is not None:
+            o_v = v_metrics["overall"]
+            s_v = v_sep
+            notify(f"evaluation: hybrid h1/h3/h5={hit3(o_h)} "
+                   f"(Δ vs vector "
+                   f"{delta(o_h['hit@1'], o_v['hit@1']):+.3f}/"
+                   f"{delta(o_h['hit@3'], o_v['hit@3']):+.3f}/"
+                   f"{delta(o_h['hit@5'], o_v['hit@5']):+.3f}) | "
+                   f"cats: {cats_str(m_h)} | langs: {langs_str(m_h)}")
+            notify(f"evaluation: hybrid sep gap="
+                   f"{s_h['gap_mean_correct_minus_best_incorrect']:.4f} "
+                   f"(vector {s_v['gap_mean_correct_minus_best_incorrect']:.4f}; "
+                   f"oos_max_top1={oos_h['max_top1_score']:.4f}) | "
+                   f"xl detail: {xl_detail_str(run_h) or '-'}")
+        else:
+            notify(f"evaluation: hybrid h1/h3/h5={hit3(o_h)} "
+                   f"(no vector baseline in this run) | "
+                   f"cats: {cats_str(m_h)} | langs: {langs_str(m_h)}")
+
+    # --- 7. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"
-    progress("\n[ci] STEP 6/6 — answer.py stub")
+    progress("\n[ci] STEP 7/7 — answer.py stub")
     import answer  # noqa: E402
     stub = answer.generate_answer("test", [])
     check("answer stub returns placeholder", "[STUB]" in stub)
