@@ -237,3 +237,34 @@ commit): the 836-chunk real ingest resumes from the saved batch cache, then
 the vector/rrf/blend + lambda sweep + 220-vs-340 chunk-size A/B all rerun on
 the FIXED split. Those numbers will replace the "historical" block above and
 complete the Gemini ↔ Jina comparison on identical chunks.
+
+## Prod-readiness verdict (2026-09-05)
+
+**Not yet.** Solid, transparent, well-tested *retrieval lab* — but not a
+deployable product. What blocks it, in priority order:
+
+P0 — correctness/trust
+1. Collection staleness: nothing records the loader/chunker version, so an
+   existing local DB silently mixes old-split chunks after a chunker change.
+   Fix: chunker/loader fingerprint in metadata + warn/require `--reset`.
+2. Heading detection is markdown-only (`#`): docx/PDF headings (Arabic
+   "1-…", "الفصل 86", "2.1.2-…") are plain text, so real docs have no
+   heading context and the BM25 heading cue is mostly empty.
+3. The one-time Jina NaN was absorbed but never root-caused. Fix: on an
+   invalid batch, retry in halves to isolate the bad input and fail with
+   its preview (then it can't hide inside chroma).
+
+P1 — resilience
+4. Rate limiting: retries use fixed backoff (2s×2^n), no Retry-After and no
+   per-minute pacing; Gemini's 5 RPM can 429 a big ingest mid-way (quota
+   deferral + batch cache make it resumable, but pacing would avoid it).
+5. Corrupt cache: we now FAIL with a delete-and-reingest message; a
+   self-heal (drop bad entry + re-embed) would be smoother.
+6. Dependency ranges are open (`>=`); pin tested versions.
+
+P2 — productization
+7. No serving layer: this is a CLI lab (ingest/evaluate/query) — an HTTP
+   service would be needed for an end-user product. Answer generation is a
+   stub by design (user decision).
+8. Per-push CI burns provider (Jina) credits; make the jina A/B an input
+   flag after the comparison is done.
