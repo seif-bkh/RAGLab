@@ -124,3 +124,16 @@ the new key ran the full real-docs pipeline in one job.
   branch — check `raglab/logs/latest.log` after a run.
 - `tests_offline.py`: no-API regression suite (translation, fusion tie-breaks,
   blend λ edges, HF provider logic with a stubbed model).
+
+### 2026-09-05 (2) — sentence-transformers 6.x compatibility fix
+User hit two real bugs on ST 6.0.1:
+1. `get_sentence_embedding_dimension()` renamed (deprecation warning) —
+   now resolved: `get_embedding_dimension()` first, legacy name as fallback.
+2. `encode()` returns numpy float32 rows; `list(v)` yields np.float32
+   scalars which json.dumps cannot serialize → cache.save() crashed.
+   Fixed at the source (`_to_python_floats` uses `.tolist()` → native
+   floats) AND hardened `EmbeddingCache.put` to coerce every provider.
+   `convert_to_numpy` is also no longer required (tensor fallback).
+Regression: tests_offline.py now stubs the ST 6 API (float32 rows, new
+method name) + the legacy API; 24 checks pass; the no-API suite runs in
+CI's compile-offline job.

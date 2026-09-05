@@ -6,10 +6,18 @@ best-variant fusion (including the three tie-break policies), RRF/blend
 mechanics and the lambda=0/lambda=1 edge cases. Exits 0 when everything
 passes; prints one PASS/FAIL line per check.
 """
+import json
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import tempfile
+
+try:
+    import numpy as np
+    HAVE_NUMPY = True
+except ImportError:  # pragma: no cover — numpy ships with torch/ST anyway
+    np = None
+    HAVE_NUMPY = False
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -146,26 +154,48 @@ from embedder import build_embedder
 _hf_calls = []
 
 
+def _fake_encode(self, texts, batch_size=None, normalize_embeddings=None,
+                 show_progress_bar=None, convert_to_numpy=None, **kwargs):
+    _hf_calls.append((list(texts), dict(kwargs)))
+    rows = []
+    for i, _ in enumerate(texts):
+        row = [0.0] * 8
+        row[i % 8] = 1.0
+        rows.append(row)
+    # Reproduce sentence-transformers >= 6 behaviour: numpy float32 rows
+    # (json.dumps cannot serialize np.float32 scalars).
+    if HAVE_NUMPY:
+        return [np.array(r, dtype=np.float32) for r in rows]
+    return rows
+
+
 class _FakeSentenceTransformer:
+    """ST >= 6 API: get_embedding_dimension (the renamed method)."""
+
     def __init__(self, model_name, device=None):
         self.prompts = {"query": "Instruct: retrieve relevant passages\nQuery: "}
+        self._model_name = model_name
+
+    def get_embedding_dimension(self):
+        return 8
+
+    encode = _fake_encode
+
+
+class _FakeSentenceTransformerLegacy:
+    """Old ST API: only get_sentence_embedding_dimension exists."""
+
+    def __init__(self, model_name, device=None):
+        self.prompts = {"query": ""}
         self._model_name = model_name
 
     def get_sentence_embedding_dimension(self):
         return 8
 
-    def encode(self, texts, batch_size=None, normalize_embeddings=None,
-               show_progress_bar=None, convert_to_numpy=None, **kwargs):
-        _hf_calls.append((list(texts), dict(kwargs)))
-        vecs = []
-        for i, _ in enumerate(texts):
-            vec = [0.0] * 8
-            vec[i % 8] = 1.0
-            vecs.append(vec)
-        return vecs
+    encode = _fake_encode
 
 
-def _patch_hf(model_name):
+def _patch_hf(model_name, fake_cls=None):
     global _hf_calls
     _hf_calls = []
     old_model = cfg.HF_EMBEDDING_MODEL
@@ -173,17 +203,18 @@ def _patch_hf(model_name):
     old_cache = cfg.EMBEDDING_CACHE_PATH
     cfg.HF_EMBEDDING_MODEL = model_name
     cfg.EMBEDDING_PROVIDER = "huggingface"
-    cfg.EMBEDDING_CACHE_PATH = Path(tempfile.mkdtemp()) / "emb.json"
+    cache_path = Path(tempfile.mkdtemp()) / "emb.json"
+    cfg.EMBEDDING_CACHE_PATH = cache_path
     try:
         sys.modules["sentence_transformers"] = types.ModuleType(
             "sentence_transformers")
         sys.modules["sentence_transformers"].SentenceTransformer = \
-            _FakeSentenceTransformer
+            fake_cls or _FakeSentenceTransformer
         emb = build_embedder(cfg)
         vecs = emb.embed_texts(["doc one", "doc two"],
                                input_type="search_document")
         q = emb.embed_query("question?")
-        return emb, vecs, q
+        return emb, vecs, q, cache_path
     finally:
         cfg.HF_EMBEDDING_MODEL = old_model
         cfg.EMBEDDING_PROVIDER = old_provider
@@ -192,7 +223,7 @@ def _patch_hf(model_name):
 
 
 # Qwen3: documents raw, queries via the model's built-in prompt.
-emb, vecs, q = _patch_hf("Qwen/Qwen3-Embedding-0.6B")
+emb, vecs, q, cache_path = _patch_hf("Qwen/Qwen3-Embedding-0.6B")
 check("hf provider detects dimension", emb._dimension == 8
       and len(vecs[0]) == 8)
 check("hf qwen: docs raw + queries use prompt_name='query'",
@@ -200,7 +231,7 @@ check("hf qwen: docs raw + queries use prompt_name='query'",
       str(_hf_calls))
 
 # BGE-M3 family: hand-written retrieval instruction on queries only.
-emb, _, _ = _patch_hf("BAAI/bge-m3")
+emb, _, _, _ = _patch_hf("BAAI/bge-m3")
 check("hf bge-m3: query instruction prefixed, docs raw",
       _hf_calls[0][0] == ["doc one", "doc two"]
       and all(t.startswith("Represent this sentence for searching relevant "
@@ -208,7 +239,7 @@ check("hf bge-m3: query instruction prefixed, docs raw",
       repr(_hf_calls[1][0][0][:60]))
 
 # E5 family: query:/passage: prefixes on both sides.
-emb, _, _ = _patch_hf("intfloat/multilingual-e5-large")
+emb, _, _, _ = _patch_hf("intfloat/multilingual-e5-large")
 check("hf e5: query:/passage: prefixes",
       all(t.startswith("passage: ") for t in _hf_calls[0][0])
       and all(t.startswith("query: ") for t in _hf_calls[1][0]),
@@ -217,7 +248,7 @@ check("hf e5: query:/passage: prefixes",
 # Explicit overrides beat family defaults (raw prefix, no prompt_name).
 cfg.HF_EMBEDDING_QUERY_PROMPT = "Q> "
 cfg.HF_EMBEDDING_DOC_PROMPT = "D> "
-emb, _, _ = _patch_hf("Qwen/Qwen3-Embedding-0.6B")
+emb, _, _, _ = _patch_hf("Qwen/Qwen3-Embedding-0.6B")
 check("hf explicit prompt overrides",
       _hf_calls[0][0] == ["D> doc one", "D> doc two"]
       and _hf_calls[1][0] == ["Q> question?"]
@@ -228,10 +259,33 @@ cfg.HF_EMBEDDING_DOC_PROMPT = ""
 
 # Prompts can be disabled entirely (raw text both sides).
 cfg.HF_EMBEDDING_USE_PROMPTS = False
-emb, _, _ = _patch_hf("Qwen/Qwen3-Embedding-0.6B")
+emb, _, _, _ = _patch_hf("Qwen/Qwen3-Embedding-0.6B")
 check("hf prompts disabled -> raw text both sides",
       _hf_calls[0][0] == ["doc one", "doc two"]
       and _hf_calls[1][0] == ["question?"])
 cfg.HF_EMBEDDING_USE_PROMPTS = True
+
+
+# --- the two bugs the user hit on sentence-transformers 6.x -----------------
+# (1) float32 embeddings must be JSON-serializable in the cache.
+payload = json.loads(cache_path.read_text(encoding="utf-8"))
+all_floats = all(
+    isinstance(v, float)
+    for entry in payload["entries"].values()
+    for v in entry["embedding"])
+check("hf float32 rows cached as JSON python floats",
+      all_floats and len(payload["entries"]) >= 1,
+      f"entries={len(payload['entries'])}")
+
+# (2) dimension detection must work when only the NEW method exists.
+emb, _, _, _ = _patch_hf("Qwen/Qwen3-Embedding-0.6B")
+check("hf dimension detect via ST>=6 get_embedding_dimension",
+      emb._dimension == 8 and emb._dimension == int(
+          emb._client.get_embedding_dimension()))
+
+# (3) ...and still work on ST<=5 (legacy method name only).
+emb_leg, _, _, _ = _patch_hf("BAAI/bge-m3", _FakeSentenceTransformerLegacy)
+check("hf dimension detect falls back to legacy method",
+      emb_leg._dimension == 8)
 
 sys.exit(0 if ok else 1)

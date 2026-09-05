@@ -89,6 +89,13 @@ class EmbeddingCache:
         return self.entries.get(key)
 
     def put(self, key: str, text: str, embedding: list):
+        # Providers (especially local sentence-transformers) can return numpy
+        # float32 scalars / torch tensors, which json.dumps cannot serialize.
+        # Coerce once here so EVERY provider writes a JSON-safe cache.
+        try:
+            embedding = [float(x) for x in embedding]
+        except (TypeError, ValueError):
+            pass  # unexpected non-numeric row: leave as returned
         self.entries[key] = {
             "embedding": embedding,
             "preview": text[-120:],  # tail, enough to identify the text by eye
@@ -594,7 +601,19 @@ class HuggingFaceEmbedder(BaseEmbedder):
                 f"{self.model}` and set HF_HUB_OFFLINE=1.\n"
                 f"           Model: {self.model}"
             )
-        self._dimension = int(self._client.get_sentence_embedding_dimension())
+        # sentence-transformers >= 6 renamed get_sentence_embedding_dimension()
+        # to get_embedding_dimension(); support both so the lab never breaks
+        # on a versions bump.
+        dim_getter = (getattr(self._client, "get_embedding_dimension", None)
+                      or getattr(self._client,
+                                 "get_sentence_embedding_dimension", None))
+        if dim_getter is None:
+            raise SystemExit(
+                "[embedder] cannot detect the embedding dimension for "
+                f"{self.model!r}: this sentence-transformers version exposes "
+                "neither get_embedding_dimension() nor "
+                "get_sentence_embedding_dimension().")
+        self._dimension = int(dim_getter())
         return self._client
 
     def _family_prompts(self) -> tuple[str, str]:
@@ -636,15 +655,33 @@ class HuggingFaceEmbedder(BaseEmbedder):
                 else:
                     parts.append(text)
             texts = parts
-        vectors = model.encode(
-            texts,
-            batch_size=self.batch_size,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-            convert_to_numpy=True,
+        enc_kwargs = {
+            "batch_size": self.batch_size,
+            "normalize_embeddings": True,
+            "show_progress_bar": False,
             **kwargs,
-        )
-        return [list(v) for v in vectors]
+        }
+        try:
+            vectors = model.encode(texts, convert_to_numpy=True, **enc_kwargs)
+        except TypeError:
+            # sentence-transformers >= 6 may drop convert_to_numpy; encode()
+            # then returns a torch.Tensor — handled by _to_python_floats.
+            vectors = model.encode(texts, **enc_kwargs)
+        return self._to_python_floats(vectors)
+
+    @staticmethod
+    def _to_python_floats(vectors) -> list:
+        """Coerce numpy float32 rows / torch tensors into plain Python floats.
+
+        list(np.float32 array) yields numpy.float32 scalars, which are NOT
+        JSON-serializable; the embed cache then crashes on save. .tolist()
+        returns native Python numbers for both numpy and torch.
+        """
+        rows = []
+        for v in vectors:
+            row = v.tolist() if hasattr(v, "tolist") else list(v)
+            rows.append([float(x) for x in row])
+        return rows
 
     def _provider_notes(self) -> list[str]:
         return [
