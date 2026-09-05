@@ -343,6 +343,20 @@ def run_steps() -> None:
     # One compact notice (GitHub shows at most 10 annotations per step).
     sanity = " | ".join(getattr(embedder, "sanity_lines", ["dimension: ?"]))
     notify(f"sanity: {sanity}")
+    # Un-cached key probe: the 3-language phrases above are CACHE HITS after
+    # the first run, so they never touch the API and a swapped/broken key
+    # would pass silently. A unique text forces one real call and tells us
+    # whether the key works at all (vs quota exhausted) before the big ingest.
+    probe_text = f"raglab-key-probe-{datetime.now(timezone.utc).isoformat()}"
+    try:
+        _probe = embedder.embed_texts([probe_text], input_type="search_document")
+        notify(f"gemini key probe: OK (dims={len(_probe[0])}, live API call)")
+    except RuntimeError as _pexc:
+        if _REAL_QUOTA.search(str(_pexc)):
+            notify("gemini key probe: 429 quota — key is accepted but the "
+                   "daily limit is exhausted (reset ~07:00 UTC)")
+        else:
+            raise
 
     # --- 3. Ingest (real embeddings, --reset) ---------------------------------
     CURRENT_STEP = "ingest"
