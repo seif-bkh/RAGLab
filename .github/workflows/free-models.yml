@@ -1,0 +1,80 @@
+name: Free gateway RAG comparison
+
+on:
+  push:
+    branches: ["arena/01a071ba-raglab"]
+    paths: ["raglab/benchmarks/free_provider_plan.json"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+
+concurrency:
+  group: free-gateways-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Free xKiro and KiosAPI grounded answers
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install and verify offline contracts
+        working-directory: raglab
+        run: |
+          python -m pip install -r requirements-benchmark.txt
+          python -m compileall -q .
+          python tests_offline.py
+          python -m unittest -v test_nvidia_pipeline
+      - name: Recover the frozen Nemotron retrieval snapshot (no NVIDIA calls)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SOURCE_RUN=$(python - <<'PY'
+          import json
+          plan = json.load(open('raglab/benchmarks/free_provider_plan.json'))
+          assert str(plan['source_run']).isdigit()
+          print(plan['source_run'])
+          PY
+          )
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name raglab-nvidia-results --dir raglab/results/frozen_native
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            raglab/benchmark_cache/free_gateway_answers.json
+            raglab/benchmark_cache/free_tokenizer/
+          key: free-gateways-v1-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: free-gateways-v1-${{ github.ref_name }}-
+      - name: Recheck free pricing and compare grounded answers
+        working-directory: raglab
+        env:
+          XKIRO_API_KEY: ${{ secrets.XKIRO_API_KEY }}
+          KIOSAPI_API_KEY: ${{ secrets.KIOSAPI_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/raglab/benchmark_cache/free_tokenizer
+        run: python free_model_benchmark.py
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            raglab/benchmark_cache/free_gateway_answers.json
+            raglab/benchmark_cache/free_tokenizer/
+          key: free-gateways-v1-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Publish measured gateway results (no credentials)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python raglab/free_model_benchmark.py --publish
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: raglab-free-gateway-results
+          path: raglab/results/free_models/
+          retention-days: 14
+          if-no-files-found: warn

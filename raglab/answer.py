@@ -135,11 +135,14 @@ def validate_answer(output, sources):
 
 
 class AnswerGenerator:
-    def __init__(self, cfg, client=None):
+    def __init__(self, cfg, client=None, *, approved_models=None):
         self.cfg = cfg
         self.model = cfg.ANSWER_MODEL
-        if self.model not in ANSWER_MODELS:
-            raise ValueError(f"Answer model must be one of {ANSWER_MODELS}; no fallback is allowed")
+        if approved_models is not None and client is None:
+            raise ValueError('Alternative-model experiments require an explicit provider client')
+        allowed = ANSWER_MODELS if approved_models is None else tuple(approved_models)
+        if self.model not in allowed:
+            raise ValueError(f"Answer model must be one of {allowed}; no fallback is allowed")
         self.prompt_version = getattr(cfg, "ANSWER_PROMPT_VERSION", "grounded-v1")
         self.client = client or NvidiaClient(
             base_url=getattr(cfg, "NVIDIA_TRANSLATION_BASE_URL", "https://integrate.api.nvidia.com/v1/chat/completions").removesuffix("/chat/completions"),
@@ -170,6 +173,8 @@ class AnswerGenerator:
         if language not in REFUSALS:
             raise ValueError("Answer language must be en, fr or ar")
         base = {"model": self.model, "prompt_version": self.prompt_version,
+                "provider": getattr(self.cfg, 'ANSWER_PROVIDER', 'nvidia'),
+                "api_endpoint": getattr(self.client, 'base_url', 'injected'),
                 "language": language, "claims": [], "sources": [], "cached": False,
                 "validation_ok": True, "provider_ok": True, "seconds": 0.0}
         if needs_private_or_live_data(question):

@@ -258,6 +258,44 @@ not active pipeline providers and are not folded into the NVIDIA benchmark.
 Published endpoints/docs: [xKiro](https://docs.xkiro.com/),
 [KiosAPI](https://kiosapi.mintlify.app/getting-started/quickstart).
 
+## Free gateway answer experiments
+
+`free_model_benchmark.py` and the **Free gateway RAG comparison** workflow test
+an explicit shortlist in `benchmarks/free_provider_plan.json`. This is a separate
+experiment, not a relabeling of the exact NVIDIA comparison. The user authorized
+broader models here, but **only verified zero-priced request SKUs** are eligible.
+
+- xKiro's live `/v1/models` must say `access_tier=free` and show zero USD input,
+  output and any separately priced cache tokens. A `:free` suffix alone is not
+  accepted, and is never removed to retry a paid sibling.
+- KiosAPI's public `/api/pricing` must put the exact SKU **exclusively** in `Free`,
+  with a zero group multiplier and no custom billing expression. `model_price=0`
+  by itself does **not** mean a token-priced model is free. The key must also be
+  authorized to use that group; no account/token settings are changed here.
+- Pricing is rechecked before stages and after five minutes between new calls.
+  Only each provider's own environment key is sent to its documented endpoint;
+  redirects are disabled. No paid or model fallback is performed.
+
+The workflow downloads iteration 02's immutable **original-query** retrieval
+snapshot and verifies its commit, native 2048-dimensional Nemotron model, chunk
+manifest, question hashes and source text. It makes **zero new embedding or
+translation calls**. Original-only retrieval avoids dependence on NVIDIA chat
+quota; this context differs from the earlier translated-query answer experiment.
+
+Seven fixed development cases screen up to four eligible SKUs per provider.
+Each provider's screen winner gets the complete development set; the overall
+winner is frozen before held-out generation and three source-injection tests.
+The budget is 100 logical calls, with at most two HTTP attempts per call. One
+worker and bounded pacing/retries limit load. Unavailable/untested rows stay
+explicitly incomplete. Only the basic grounded-v1 answer profile is compared.
+
+Outputs go to `results/free_models/` and neutral `Free gateway results / ...`
+Checks. Successful answers are cached separately by exact request and endpoint.
+The named SKU and gateway-reported model are recorded; **upstream identities are
+not independently verified**, and promotional free service is not a production
+SLA or independent billing audit. No ordinary CLI defaults are changed by this
+experimental model selection.
+
 ## Production boundary
 
 This is a stronger **evaluation lab**, not a deployed banking product. Outstanding

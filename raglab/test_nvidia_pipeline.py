@@ -431,6 +431,100 @@ class Grounding(unittest.TestCase):
             self.assertEqual(len(json.loads(cfg.ANSWER_CACHE_PATH.read_text())), 8)
 
 
+class FreeGatewayPolicy(unittest.TestCase):
+    def xcatalog(self, model='example/model:free'):
+        return {'data': [{'id': model, 'access_tier': 'free', 'pricing': {
+            'currency': 'USD', 'unit': 'per_1m_tokens', 'input': 0, 'output': 0},
+            'reasoning_efforts': {'levels': ['none', 'high']}}]}
+
+    def test_zero_prices_are_explicit_and_finite(self):
+        from free_gateway import is_zero
+        self.assertTrue(is_zero('0.000'))
+        for value in [None, False, '', 'NaN', 'Infinity', -1, .01]:
+            self.assertFalse(is_zero(value), value)
+
+    def test_xkiro_requires_free_tier_and_all_zero_prices(self):
+        from free_gateway import free_eligibility
+        catalog = self.xcatalog()
+        self.assertTrue(free_eligibility('xkiro', 'example/model:free', catalog)[0])
+        catalog['data'][0]['access_tier'] = 'paid'
+        self.assertFalse(free_eligibility('xkiro', 'example/model:free', catalog)[0])
+        catalog['data'][0]['access_tier'] = 'free'
+        catalog['data'][0]['pricing']['cache_write'] = .1
+        self.assertFalse(free_eligibility('xkiro', 'example/model:free', catalog)[0])
+        self.assertFalse(free_eligibility('xkiro', 'missing:free', catalog)[0])
+
+    def test_kios_zero_model_price_is_not_zero_token_pricing(self):
+        from free_gateway import free_eligibility
+        row = {'model_name': 'free-sku', 'model_price': 0, 'model_ratio': 1,
+               'quota_type': 0, 'enable_groups': ['default'], 'supported_endpoint_types': ['openai']}
+        catalog = {'success': True, 'data': [row], 'group_ratio': {'default': 1, 'Free': 0}}
+        self.assertFalse(free_eligibility('kiosapi', 'free-sku', catalog)[0])
+        row['enable_groups'] = ['Free']
+        self.assertTrue(free_eligibility('kiosapi', 'free-sku', catalog)[0])
+        row['enable_groups'] = ['Free', 'paid']
+        self.assertFalse(free_eligibility('kiosapi', 'free-sku', catalog)[0])
+        row['enable_groups'] = ['Free']
+        row['billing_expr'] = 'fixed_fee'
+        self.assertFalse(free_eligibility('kiosapi', 'free-sku', catalog)[0])
+
+    def test_paid_sku_rejected_before_client_can_send_a_key(self):
+        from free_gateway import FreeGatewayClient
+        catalog = self.xcatalog()
+        catalog['data'][0]['pricing']['input'] = 1
+        with self.assertRaisesRegex(ValueError, 'Free-only policy'):
+            FreeGatewayClient('xkiro', 'example/model:free', {'catalog': catalog}, budget={'used': 0, 'limit': 1})
+
+    def test_gateway_key_payload_identity_and_call_budget(self):
+        from free_gateway import FreeGatewayClient
+        model = 'example/model:free'
+        with patch.dict(os.environ, {'XKIRO_API_KEY': 'x-only', 'NVIDIA_API_KEY': 'never-forward'}):
+            client = FreeGatewayClient('xkiro', model, {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+        self.assertEqual(client.api_key, 'x-only')
+        data = {'model': model, 'choices': [{'message': {'content': 'final response'}, 'finish_reason': 'stop'}]}
+        with patch.object(client, 'request', return_value=data) as request:
+            self.assertEqual(client.chat(model, [], max_tokens=64)['served_model'], model)
+            payload = request.call_args.args[1]
+            self.assertEqual(payload['model'], model)
+            self.assertEqual(payload['reasoning_effort'], 'none')
+            self.assertTrue(payload['stream'])
+            with self.assertRaisesRegex(NvidiaAPIError, 'budget'):
+                client.chat(model, [])
+            self.assertEqual(request.call_count, 1)
+            with self.assertRaisesRegex(ValueError, 'substitution'):
+                client.chat('paid-sibling', [])
+
+    def test_gateway_response_mismatch_is_not_scored_as_requested_model(self):
+        from free_gateway import FreeGatewayClient
+        client = FreeGatewayClient('xkiro', 'example/model:free', {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+        with patch.object(client, 'request', return_value={'model': 'different'}):
+            with self.assertRaisesRegex(NvidiaAPIError, 'not attributed'):
+                client.chat('example/model:free', [])
+
+    def test_price_change_stops_later_stage(self):
+        from free_gateway import FreeGatewayClient
+        client = FreeGatewayClient('xkiro', 'example/model:free', {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+        changed = self.xcatalog()
+        changed['data'][0]['pricing']['output'] = 1
+        with patch('free_gateway.load_pricing', return_value={'catalog': changed}):
+            with self.assertRaisesRegex(ValueError, 'no longer verified free'):
+                client.recheck()
+
+    def test_alternative_answer_models_require_explicit_client_and_allowlist(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_MODEL='example/model:free', ANSWER_PROVIDER='xkiro',
+                              ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
+            with self.assertRaises(ValueError):
+                AnswerGenerator(cfg)
+            with self.assertRaises(ValueError):
+                AnswerGenerator(cfg, approved_models=(cfg.ANSWER_MODEL,))
+            client = SimpleNamespace(chat=lambda *a, **kw: self.fail('no context must not call'))
+            gen = AnswerGenerator(cfg, client, approved_models=(cfg.ANSWER_MODEL,))
+            result = gen.answer('Question?', [], 'en')
+            self.assertEqual(result['reason'], 'no_context')
+            self.assertEqual(result['provider'], 'xkiro')
+
+
 class ProviderCatalogs(unittest.TestCase):
     def test_catalog_matches_literal_ids_not_families_and_scopes_keys(self):
         from provider_catalog import inspect_catalog

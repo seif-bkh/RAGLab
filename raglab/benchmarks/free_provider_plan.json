@@ -1,0 +1,15 @@
+{
+  "iteration": "01-free-gateway-grounded-answers",
+  "source_run": "33970405295",
+  "source_commit": "be5f4448b09cd8905db6eaaf718d215bf4036e11",
+  "retrieval_profile": "original",
+  "answer_profile": "grounded-v1",
+  "screen_ids": ["rq01", "rq03", "rq05", "rq08", "rq14", "rq15", "rq16"],
+  "max_logical_calls": 100,
+  "models": {
+    "xkiro": ["qwen/qwen3.8-max:free", "minimax/minimax-m3:free", "mistralai/mistral-small-2603", "deepseek/deepseek-v4-flash"],
+    "kiosapi": ["moonshotai/kimi-k3", "Qwen/Qwen3.8-27B", "nvidia/nemotron-3-super-120b-a12b", "deepseek-v4-flash"]
+  },
+  "selection": "Screen all eligible SKUs on the fixed development subset; evaluate each provider's screen winner on full development; select overall on full development before holdout. Refusal rate, rubric rate, validation, then observed latency. No holdout tuning.",
+  "free_policy": "Recheck live pricing. xKiro: free access tier and zero input/output/cache charges. KiosAPI: SKU exclusively in Free group with zero group multiplier and no billing expression. Never strip :free or fall back to a paid SKU."
+}

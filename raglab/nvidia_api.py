@@ -122,7 +122,7 @@ def read_event_stream(response, deadline):
 
 class NvidiaClient:
     def __init__(self, *, base_url=BASE_URL, timeout=120, attempts=3,
-                 min_interval=1.6, max_retry_delay=30, api_key=None, stream=False):
+                 min_interval=1.6, max_retry_delay=30, api_key=None, stream=False, opener=None):
         self.base_url = base_url.rstrip("/")
         # An explicitly empty key must not fall back to another provider's key.
         self.api_key = (os.environ.get('NVIDIA_API_KEY', '') if api_key is None else api_key).strip()
@@ -133,6 +133,7 @@ class NvidiaClient:
         if self.timeout <= 0 or self.attempts < 1 or self.min_interval < 0:
             raise ValueError("NVIDIA timeout/attempts must be positive; pacing nonnegative")
         self.stream = stream
+        self._opener = opener
         self.calls = 0
         self.events = []
 
@@ -160,7 +161,8 @@ class NvidiaClient:
                 method="GET" if payload is None else "POST")
             self.calls += 1
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                open_request = self._opener.open if self._opener is not None else urllib.request.urlopen
+                with open_request(req, timeout=self.timeout) as resp:
                     if getattr(resp, "status", 200) == 202:
                         raise NvidiaAPIError("NVIDIA returned pending (202), not a completed result", 202)
                     data = (read_event_stream(resp, started + self.timeout * (attempt + 1))
@@ -177,7 +179,8 @@ class NvidiaClient:
                 return data
             except urllib.error.HTTPError as exc:
                 raw = exc.read()
-                detail = safe_error(raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw)
+                raw_text = raw.decode('utf-8', errors='replace') if isinstance(raw, bytes) else str(raw)
+                detail = safe_error(raw_text.replace(self.api_key, '[REDACTED]'))
                 error = NvidiaAPIError(f"NVIDIA API HTTP {exc.code}: {detail or exc.reason}",
                                        exc.code, retry_after_seconds(exc.headers.get("Retry-After")))
             except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
