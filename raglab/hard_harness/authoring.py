@@ -247,7 +247,7 @@ def audit_messages(families, specs, units):
             'sources': [{k: units[uid][k] for k in ('id','document','page','text')} for uid in source_ids]}, ensure_ascii=False)}]
 
 
-def author_shard(shard):
+def author_shard(shard, *, recover_only=False):
     plan = read_json(PLAN_PATH)
     specs, units = make_specs()
     if not 0 <= shard < plan['author_shards']:
@@ -291,14 +291,42 @@ def author_shard(shard):
                 except ValueError:
                     continue
                 reusable[identifier]={'family':family,'audit':audit,'reused_from_artifact_run':plan.get('resume_run')}
+    source_fingerprint = read_json(OUTPUT/'sources/manifest.json')['gold_unit_manifest']
+    completed = {}
+    for spec in assigned:
+        path = WORK/'draft_families'/f'{fingerprint({"version":AUTHOR_VERSION,"spec":spec,"source":source_fingerprint})}.json'
+        record = read_json(path) if path.exists() else reusable.get(spec['id'])
+        if record is None:
+            continue
+        review = record.get('audit',{})
+        if review.get('approved') is not True or review.get('issues'):
+            raise ValueError('Saved family lacks a passing reference audit: '+spec['id'])
+        validate_family(record['family'],spec,units)
+        completed[spec['id']] = record
+        if not path.exists():
+            write_json(path,record)
+    # Export ALL known accepted families before any new request. A pause at an
+    # early missing ID must not hide later accepted IDs in the next artifact.
+    rows = [completed[s['id']]['family'] for s in assigned if s['id'] in completed]
+    audits = [completed[s['id']]['audit'] for s in assigned if s['id'] in completed]
     author = auditor = None
-    rows, audits, rejected, unresolved, unresolved_drafts = [], [], [], [], []
+    rejected, unresolved, unresolved_drafts = [], [], []
     summary = {'status':'running','shard':shard,'target_families':len(assigned),'families':0,
-               'source_manifest':read_json(OUTPUT/'sources/manifest.json')['gold_unit_manifest'],
+               'source_manifest':source_fingerprint,
                'author_model':plan['llm']['model'],'auditor_model':plan['llm']['model'],
                'independent_judge':False,'expert_reviewed':False,'authoring_version':AUTHOR_VERSION}
+    summary['families'] = len(rows)
+    write_jsonl(out/'families.jsonl',rows)
+    write_jsonl(out/'reference_audit.jsonl',audits)
+    if recover_only or len(completed)==len(assigned):
+        summary.update(status='drafts_complete' if len(completed)==len(assigned) else 'recovered_checkpoint',
+                       clients=[],new_model_calls=0)
+        write_json(out/'manifest.json',summary)
+        return summary
     try:
         for spec in assigned:
+            if spec['id'] in completed:
+                continue
             batch = [spec]
             cache_file = WORK/'draft_families'/f'{fingerprint({"version":AUTHOR_VERSION,"spec":spec,"source":summary["source_manifest"]})}.json'
             if cache_file.exists():
@@ -344,7 +372,9 @@ def author_shard(shard):
                     unresolved_drafts.append({'id':spec['id'],'spec':spec,'last_draft':previous,
                                               'audit_feedback':feedback,'authoring_version':AUTHOR_VERSION})
             if accepted is not None:
-                rows.append(accepted['family']);audits.append(accepted['audit'])
+                completed[spec['id']] = accepted
+                rows = [completed[s['id']]['family'] for s in assigned if s['id'] in completed]
+                audits = [completed[s['id']]['audit'] for s in assigned if s['id'] in completed]
             summary['families']=len(rows)
             summary['unresolved_ids']=[r['id'] for r in unresolved]; summary['unresolved_count']=len(unresolved)
             write_jsonl(out/'families.jsonl',rows)

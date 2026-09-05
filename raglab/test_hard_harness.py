@@ -197,6 +197,32 @@ class DatasetIntegrity(unittest.TestCase):
                 'fact_summary':f'fact {number}','rationale':'test-only fixture, not a real benchmark case',
                 'languages':languages,'evidence':[{'unit_id':'unit','quote':'original source evidence text'}] if category=='supported' else []}
 
+    def test_reference_recovery_exports_later_cached_ids_before_retrying_a_gap(self):
+        from unittest.mock import patch
+        import hard_harness.authoring as authoring
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); out=root/'out'; work=root/'work'; (out/'sources').mkdir(parents=True)
+            plan=root/'plan.json'; write_json(plan,{'author_shards':1,'llm':{'model':ANSWER_MODEL}})
+            source_hash='verified-sources'; write_json(out/'sources/manifest.json',{'gold_unit_manifest':source_hash})
+            unit={'text':'هذا نص مصدر ثابت يبين اشتراط الموافقة على تعديل العقد.'}
+            specs=[{'id':f'hh{i:04d}','category':'supported','expected_behavior':'answer',
+                    'source_unit_ids':['u'],'primary_unit_id':'u'} for i in range(1,4)]
+            for spec in specs[1:]:
+                family={'id':spec['id'],'category':'supported','fact_summary':'approval','rationale':'source',
+                    'authoring_version':authoring.AUTHOR_VERSION,
+                    'evidence':[{'unit_id':'u','quote':unit['text']}],
+                    'languages':{l:{'question':q,'reference_answer':'approval required','required_facts':['approval']}
+                                 for l,q in [('ar','هل يشترط الحصول على الموافقة؟'),('fr','Une approbation est-elle nécessaire ?'),('en','Is approval required?')]}}
+                key=fingerprint({'version':authoring.AUTHOR_VERSION,'spec':spec,'source':source_hash})
+                write_json(work/'draft_families'/f'{key}.json',{'family':family,'audit':{'id':spec['id'],'approved':True,'issues':[]}})
+            with patch.object(authoring,'OUTPUT',out),patch.object(authoring,'WORK',work),patch.object(authoring,'PLAN_PATH',plan), \
+                 patch.object(authoring,'make_specs',return_value=(specs,{'u':unit})), \
+                 patch.object(authoring,'CheckpointClient',side_effect=AssertionError('no provider on recovery')):
+                report=authoring.author_shard(0,recover_only=True)
+            self.assertEqual(report['families'],2)
+            self.assertEqual(report['new_model_calls'],0)
+            self.assertEqual([r['id'] for r in read_jsonl(out/'author_00/families.jsonl')],['hh0002','hh0003'])
+
     def test_three_thousand_public_questions_are_separate_from_keys(self):
         from hard_harness.dataset import make_adversarial, validate_and_split
         base = [self.family(i) for i in range(1,651)]
