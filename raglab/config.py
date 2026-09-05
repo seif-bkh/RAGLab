@@ -143,6 +143,15 @@ EVAL_TOP_K = 20                # how many hits evaluation records per question
 # both.
 HYBRID_BLEND_LAMBDA = float(os.getenv("HYBRID_BLEND_LAMBDA", "0.7"))
 
+# BM25 sees ONLY the chunk text by default. The question often names the
+# source document ("BCT circular 2019-08", "the internal guide") while the
+# chunk text does not (the title lives in metadata/source), so keyword hits
+# miss the right document. When True, keyword_search appends the source file
+# name + heading to each corpus text — a cheap, powerful document cue.
+KEYWORD_SEARCH_INCLUDE_METADATA = os.getenv(
+    "KEYWORD_SEARCH_INCLUDE_METADATA", "true").strip().lower() in \
+    {"1", "true", "yes", "on"}
+
 # Tie-break policy for best_variant_merge when two DIFFERENT chunks each top
 # their own query variant (both relative_score == 1.0):
 #   - "variant_order": original-language variant first (old behavior; the

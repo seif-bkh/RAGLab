@@ -221,7 +221,10 @@ def cmd_query(args) -> int:
               f"dimension={len(q_embedding)}")
         v_hits = query_vector(collection, q_embedding, k=k, lang=lang)
         if mode == "rrf":
-            kw_hits = keyword_search(collection, variant["text"], k=k)
+            kw_hits = keyword_search(collection, variant["text"], k=k,
+                        include_metadata=getattr(
+                            cfg, "KEYWORD_SEARCH_INCLUDE_METADATA",
+                            True))
             v_hits = rrf_merge(v_hits, kw_hits, k=cfg.RRF_RANK_CONSTANT)[:k]
         elif mode == "blend":
             kw_hits = keyword_search(collection, variant["text"], k=k)

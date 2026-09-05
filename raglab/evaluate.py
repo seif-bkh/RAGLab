@@ -182,12 +182,19 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
             if mode == "vector":
                 variant_hit_lists.append(vector_hits)
             elif mode == "rrf":
-                kw_hits = keyword_search(collection, variant["text"], k=top_k)
+                kw_hits = keyword_search(collection, variant["text"], k=top_k,
+                            include_metadata=getattr(
+                                cfg, "KEYWORD_SEARCH_INCLUDE_METADATA",
+                                True))
                 variant_hit_lists.append(
                     rrf_merge(vector_hits, kw_hits,
                               k=cfg.RRF_RANK_CONSTANT)[:top_k])
             else:  # blend
-                kw_hits = keyword_search(collection, variant["text"], k=top_k)
+                kw_hits = keyword_search(collection, variant["text"], k=top_k,
+                                         include_metadata=getattr(
+                                             cfg,
+                                             "KEYWORD_SEARCH_INCLUDE_METADATA",
+                                             True))
                 variant_hit_lists.append(
                     blend_hybrid(vector_hits, kw_hits, lambd=lambd)[:top_k])
 
@@ -274,6 +281,8 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
             "query_translation_fusion": "best_variant_relative",
             "query_translation_languages": corpus_langs,
             "rrf_rank_constant": cfg.RRF_RANK_CONSTANT,
+            "keyword_include_metadata": getattr(
+                cfg, "KEYWORD_SEARCH_INCLUDE_METADATA", True),
         },
         "metrics": metrics,
         "questions": per_question,

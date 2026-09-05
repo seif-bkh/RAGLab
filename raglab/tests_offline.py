@@ -22,7 +22,8 @@ except ImportError:  # pragma: no cover — numpy ships with torch/ST anyway
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from translate import QueryTranslator, detect_language  # noqa: E402
-from store import best_variant_merge, blend_hybrid, rrf_merge  # noqa: E402
+from store import (best_variant_merge, blend_hybrid,  # noqa: E402
+                     keyword_search, rrf_merge)
 
 ok = True
 
@@ -287,5 +288,49 @@ check("hf dimension detect via ST>=6 get_embedding_dimension",
 emb_leg, _, _, _ = _patch_hf("BAAI/bge-m3", _FakeSentenceTransformerLegacy)
 check("hf dimension detect falls back to legacy method",
       emb_leg._dimension == 8)
+
+
+# --- BM25 keyword search honors the document-metadata cue -------------------
+class _FakeCollection:
+    def __init__(self, ids, docs, metas):
+        self._ids = ids; self._docs = docs; self._metas = metas
+    def get(self, include=None):
+        return {"ids": list(self._ids), "documents": list(self._docs),
+                "metadatas": list(self._metas)}
+    def count(self):
+        return len(self._ids)
+
+# rq14-like: the cue "BCT 2019-08" only exists in the SOURCE name, never in
+# the chunk text; without metadata both chunks score 0 (no token overlap),
+# with metadata the Circulaire chunk wins.
+fc = _FakeCollection(
+    ["cir::0", "loi::1"],
+    ["تكون عمليات الصيرفة الاسلامية اما في شكل عمليات تمويل تجاري او عمليات تمويل تشاركي او في شكل ودائع استثمارية.",
+     "تكون عمليات الصيرفة الاسلامية اما في شكل عمليات تمويل تجاري او عمليات تمويل تشاركي."],
+    [{"source": "Circulaire_BCT_2019-08.pdf", "heading": "الفصل 2"},
+     {"source": "Loi_2016-48.pdf", "heading": "الفصل 1"}])
+q = "bct circular 2019 08 islamic banking operations"
+h_off = keyword_search(fc, q, k=5, include_metadata=False)
+h_on = keyword_search(fc, q, k=5, include_metadata=True)
+check("BM25 without metadata: no doc-cue match (both zero)",
+      not any(h["keyword_score"] > 0 for h in h_off),
+      str([round(h["keyword_score"], 3) for h in h_off]))
+check("BM25 with metadata: source name lifts the right document",
+      h_on and h_on[0]["id"] == "cir::0" and h_on[0]["keyword_score"] > 0,
+      str([(h["id"], round(h["keyword_score"], 3)) for h in h_on[:2]]))
+
+# Heading cue: "guide interne" matches the Guide source/heading too.
+fc2 = _FakeCollection(
+    ["guide::2", "madkhal::3"],
+    ["تندرج ضمن عمليات الصيرفة الاسلامية في التمويل التجاري عمليات التمويل بصيغة المرابحة والاجارة.",
+     "النقد في الاسلام ليس سلعة."],
+    [{"source": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "heading": "2- عمليات الصيرفة الاسلامية في التمويل التجاري"},
+     {"source": "Madkhal_Sayrafa_Islamiya.docx", "heading": "المقدمة"}])
+h2 = keyword_search(fc2, "guide interne operations commercial financing",
+                    k=5, include_metadata=True)
+check("BM25 heading cue also works for the Guide",
+      h2 and h2[0]["id"] == "guide::2",
+      str([(h["id"], round(h["keyword_score"], 3)) for h in h2[:2]]))
 
 sys.exit(0 if ok else 1)

@@ -27,8 +27,9 @@ from datetime import datetime, timezone
 
 import config as cfg
 import main
-from evaluate import load_question_set
-from store import get_collection
+from evaluate import (load_question_set, normalize_for_match,
+                       prepare_query_text)
+from store import get_collection, query_vector
 
 failures: list[str] = []
 CURRENT_STEP = "startup"
@@ -524,6 +525,75 @@ def run_steps() -> None:
             raise
 
     if real_ready:
+        # --- 6b.0 Diagnostics: coverage + GLOBAL reachability ----------------
+        # Answers may sit beyond top_k (then "correct chunk NOT in top 20" is a
+        # ranking problem) or in no chunk at all (then it is a
+        # chunking/extraction problem). This scans the WHOLE collection with
+        # k=count and reports the correct chunk's rank under every query
+        # variant; translations of the worst questions are printed too.
+        CURRENT_STEP = "real-diagnostics"
+        progress("\n[ci] STEP 8b — real-docs diagnostics (coverage + reachability)")
+        real_cases = load_question_set(cfg.PROJECT_DIR / "questions_real.json")
+        all_records = collection_real.get(include=["documents", "metadatas"])
+        ids_all = all_records["ids"] or []
+        texts_all = all_records["documents"] or []
+        metas_all = all_records["metadatas"] or []
+        norm_all = [normalize_for_match(t) for t in texts_all]
+        diag_translator = (main.make_translator(quiet=True)
+                           if getattr(cfg, "QUERY_TRANSLATION_ENABLED", False)
+                           else None)
+        diag_embedder = main.make_embedder(skip_sanity=True)
+        corpus_langs = ["ar"]
+        problem_rows = []
+        covered_ok = True
+        for case in real_cases:
+            sub = case.get("expected_substring")
+            if not sub or case.get("category") == "out-of-scope":
+                continue
+            nsub = normalize_for_match(sub)
+            holders = [i for i, t in enumerate(norm_all) if nsub in t]
+            if not holders:
+                covered_ok = False
+                notify(f"real-diagnostics: {case['id']} UNREACHABLE — expected "
+                       "substring not inside ANY chunk (chunking/extraction "
+                       "issue, not ranking)")
+                continue
+            correct_id = ids_all[holders[0]]
+            m = metas_all[holders[0]] or {}
+            q_text = prepare_query_text(case["question"])
+            if diag_translator is not None and diag_translator.available:
+                variants = diag_translator.build_variants(
+                    q_text, case.get("language"), corpus_langs)
+            else:
+                variants = [{"label": f"{case.get('language')}(original)",
+                             "text": q_text}]
+            ranks = {}
+            for v in variants:
+                emb = diag_embedder.embed_query(v["text"])
+                hits = query_vector(collection_real, emb, k=count_real)
+                ranks[v["label"]] = next((h["rank"] for h in hits
+                                          if h["id"] == correct_id), None)
+            best = min((r for r in ranks.values() if r), default=None)
+            progress(f"[ci]   diag {case['id']}: correct="
+                     f"{m.get('source')}::{m.get('chunk_index')} | ranks="
+                     + ", ".join(f"{l}={r}" for l, r in ranks.items()))
+            if best is None or best > 5:
+                problem_rows.append((case["id"], best, variants))
+        check("real-docs: every expected substring present in >= 1 chunk",
+              covered_ok)
+        if problem_rows:
+            detail = " | ".join(
+                f"{qid}: best={best}"
+                + (" [" + "; ".join(
+                    f"{v['label'][:12]}={v['text'][:60]!r}"
+                    for v in variants) + "]" if best is None or best > 10 else "")
+                for qid, best, variants in problem_rows[:3])
+            notify(f"real-diagnostics: {len(problem_rows)} question(s) with "
+                   f"correct chunk beyond rank 5 (global k=count): {detail}")
+        else:
+            notify("real-diagnostics: all questions reachable in top-5 "
+                   "globally (ranking-only misses)")
+
         # 6b.1 vector evaluation on the REAL question set
         CURRENT_STEP = "real-evaluate"
         progress("\n[ci] STEP 9 — evaluate --questions questions_real.json "

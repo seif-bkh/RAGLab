@@ -215,14 +215,35 @@ class BM25Index:
         return scores
 
 
-def keyword_search(collection, query: str, k: int) -> list:
-    """BM25 over every stored chunk text; returns top-k keyword hits."""
+def keyword_search(collection, query: str, k: int,
+                    include_metadata: bool = True) -> list:
+    """BM25 over every stored chunk text; returns top-k keyword hits.
+
+    include_metadata (config KEYWORD_SEARCH_INCLUDE_METADATA) appends the
+    source file name + heading to each text: questions that name the document
+    ("BCT circular 2019-08", "the internal guide") then match the right
+    corpus even if the cue never appears inside the chunk text itself.
+    """
     all_docs = collection.get(include=["documents", "metadatas"])
     if not all_docs["ids"]:
         print("[store] keyword search: collection is empty")
         return []
 
-    bm25 = BM25Index(all_docs["documents"])
+    texts = all_docs["documents"]
+    if include_metadata:
+        metas = all_docs["metadatas"] or []
+        # Filenames/headings use underscores ("Guide_Interne_..."); _tokenize_kw
+        # treats '_' as a word char, so replace them with spaces or the whole
+        # name becomes ONE unsearchable token.
+        texts = [
+            f"{t}\n{(m or {}).get('source', '').replace('_', ' ')}\n"
+            f"{(m or {}).get('heading', '').replace('_', ' ')}"
+            for t, m in zip(texts, metas)
+        ]
+        print("[store] keyword search: metadata (source + heading) appended "
+              "to BM25 corpus (KEYWORD_SEARCH_INCLUDE_METADATA)")
+
+    bm25 = BM25Index(texts)
     scores = bm25.score(query)
     ranked = sorted(
         range(len(scores)), key=lambda i: scores[i], reverse=True
