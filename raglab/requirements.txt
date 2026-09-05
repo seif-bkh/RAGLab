@@ -17,3 +17,9 @@ google-genai>=1.0,<2
 # For EMBEDDING_PROVIDER = "voyage"  -> model e.g. `voyage-multilingual-2`:
 # voyageai>=0.2
 
+# For EMBEDDING_PROVIDER = "huggingface" (LOCAL, free, no API key, no quota).
+# Recommended model (default): Qwen/Qwen3-Embedding-0.6B (Apache-2.0, 1024 dims,
+# 32K context, 100+ languages incl. Arabic). Alternative: BAAI/bge-m3 (MIT).
+# Installs torch — CPU wheels are used automatically on machines without CUDA.
+# sentence-transformers>=3.2
+

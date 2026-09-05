@@ -256,7 +256,7 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "config": {
             "provider": cfg.EMBEDDING_PROVIDER,
-            "embedding_model": cfg.EMBEDDING_MODEL,
+            "embedding_model": cfg.active_embedding_model(),
             "chunk_size_tokens": cfg.CHUNK_SIZE_TOKENS,
             "chunk_overlap_tokens": cfg.CHUNK_OVERLAP_TOKENS,
             "split_on_headings_first": cfg.SPLIT_ON_HEADINGS_FIRST,

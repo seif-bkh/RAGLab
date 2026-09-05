@@ -145,7 +145,7 @@ class BaseEmbedder:
     provider_name = "base"
 
     def __init__(self, cfg):
-        self.model = cfg.EMBEDDING_MODEL
+        self.model = cfg.active_embedding_model()
         self.batch_size = cfg.EMBEDDING_BATCH_SIZE
         self.max_retries = cfg.EMBEDDING_MAX_RETRIES
         self.retry_base_delay = cfg.EMBEDDING_RETRY_BASE_DELAY
@@ -532,6 +532,132 @@ class VoyageEmbedder(BaseEmbedder):
                                 input_type=input_type)
         return [list(item) for item in response.embeddings]
 
+class HuggingFaceEmbedder(BaseEmbedder):
+    """Local multilingual embeddings via `sentence-transformers` (free).
+
+    Runs entirely on your machine: no API key, no daily quota, no cost.
+    Default model (config.HF_EMBEDDING_MODEL): Qwen3-Embedding-0.6B —
+    Apache-2.0, 1024 dims, 32K context, 100+ languages including Arabic.
+    Alternative: BAAI/bge-m3 (MIT). The first use downloads the weights
+    (~640MB for Qwen3-0.6B) into HuggingFace's cache.
+
+    Task prompts: several families need query/document discriminative
+    prompts (config.HF_EMBEDDING_USE_PROMPTS). Auto-detected per family:
+      - qwen  -> the model's built-in "query" prompt (docs stay raw);
+      - bge-m3-> "Represent this sentence for searching relevant passages: "
+      - e5    -> "query: " / "passage: "
+    config.HF_EMBEDDING_QUERY_PROMPT / HF_EMBEDDING_DOC_PROMPT override.
+    """
+
+    provider_name = "huggingface"
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.batch_size = getattr(cfg, "HF_EMBEDDING_BATCH_SIZE",
+                                  self.batch_size)
+        self.device = (getattr(cfg, "HF_EMBEDDING_DEVICE", "") or None)
+        self.use_prompts = bool(getattr(cfg, "HF_EMBEDDING_USE_PROMPTS", True))
+        self.query_prompt_override = getattr(cfg,
+                                             "HF_EMBEDDING_QUERY_PROMPT", "")
+        self.doc_prompt_override = getattr(cfg, "HF_EMBEDDING_DOC_PROMPT", "")
+
+    def _make_client(self):
+        if self._client is not None:
+            return self._client
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:  # actionable, no raw traceback
+            raise SystemExit(
+                "[embedder] MISSING DEPENDENCY for EMBEDDING_PROVIDER="
+                f"'huggingface': sentence-transformers is not importable.\n"
+                f"           Fix:   {sys.executable} -m pip install "
+                "sentence-transformers\n"
+                f"           (installs torch + the model runner; no API key\n"
+                f"            is needed — embeddings run 100% locally)\n"
+                f"           Original error: {exc}"
+            )
+        print(f"[embedder] loading local model {self.model!r} "
+              f"(device={self.device or 'auto'}) — first use downloads the "
+              "weights, later runs load from the local cache")
+        try:
+            self._client = SentenceTransformer(self.model,
+                                               device=self.device)
+        except OSError as exc:
+            raise SystemExit(
+                "[embedder] could not load the local model from "
+                f"huggingface.co: {exc}\n"
+                "           First use needs internet to download the weights "
+                "(later runs use the local cache).\n"
+                "           Fixes: check your internet/proxy; or set "
+                "HF_ENDPOINT=https://hf-mirror.com if HF is blocked;\n"
+                "           or pre-download with `huggingface-cli download "
+                f"{self.model}` and set HF_HUB_OFFLINE=1.\n"
+                f"           Model: {self.model}"
+            )
+        self._dimension = int(self._client.get_sentence_embedding_dimension())
+        return self._client
+
+    def _family_prompts(self) -> tuple[str, str]:
+        """(query_prompt, doc_prompt) for the loaded model family."""
+        if not self.use_prompts:
+            return "", ""
+        lower = self.model.lower()
+        if "qwen" in lower:
+            query = (self.query_prompt_override or
+                     self._client.prompts.get("query", "") or "")
+            return query, (self.doc_prompt_override or "")
+        if "bge-m3" in lower:
+            return (self.query_prompt_override or
+                    "Represent this sentence for searching relevant "
+                    "passages: "), (self.doc_prompt_override or "")
+        if "e5" in lower:
+            return (self.query_prompt_override or "query: "),                 (self.doc_prompt_override or "passage: ")
+        return (self.query_prompt_override or ""),             (self.doc_prompt_override or "")
+
+    def _embed_batch(self, texts: list[str],
+                     input_type: str = "search_document") -> list:
+        model = self._make_client()
+        is_query = input_type == "search_query"
+        query_prompt, doc_prompt = ("", "") if not self.use_prompts else             self._family_prompts()
+        lower = self.model.lower()
+        # Qwen3 embeddings: use the model's registered prompt (documented
+        # inference), not a hand-written prefix.
+        if (is_query and query_prompt and "qwen" in lower
+                and not self.query_prompt_override):
+            kwargs = {"prompt_name": "query"}
+        else:
+            kwargs = {}
+            parts = []
+            for text in texts:
+                if is_query and query_prompt:
+                    parts.append(query_prompt + text)
+                elif not is_query and doc_prompt:
+                    parts.append(doc_prompt + text)
+                else:
+                    parts.append(text)
+            texts = parts
+        vectors = model.encode(
+            texts,
+            batch_size=self.batch_size,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+            **kwargs,
+        )
+        return [list(v) for v in vectors]
+
+    def _provider_notes(self) -> list[str]:
+        return [
+            f"local model: {self.model} "
+            f"(free, offline, no quota; download on first use)",
+            f"dimension: {self._dimension or 'auto'} | "
+            f"device: {self.device or 'auto'}",
+            "embedding space is model-specific — switch provider only with "
+            "ingest --reset",
+        ]
+
+
+
 
 def build_embedder(cfg) -> BaseEmbedder:
     """Factory: instantiate the provider named in config.py."""
@@ -540,6 +666,10 @@ def build_embedder(cfg) -> BaseEmbedder:
         "openai": OpenAIEmbedder,
         "cohere": CohereEmbedder,
         "voyage": VoyageEmbedder,
+        "huggingface": HuggingFaceEmbedder,
+        "hf": HuggingFaceEmbedder,
+        "sentence_transformers": HuggingFaceEmbedder,
+        "sentence-transformers": HuggingFaceEmbedder,
     }
     name = (cfg.EMBEDDING_PROVIDER or "").strip().lower()
     if name not in providers:
@@ -547,5 +677,6 @@ def build_embedder(cfg) -> BaseEmbedder:
             f"[embedder] unknown EMBEDDING_PROVIDER {cfg.EMBEDDING_PROVIDER!r}. "
             f"Supported: {', '.join(sorted(providers))}. Edit config.py."
         )
-    print(f"[embedder] building provider '{name}' (model: {cfg.EMBEDDING_MODEL})")
+    print(f"[embedder] building provider '{name}' "
+          f"(model: {cfg.active_embedding_model()})")
     return providers[name](cfg)

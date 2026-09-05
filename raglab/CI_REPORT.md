@@ -107,3 +107,20 @@ the new key ran the full real-docs pipeline in one job.
   completed (573 chunks, n=14); PASSED.
 - `33937314918` — merged notices (`7a6bbfb`): real-docs blend/sweep +
   acceptance verdicts now visible; reproduces the same numbers. PASSED.
+
+## 2026-09-05 — free local Arabic-capable embeddings + log-pushing runner
+
+- New provider `EMBEDDING_PROVIDER=huggingface` (local, free, no key, no
+  quota). Default model `Qwen/Qwen3-Embedding-0.6B` (Apache-2.0, 1024 dims,
+  32K context, 100+ languages incl. Arabic; ~640MB download on first use).
+  Alternative: `BAAI/bge-m3` (MIT). Family-aware task prompts (Qwen3 built-in
+  "query" prompt / BGE-M3 instruction / E5 query:-passage: prefixes),
+  `HF_EMBEDDING_*` knobs in config.py.
+- Embedding spaces are provider-specific: switch with `ingest --reset`;
+  metadata + run-config now record `config.active_embedding_model()`.
+- `run_tests.sh`: local full-suite runner (py_compile → tests_offline →
+  inspect → ci_test.py), all output in one log
+  (`raglab/logs/test_run_<UTC>.log` + `latest.log`), pushed to the current
+  branch — check `raglab/logs/latest.log` after a run.
+- `tests_offline.py`: no-API regression suite (translation, fusion tie-breaks,
+  blend λ edges, HF provider logic with a stubbed model).

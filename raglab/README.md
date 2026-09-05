@@ -181,10 +181,29 @@ ils sont exonérés si Salaire mensuel d'au moins 1 500 € versé sur le compte
   Google AI Studio key (the `google-genai` SDK also accepts `GOOGLE_API_KEY`).
 - Provider behind a tiny interface: `BaseEmbedder` + one class per provider.
   Switch by changing **two strings in `config.py`**:
-  - `EMBEDDING_PROVIDER = "gemini"` → `"openai"`, `"cohere"` or `"voyage"`
+  - `EMBEDDING_PROVIDER = "gemini"` → `"openai"`, `"cohere"`, `"voyage"`
+    or `"huggingface"`
   - `EMBEDDING_MODEL = "gemini-embedding-2"` →
     e.g. `"gemini-embedding-001"`, `"text-embedding-3-large"`,
     `"embed-multilingual-v3.0"` or `"voyage-multilingual-2"`
+- **`"huggingface"` — free local Arabic-capable embeddings (recommended
+  addition)**: runs entirely on your machine, no API key, no daily quota,
+  no cost. Default model `HF_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"`
+  (Apache-2.0, 1024 dims, 32K context, 100+ languages incl. Arabic — the
+  multilingual leader class at a 640MB download; +8% MMTEB vs BGE-M3 at the
+  same parameter size). Battle-tested alternative: `BAAI/bge-m3` (MIT).
+  Setup:
+  1. `pip install sentence-transformers` (one commented line in
+     `requirements.txt`);
+  2. `EMBEDDING_PROVIDER=huggingface` (env or config.py);
+  3. **re-ingest** — `python main.py ingest --reset` — embedding spaces are
+     provider-specific, vectors from two providers are NOT comparable;
+  4. `python main.py evaluate` or `python main.py query ...` as usual.
+  Task prompts are family-aware (`HF_EMBEDDING_USE_PROMPTS`, default on):
+  Qwen3 uses its built-in `query` prompt, BGE-M3 the retrieval instruction,
+  E5 the `query:`/`passage:` prefixes; override with
+  `HF_EMBEDDING_QUERY_PROMPT` / `HF_EMBEDDING_DOC_PROMPT`. Run the whole
+  suite with `./run_tests.sh --provider huggingface` (see below).
 - Batch calls (`EMBEDDING_BATCH_SIZE`, default 16), retries with exponential
   backoff on rate limits / 5xx / connection errors
   (`EMBEDDING_MAX_RETRIES`) — but **fails fast** on non-retryable errors
@@ -330,7 +349,7 @@ provider, model and top-k so runs are comparable after you change settings.
 | Change chunk size | edit `CHUNK_SIZE_TOKENS` in `config.py` |
 | Change overlap | edit `CHUNK_OVERLAP_TOKENS` in `config.py` |
 | Disable heading-first splitting | `SPLIT_ON_HEADINGS_FIRST = False` |
-| Switch embedding provider | set `EMBEDDING_PROVIDER` + `EMBEDDING_MODEL` in `config.py`, uncomment the matching `requirements.txt` line, `pip install -r requirements.txt`, set the provider key in `.env` |
+| Switch embedding provider | set `EMBEDDING_PROVIDER` (+ model) in `config.py` or env, install the matching optional dependency (commented line in `requirements.txt`), set the provider key in `.env` (not needed for `huggingface`), then `python main.py ingest --reset` — embedding spaces are provider-specific |
 | Change Gemini model / dimensions | edit `EMBEDDING_MODEL` / `GEMINI_OUTPUT_DIMENSIONALITY`, then `ingest --reset` (embedding spaces are incompatible) |
 | A/B task prompts on `gemini-embedding-2` | flip `GEMINI_USE_TASK_PROMPTS`, then `ingest --reset` |
 | Tune retrieval | `RETRIEVAL_TOP_K`, `RRF_RANK_CONSTANT`, `EVAL_TOP_K`, `HYBRID_BLEND_LAMBDA` in `config.py` |

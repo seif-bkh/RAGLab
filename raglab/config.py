@@ -38,6 +38,49 @@ CHROMA_COLLECTION_NAME = "raglab_docs"
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "gemini")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
 
+# Local multilingual embeddings — EMBEDDING_PROVIDER = "huggingface" ----------
+# Fully offline: no API key, no daily quota, no cost. The model runs on YOUR
+# machine (CPU is fine). Recommended model: Qwen3-Embedding-0.6B (Apache-2.0,
+# 1024 dims, 32K context, 100+ languages including Arabic, ~640MB download;
+# multilingual-MTEB leader-class at laptop size, +8% over BGE-M3 at the same
+# parameter count). Battle-tested alternative: BAAI/bge-m3 (MIT, 1024 dims,
+# 100+ languages). Requires `pip install sentence-transformers` (see
+# requirements.txt — commented, like the other optional providers).
+HF_EMBEDDING_MODEL = os.getenv("HF_EMBEDDING_MODEL",
+                               "Qwen/Qwen3-Embedding-0.6B")
+# Device: "" = let sentence-transformers pick (CPU / CUDA / MPS / auto).
+HF_EMBEDDING_DEVICE = os.getenv("HF_EMBEDDING_DEVICE", "").strip()
+# Local inference batch size during ingestion (lower = less RAM).
+HF_EMBEDDING_BATCH_SIZE = int(os.getenv("HF_EMBEDDING_BATCH_SIZE", "8"))
+# Known embedding dimension, for the CI sanity check. 0 = auto-detect from
+# the loaded model (recommended).
+HF_EMBEDDING_DIM = int(os.getenv("HF_EMBEDDING_DIM", "0") or 0)
+# Query/document discriminative prompts (task instructions). Family-aware by
+# default and only when True: Qwen3 uses its built-in "query" prompt, BGE-M3
+# the retrieval instruction, E5 the "query:" / "passage:" prefixes. Set to
+# "false" to embed raw text (symmetric, sometimes better for short chunks).
+HF_EMBEDDING_USE_PROMPTS = os.getenv("HF_EMBEDDING_USE_PROMPTS",
+                                     "true").strip().lower() in \
+    {"1", "true", "yes", "on"}
+# Optional explicit overrides (applied when USE_PROMPTS=True and non-empty).
+HF_EMBEDDING_QUERY_PROMPT = os.getenv("HF_EMBEDDING_QUERY_PROMPT", "")
+HF_EMBEDDING_DOC_PROMPT = os.getenv("HF_EMBEDDING_DOC_PROMPT", "")
+
+
+def active_embedding_model() -> str:
+    """The model string actually in use for the configured provider.
+
+    Used everywhere an embedding model name is recorded (ingest metadata,
+    evaluation run config, cache identity) so a provider switch never labels
+    gems as the wrong model's vectors — embedding spaces are provider-specific
+    and switching requires a full re-ingest (--reset).
+    """
+    if (EMBEDDING_PROVIDER or "").strip().lower() in {
+            "huggingface", "hf", "sentence_transformers",
+            "sentence-transformers"}:
+        return HF_EMBEDDING_MODEL
+    return EMBEDDING_MODEL
+
 # Gemini-specific knobs ------------------------------------------------------
 # Both Gemini embedding models default to 3072 dimensions. MRL lets you
 # truncate; Google recommends 768 / 1536 / 3072 (lower = smaller/faster,

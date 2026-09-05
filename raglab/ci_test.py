@@ -294,7 +294,16 @@ def run_steps() -> None:
     progress("\n[ci] STEP 2 — embedding sanity check (provider/model/dimension + "
              "EN/FR/AR pairwise cosine)")
     embedder = main.make_embedder(skip_sanity=False)
-    expected_dim = int(getattr(cfg, "GEMINI_OUTPUT_DIMENSIONALITY", 0) or 0) or None
+    hf_provider = (cfg.EMBEDDING_PROVIDER or "").strip().lower() in {
+        "huggingface", "hf", "sentence_transformers",
+        "sentence-transformers"}
+    if hf_provider:
+        # Local models report their dimension at load; a known size can be
+        # asserted via HF_EMBEDDING_DIM (0 = auto-detect, skip the assert).
+        expected_dim = int(getattr(cfg, "HF_EMBEDDING_DIM", 0) or 0) or None
+    else:
+        expected_dim = int(
+            getattr(cfg, "GEMINI_OUTPUT_DIMENSIONALITY", 768) or 0) or None
     check("vector dimension matches config",
           expected_dim is None or embedder._dimension == expected_dim,
           f"got={embedder._dimension} config={expected_dim}")
@@ -323,7 +332,8 @@ def run_steps() -> None:
               bool(metas) and REQUIRED_METADATA_FIELDS <= set(metas[0]),
               str(sorted(metas[0]) if metas else []))
         check("metadata embedding model matches config",
-              bool(metas) and metas[0].get("embedding_model") == cfg.EMBEDDING_MODEL,
+              bool(metas) and metas[0].get("embedding_model")
+              == cfg.active_embedding_model(),
               metas[0].get("embedding_model") if metas else "none")
 
         # v2 chunking strategy: boilerplate/front-matter chunks are chunked but
@@ -657,6 +667,6 @@ def run_main() -> None:
 if __name__ == "__main__":
     print("=" * 78)
     print("RAGLab CI integration test — provider:", cfg.EMBEDDING_PROVIDER,
-          "| model:", cfg.EMBEDDING_MODEL)
+          "| model:", cfg.active_embedding_model())
     print("=" * 78)
     run_main()

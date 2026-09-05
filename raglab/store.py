@@ -117,7 +117,7 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
                 "origin": chunk.origin,
                 "section_type": chunk.section_type,
                 "ingested_at": timestamp,
-                "embedding_model": cfg.EMBEDDING_MODEL,
+                "embedding_model": cfg.active_embedding_model(),
                 "token_count": chunk.token_count,
             })
 
@@ -395,9 +395,18 @@ def blend_hybrid(vector_hits: list, keyword_hits: list,
     Deterministic tie-break: higher similarity first, then id.
     """
     if not vector_hits:
-        return list(keyword_hits)
+        # Keyword-only: keep the same formula (kw_norm normalized by this
+        # variant's own max) so the fused score is never None downstream.
+        k_entries = [dict(h) for h in keyword_hits]
+        k_max = max((h.get("keyword_score") or 0.0) for h in k_entries) or 1.0
+        for entry in k_entries:
+            norm = min(1.0, (entry.get("keyword_score") or 0.0) / k_max)
+            entry["kw_norm"] = norm
+            entry["blend_score"] = (1.0 - lambd) * norm
+        return _rank_by_blend(k_entries)
     if not keyword_hits:
-        out = [dict(h, blend_score=h.get("similarity") or 0.0,
+        # Pure vector: same formula, no BM25 context (kw part = 0).
+        out = [dict(h, blend_score=(h.get("similarity") or 0.0) * lambd,
                     kw_norm=0.0, keyword_score=None) for h in vector_hits]
         return _rank_by_blend(out)
 
