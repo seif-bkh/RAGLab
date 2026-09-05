@@ -155,9 +155,23 @@ class CheckpointClient:
             return {**response, '_harness_cached': False, '_harness_request_hash': key}
 
     def object(self, messages, *, max_tokens=8192):
+        # Reference-authoring syntax repair is explicit and cached under a NEW
+        # request hash. Candidate answers use chat(), never this repair path.
         response = self.chat(self.model, messages, max_tokens=max_tokens)
-        return parse_object(response['text']), {k: response.get(k) for k in
-                ('_harness_request_hash', '_harness_cached', 'usage', 'seconds', 'served_model')}
+        original_hash = response.get('_harness_request_hash')
+        try:
+            value = parse_object(response['text'])
+        except (ValueError, TypeError) as exc:
+            repair = [*messages, {'role': 'assistant', 'content': response['text']},
+                      {'role': 'user', 'content': 'Return exactly ONE valid JSON object for the same task, no commentary or second object. '
+                                                'Repair JSON formatting without inventing new facts. Parser error: ' + str(exc)[:300]}]
+            response = self.chat(self.model, repair, max_tokens=max_tokens)
+            value = parse_object(response['text'])
+        provenance = {k: response.get(k) for k in
+                      ('_harness_request_hash', '_harness_cached', 'usage', 'seconds', 'served_model')}
+        provenance['original_request_hash'] = original_hash
+        provenance['format_repaired'] = provenance['_harness_request_hash'] != original_hash
+        return value, provenance
 
     def check_pause(self):
         if self.pause is not None:
