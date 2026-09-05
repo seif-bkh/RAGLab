@@ -572,6 +572,10 @@ class JinaHTTPError(RuntimeError):
         self.status_code = status_code
 
 
+class NvidiaHTTPError(JinaHTTPError):
+    """HTTP failure from the NVIDIA NIM API (same status_code semantics)."""
+
+
 class JinaEmbedder(BaseEmbedder):
     """Hosted multilingual embeddings via https://api.jina.ai/v1/embeddings.
 
@@ -715,10 +719,158 @@ class JinaEmbedder(BaseEmbedder):
         ]
 
 
+class NvidiaEmbedder(BaseEmbedder):
+    """Hosted multilingual/cross-lingual embeddings via NVIDIA NIM.
+
+    NeMo Retriever models (nvidia/llama-3.2-nv-embedqa-1b-v2) cover 26
+    languages incl. Arabic and support cross-lingual retrieval: an English or
+    French question can retrieve Arabic documents directly (R@5 on MLQA
+    cross-lingual pairs ~80%, vs ~13% BM25). The response shape is the
+    OpenAI-compatible one Jina returns, so the parsing/validation mirrors it;
+    the differences are the endpoint, the key, the optional Matryoshka
+    `dimensions` truncation and the `input_type` values:
+
+      - documents  -> "input_type": "passage"
+      - questions  -> "input_type": "query"
+
+    Free endpoint (~40 RPM): batching + the provider-scoped resumable cache
+    keep a 836-chunk ingest at a handful of requests.
+    """
+
+    provider_name = "nvidia"
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        # Provider-scoped cache (NVIDIA space != Gemini/Jina space).
+        self.cache = EmbeddingCache(
+            getattr(cfg, "NVIDIA_EMBEDDING_CACHE_PATH", cfg.EMBEDDING_CACHE_PATH))
+        self.cache.model = self.model
+        self.cache.note_expected_model(self.model)
+        self.batch_size = int(getattr(cfg, "NVIDIA_EMBEDDING_BATCH_SIZE",
+                                      self.batch_size) or self.batch_size)
+        self._dim = int(getattr(cfg, "NVIDIA_EMBEDDING_DIM", 0) or 0)
+
+    def _make_client(self):
+        if self._client is not None:
+            return self._client
+        api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+        if not api_key:
+            raise SystemExit(
+                "[embedder] NVIDIA_API_KEY is not set. "
+                "Copy .env.example to .env and paste your key "
+                "(https://build.nvidia.com — GET API KEY)."
+            )
+        self._client = {"api_key": api_key, "base_url": self._base_url()}
+        return self._client
+
+    def _base_url(self) -> str:
+        return getattr(self.cfg, "NVIDIA_EMBEDDING_BASE_URL",
+                       "https://integrate.api.nvidia.com/v1/embeddings")
+
+    def _task_for(self, input_type: str) -> str:
+        # NVIDIA NIM embeddings take "passage"/"query" (asymmetric retrieval);
+        # the base "search_document"/"search_query" would be invalid there.
+        return ("query" if input_type == "search_query" else "passage")
+
+    def _embed_batch(self, texts: list[str], input_type: str = "search_document"):
+        client = self._make_client()
+        payload = {
+            "model": self.model,
+            "input": [str(t) for t in texts],
+            "input_type": self._task_for(input_type),
+        }
+        if self._dim:
+            payload["dimensions"] = self._dim
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(
+            client["base_url"],
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {client['api_key']}",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                body = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8")[:300]
+            except Exception:  # noqa: BLE001
+                pass
+            raise NvidiaHTTPError(
+                exc.code,
+                f"NVIDIA API HTTP {exc.code}: {detail or exc.reason}",
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            raise NvidiaHTTPError(0, f"NVIDIA API connection error: {exc}") from exc
+
+        data = json.loads(body)
+        self.last_response = data
+        self.last_response_preview = {
+            "api_model": data.get("model"),
+            "object": data.get("object"),
+            "n_items": len(data.get("data") or []),
+            "first_dim": (len((data.get("data") or [{}])[0].get("embedding")
+                              or []) if data.get("data") else 0),
+        }
+        if data.get("object") == "list" and isinstance(data.get("data"), list):
+            ordered = sorted(data["data"], key=lambda item: item.get("index", 0))
+            embs = []
+            for idx, item in enumerate(ordered):
+                emb = item.get("embedding")
+                if not isinstance(emb, list):
+                    raise RuntimeError(
+                        f"NVIDIA API item {item.get('index')} has no embedding "
+                        f"list (got {type(emb).__name__}); input preview: "
+                        f"{texts[idx][:120]!r}"
+                    )
+                vals = []
+                for v in emb:
+                    try:
+                        fv = float(v)
+                    except (TypeError, ValueError) as exc:
+                        raise RuntimeError(
+                            f"NVIDIA API item {item.get('index')} embedding "
+                            f"value {v!r} not numeric; input preview: "
+                            f"{texts[idx][:120]!r}"
+                        ) from exc
+                    if fv != fv:  # NaN
+                        raise RuntimeError(
+                            f"NVIDIA API item {item.get('index')} embedding "
+                            f"contains NaN; input preview: "
+                            f"{texts[idx][:120]!r}"
+                        )
+                    vals.append(fv)
+                embs.append(vals)
+            if len(embs) != len(texts):
+                raise RuntimeError(
+                    f"NVIDIA API returned {len(embs)} embeddings for "
+                    f"{len(texts)} inputs"
+                )
+            if embs:
+                self._dimension = len(embs[0])
+            return embs
+        raise RuntimeError(
+            f"NVIDIA API unexpected response: {json.dumps(data)[:300]}"
+        )
+
+    def _provider_notes(self) -> list[str]:
+        return [
+            "input_type mapping: docs->passage | queries->query"
+            + (f" | Matryoshka dim={self._dim}" if self._dim
+               else " | dimension auto-detected (2048 default)"),
+            "NVIDIA NIM free endpoint (rate-limited; resumable cache on)",
+        ]
+
+
 class HuggingFaceEmbedder(BaseEmbedder):
     """Local multilingual embeddings via `sentence-transformers` (free).
-
-    Runs entirely on your machine: no API key, no daily quota, no cost.
     Default model (config.HF_EMBEDDING_MODEL): Qwen3-Embedding-0.6B —
     Apache-2.0, 1024 dims, 32K context, 100+ languages including Arabic.
     Alternative: BAAI/bge-m3 (MIT). The first use downloads the weights
@@ -880,6 +1032,7 @@ def build_embedder(cfg) -> BaseEmbedder:
         "cohere": CohereEmbedder,
         "voyage": VoyageEmbedder,
         "jina": JinaEmbedder,
+        "nvidia": NvidiaEmbedder,
         "huggingface": HuggingFaceEmbedder,
         "hf": HuggingFaceEmbedder,
         "sentence_transformers": HuggingFaceEmbedder,

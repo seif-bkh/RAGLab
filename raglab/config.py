@@ -62,6 +62,39 @@ JINA_EMBEDDING_BATCH_SIZE = int(os.getenv("JINA_EMBEDDING_BATCH_SIZE", "64"))
 JINA_EMBEDDING_CACHE_PATH = PROJECT_DIR / os.getenv(
     "JINA_EMBEDDING_CACHE_FILE", "embeddings_cache_jina.json")
 
+# NVIDIA NIM embeddings + LLM — EMBEDDING_PROVIDER = "nvidia" -----------------
+# Free hosted endpoints at https://integrate.api.nvidia.com/v1 (OpenAI-
+# compatible; key from NVIDIA_API_KEY in .env, NEVER in code). Two roles:
+#   EMBEDDER   nvidia/llama-3.2-nv-embedqa-1b-v2 — NeMo Retriever, 26 langs
+#              incl. Arabic, cross-lingual (query EN -> Arabic docs without a
+#              translation layer), 2048d with Matryoshka truncation
+#              (384..1024) and asymmetric input_type=passage|query.
+#   TRANSLATOR QUERY_TRANSLATION_PROVIDER=nvidia + NVIDIA_TRANSLATION_MODEL
+#              (moonshotai/kimi-k3 or deepseek-ai/deepseek-v4-pro) — used for
+#              query translation only; answer generation stays a stub by
+#              design. Free NIM endpoints are rate-limited (~40 RPM): keep
+#              batches small, translations are cached.
+NVIDIA_EMBEDDING_MODEL = os.getenv("NVIDIA_EMBEDDING_MODEL",
+                                   "nvidia/llama-3.2-nv-embedqa-1b-v2")
+# Matryoshka dimension: 0 = server default (2048), or 384/512/768/1024 to
+# shrink vectors (34x smaller at 384; the docs report ~-2% MIRACL recall).
+NVIDIA_EMBEDDING_DIM = int(os.getenv("NVIDIA_EMBEDDING_DIM", "0") or 0)
+NVIDIA_EMBEDDING_BASE_URL = os.getenv(
+    "NVIDIA_EMBEDDING_BASE_URL",
+    "https://integrate.api.nvidia.com/v1/embeddings")
+NVIDIA_EMBEDDING_BATCH_SIZE = int(os.getenv("NVIDIA_EMBEDDING_BATCH_SIZE",
+                                            "32"))
+NVIDIA_EMBEDDING_CACHE_PATH = PROJECT_DIR / os.getenv(
+    "NVIDIA_EMBEDDING_CACHE_FILE", "embeddings_cache_nvidia.json")
+# Query-translation LLM (NVIDIA NIM free endpoints).
+NVIDIA_TRANSLATION_MODEL = os.getenv("NVIDIA_TRANSLATION_MODEL",
+                                     "moonshotai/kimi-k3")
+NVIDIA_TRANSLATION_FALLBACK_MODELS = os.getenv(
+    "NVIDIA_TRANSLATION_FALLBACK_MODELS", "deepseek-ai/deepseek-v4-pro")
+NVIDIA_TRANSLATION_BASE_URL = os.getenv(
+    "NVIDIA_TRANSLATION_BASE_URL",
+    "https://integrate.api.nvidia.com/v1/chat/completions")
+
 # Local multilingual embeddings — EMBEDDING_PROVIDER = "huggingface" ----------
 # Fully offline: no API key, no daily quota, no cost. The model runs on YOUR
 # machine (CPU is fine). Recommended model: Qwen3-Embedding-0.6B (Apache-2.0,
@@ -105,6 +138,8 @@ def active_embedding_model() -> str:
         return HF_EMBEDDING_MODEL
     if (EMBEDDING_PROVIDER or "").strip().lower() == "jina":
         return JINA_EMBEDDING_MODEL
+    if (EMBEDDING_PROVIDER or "").strip().lower() == "nvidia":
+        return NVIDIA_EMBEDDING_MODEL
     return EMBEDDING_MODEL
 
 # Gemini-specific knobs ------------------------------------------------------
@@ -212,11 +247,14 @@ FUSION_TIE_BREAK = os.getenv("FUSION_TIE_BREAK", "same_lang_margin").strip()
 QUERY_TRANSLATION_ENABLED = os.getenv(
     "QUERY_TRANSLATION_ENABLED", "1"
 ).strip().lower() not in {"0", "false", "no", "off"}
+# which backend translates queries: "gemini" (default) or "nvidia" (NIM
+# free LLM endpoints: moonshotai/kimi-k3 or deepseek-ai/deepseek-v4-pro).
+# Both only translate queries — answer generation stays a stub by design.
+QUERY_TRANSLATION_PROVIDER = os.getenv("QUERY_TRANSLATION_PROVIDER",
+                                       "gemini").strip().lower()
 QUERY_TRANSLATION_MODEL = os.getenv(
     "QUERY_TRANSLATION_MODEL", "gemini-3.5-flash-lite"
 )  # GA flash model (free tier friendly; 2.5-flash IDs are retired for new projects)
-# Tried in order when the primary model errors (e.g. not enabled for the
-# key/project); the switch is printed and recorded in the results.
 QUERY_TRANSLATION_FALLBACK_MODELS = os.getenv(
     "QUERY_TRANSLATION_FALLBACK_MODELS",
     "gemini-3.6-flash",

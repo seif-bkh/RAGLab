@@ -484,6 +484,11 @@ def run_steps() -> None:
         check("hybrid query exits 0", rc == 0, f"rc={rc}")
 
 
+    # Baseline for the NVIDIA translation A/B (defined BEFORE step 5 so the
+    # later nvidia leg can compare against it; None when fictional legs are
+    # skipped under real-only mode).
+    fictional_vector: dict | None = None
+
     if not REAL_ONLY:
         # --- 5. Mode × tie-break A/B: vector | rrf | blend ----------------------
         # The first mode embeds every query variant (~46 API inputs); all the
@@ -533,6 +538,7 @@ def run_steps() -> None:
                 t[1]["blend"]["metrics"]["overall"]["hit@3"],
                 t[1]["blend"]["metrics"]["overall"]["hit@5"]))
             cfg.FUSION_TIE_BREAK = best_tie
+            fictional_vector = best["vector"]  # baseline for nvidia translation A/B
             tb_line = ("tie-break A/B (h1/h3/h5, q10): " + " | ".join(
                 f"{tie} v={hit3(r['vector']['metrics']['overall'])}"
                 f"@q10={qrank(r['vector'], 'q10')} "
@@ -833,11 +839,12 @@ def run_steps() -> None:
                         REAL_SWEEP_LAMBDAS)
 
     # --- 6b.4 REAL chunk-size A/B (220 vs 340 tokens) -------------------------
-    # With paragraph-boundary chunking every expected substring is now inside
-    # at least ONE chunk (offline gate, step 1b). Remaining question: is 340
-    # tokens better than 220 for RETRIEVAL (denser context, fewer hard-split
-    # fragments in the long-law PDFs)? Query embeddings are cached, so this
-    # costs only the new doc embeddings. Summary merges into the final line.
+    # With paragraph-boundary chunking every expected substring is inside at
+    # least ONE chunk at both sizes (offline gate, step 1b). The A/B question
+    # is pure retrieval quality: fewer/larger chunks inside the long-law PDFs
+    # (sentence-aligned) vs more/finer chunks. Query embeddings are cached, so
+    # this costs only the new doc embeddings. Summary merges into the final
+    # line; a daily-429 defers cleanly instead of crashing the job.
     CURRENT_STEP = "real-chunksize"
     progress("\n[ci] STEP 11b — real-docs chunk-size A/B (220 vs 340 tokens)")
     chunksize_ab = {}
@@ -911,11 +918,10 @@ def run_steps() -> None:
             # Daily 429: defer cleanly (like the rest of the real leg) instead
             # of crashing; the cache artifact saves what was embedded.
             if _REAL_QUOTA.search(str(exc)):
-                progress("[ci] chunk-size 340 ingest DEFERRED — daily "
+                progress("[ci] chunk-size A/B DEFERRED — daily "
                          "embedding quota (429); A/B skipped, rerun after "
                          "the midnight-Pacific reset continues from cache.")
-                notify("real chunk-size A/B: DEFERRED (429 quota — cache saved; "
-                       "rerun after reset)")
+                DEFERRED_NOTES.append("chunk-size340")
             else:
                 raise
         finally:
@@ -998,13 +1004,166 @@ def run_steps() -> None:
             if _REAL_QUOTA.search(str(exc)):
                 progress("[ci] jina A/B DEFERRED — API quota/rate limit (429); "
                          "cache saved, rerun continues.")
-                notify("real-docs jina A/B: DEFERRED (429 — cache saved; "
-                       "rerun continues from cache)")
+                DEFERRED_NOTES.append("jina-ab")
             else:
                 raise
         finally:
             cfg.EMBEDDING_PROVIDER = old_provider
             cfg.EMBEDDING_MODEL = old_model
+
+    # --- 6d. REAL docs with NVIDIA embeddings + NVIDIA query translation ------
+    # The user added an NVIDIA API key. Two independent experiments (both like
+    # the Jina leg: Gemini stays the DEFAULT — adopt NVIDIA only if the A/B
+    # shows a measurable win):
+    #   A) embeddings: nvidia/llama-3.2-nv-embedqa-1b-v2 (NeMo Retriever, 26
+    #      langs incl. Arabic, cross-lingual query->passage) on the REAL docs.
+    #   B) translation: moonshotai/kimi-k3 (fallback deepseek-ai/deepseek-v4-
+    #      pro) translating the FICTIONAL cross-lingual queries — the real
+    #      corpus is Arabic-only, so it never calls the translator.
+    # Provider-scoped caches => neither the Gemini nor the Jina cache is
+    # clobbered; 429 defers cleanly (separate key/quota from Gemini anyway).
+    CURRENT_STEP = "real-nvidia"
+    progress("\n[ci] STEP 11d — real-docs NVIDIA A/B (embeddings + translation)")
+    nvidia_summary = ""
+    nvidia_notes: list[str] = []
+    if not os.environ.get("NVIDIA_API_KEY", "").strip():
+        progress("[ci]   NVIDIA_API_KEY not set — nvidia A/B skipped")
+    else:
+        old_provider = cfg.EMBEDDING_PROVIDER
+        old_model = cfg.EMBEDDING_MODEL
+        old_dim = getattr(cfg, "NVIDIA_EMBEDDING_DIM", 0)
+        old_tprovider = cfg.QUERY_TRANSLATION_PROVIDER
+        old_tmodel = cfg.QUERY_TRANSLATION_MODEL
+        old_ntmodel = getattr(cfg, "NVIDIA_TRANSLATION_MODEL", "moonshotai/kimi-k3")
+        try:
+            # --- B (before A: cheap, and leaves the real collection state
+            # for A) — translation A/B on the fictional cross-lingual corpus.
+            if fictional_vector is not None:
+                cfg.QUERY_TRANSLATION_PROVIDER = "nvidia"
+                cfg.QUERY_TRANSLATION_MODEL = "moonshotai/kimi-k3"
+                # the nvidia translator reads the nvidia-specific knob
+                cfg.NVIDIA_TRANSLATION_MODEL = "moonshotai/kimi-k3"
+                # Re-ingest the FICTIONAL docs (all embeddings cached: the
+                # Gemini provider is restored for this leg) so the evaluate
+                # below reads the right collection state.
+                rc = main.main(["ingest", "--reset", "--skip-sanity-check"])
+                check("nvidia-translate prep ingest exits 0", rc == 0,
+                      f"rc={rc}")
+                rc = _real_eval(["evaluate", "--questions", "questions.json",
+                                 "--skip-sanity-check"],
+                                "nvidia-translate-fictional")
+                if rc is None:
+                    progress("[ci]   nvidia translation leg deferred")
+                else:
+                    nv_tr = get_latest_eval()
+                    o_tr = nv_tr["metrics"]["overall"] if nv_tr else None
+                    if o_tr is not None:
+                        d_tr = delta_str(nv_tr, fictional_vector)
+                        n_tr = len([q for q in (nv_tr.get("questions") or [])
+                                    for v in q.get("query_variants", [])
+                                    if v.get("translated")])
+                        nvidia_summary = (
+                            f" || fictional translation A/B: kimi-k3 "
+                            f"vector={hit3(o_tr)} (vs gemini "
+                            f"{hit3(fictional_vector['metrics']['overall'])} "
+                            f"{d_tr}, {n_tr} translated variants)")
+                        # One merged nvidia notice at the end of the leg:
+                        # GitHub shows at most 10 annotations per step.
+                        nvidia_notes.append(
+                            f"translation kimi-k3={hit3(o_tr)} vs gemini "
+                            f"{hit3(fictional_vector['metrics']['overall'])} "
+                            f"{d_tr} ({n_tr} translated variants)")
+                        progress("nvidia translation leg DONE")
+            else:
+                progress("[ci]   fictional baseline missing — translation "
+                         "A/B skipped (real-only mode)")
+
+            # --- A. embeddings on the REAL corpus ---------------------------
+            cfg.QUERY_TRANSLATION_PROVIDER = old_tprovider
+            cfg.QUERY_TRANSLATION_MODEL = old_tmodel
+            cfg.EMBEDDING_PROVIDER = "nvidia"
+            cfg.EMBEDDING_MODEL = getattr(cfg, "NVIDIA_EMBEDDING_MODEL",
+                                          "nvidia/llama-3.2-nv-embedqa-1b-v2")
+            nemb = main.make_embedder(skip_sanity=False)
+            ndims = nemb._dimension
+            nsan = " | ".join(getattr(nemb, "sanity_lines",
+                                      ["dimension: ?"]))
+            progress(f"[ci]   nvidia embedder: dims={ndims} | "
+                     f"api={getattr(nemb, 'last_response_preview', None)} | "
+                     f"{nsan}")
+            rc = main.main(["ingest", "--reset", "--data-dir",
+                            real_docs_dir, "--skip-sanity-check"])
+            check("nvidia ingest exits 0", rc == 0, f"rc={rc}")
+            ncol = get_collection(cfg, reset=False)
+            ncnt = ncol.count()
+            progress(f"[ci]   nvidia ingest: {ncnt} chunks, dims={ndims}")
+            nv_res = {}
+            nv_runs = {}
+            for mode, margs, key in (("vector", [], "vector"),
+                                     ("rrf", ["--hybrid"], "rrf"),
+                                     ("blend0.7", ["--hybrid-blend"],
+                                      "blend")):
+                rc = _real_eval(["evaluate", *margs, "--questions",
+                                 "questions_real.json",
+                                 "--skip-sanity-check"],
+                                f"real-nvidia-{mode}")
+                if rc is None:
+                    progress(f"[ci]   nvidia {mode}: deferred")
+                    break
+                runn = get_latest_eval()
+                if runn is not None:
+                    nv_runs[key] = runn
+                    o = runn["metrics"]["overall"]
+                    nv_res[key] = (o["hit@1"], o["hit@3"], o["hit@5"])
+                    progress(f"[ci]   nvidia {mode}: h1={o['hit@1']:.3f} "
+                             f"h3={o['hit@3']:.3f} h5={o['hit@5']:.3f}")
+            if nv_res:
+                nline = " | ".join(
+                    f"{k}={v[0]:.3f}/{v[1]:.3f}/{v[2]:.3f}"
+                    for k, v in nv_res.items())
+                gline = ("gemini vector " + hit3(run_real["metrics"]["overall"])
+                         if run_real else "gemini vector (deferred)")
+                nranks = ""
+                vn = nv_runs.get("vector") or {}
+                for qid in ("rq13", "rq14"):
+                    for q in (vn.get("questions") or []):
+                        if q.get("id") == qid:
+                            nranks += f"{qid}@v={q.get('correct_rank')} "
+                nvidia_summary += (
+                    f" || real-docs nvidia-embed A/B (h1/h3/h5): "
+                    f"chunks={ncnt} {nline} (vs {gline})"
+                    + (f" | {nranks.strip()}" if nranks else ""))
+                # ONE merged notice for the whole nvidia leg (translation +
+                # embeddings) so the 10-annotations-per-step cap still lets
+                # the PASSED line through.
+                notify("real-docs nvidia A/B: "
+                       + (" | ".join(nvidia_notes) + " || " if nvidia_notes
+                          else "")
+                       + f"embed chunks={ncnt} {nline}"
+                       + (f" | {nranks.strip()}" if nranks else "")
+                       + (f" | vs gemini vector "
+                          f"{hit3(run_real['metrics']['overall'])}"
+                          if run_real else ""))
+            else:
+                progress("[ci]   nvidia embed legs all deferred")
+                if nvidia_notes:
+                    notify("real-docs nvidia A/B: "
+                           + " | ".join(nvidia_notes)
+                           + " | embed legs deferred")
+        except RuntimeError as exc:
+            if _REAL_QUOTA.search(str(exc)):
+                progress("[ci] nvidia A/B DEFERRED — API quota/rate limit "
+                         "(429); cache saved, rerun continues.")
+                DEFERRED_NOTES.append("nvidia-ab")
+            else:
+                raise
+        finally:
+            cfg.EMBEDDING_PROVIDER = old_provider
+            cfg.EMBEDDING_MODEL = old_model
+            cfg.NVIDIA_EMBEDDING_DIM = old_dim
+            cfg.QUERY_TRANSLATION_PROVIDER = old_tprovider
+            cfg.QUERY_TRANSLATION_MODEL = old_tmodel
+            cfg.NVIDIA_TRANSLATION_MODEL = old_ntmodel
 
     # --- 7. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"
@@ -1053,7 +1212,7 @@ def run_steps() -> None:
         state += " || " + " | ".join(PIPELINE_NOTES)
     notify("RAGLab CI PASSED: full pipeline mechanics + evaluation OK "
            "(metrics above, results JSON in the raglab-eval-results artifact)"
-           + summary + jina_summary + state)
+           + summary + jina_summary + nvidia_summary + state)
     progress("[ci] CI PIPELINE PASSED — all mechanics verified; metrics above are the report.")
     print("=" * 78)
     sys.exit(0)

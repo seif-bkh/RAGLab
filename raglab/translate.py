@@ -9,14 +9,19 @@ from the variant in which it matches best, so a French chunk can win even for
 an Arabic question.
 
 Implementation notes:
-- Uses the SAME Google AI Studio key (GEMINI_API_KEY / GOOGLE_API_KEY) and the
-  SAME google-genai SDK as the embedder — no new dependency, no new secret.
-- Translation model configurable: QUERY_TRANSLATION_MODEL, default
-  `gemini-3.5-flash-lite` (GA flash family, free tier — we need at most 2 calls
-  per run because whole batches are translated in a single numbered-lines
-  request).
+- Backend switchable via QUERY_TRANSLATION_PROVIDER:
+    "gemini" (default): SAME Google AI Studio key (GEMINI_API_KEY /
+      GOOGLE_API_KEY) and google-genai SDK as the embedder — no extra dep.
+    "nvidia": free NVIDIA NIM LLM endpoints (build.nvidia.com) via raw HTTPS
+      (no SDK): moonshotai/kimi-k3 or deepseek-ai/deepseek-v4-pro,
+      key from NVIDIA_API_KEY. Translation only — answer.py stays a stub.
+- Translation model configurable: QUERY_TRANSLATION_MODEL (gemini) /
+  NVIDIA_TRANSLATION_MODEL (nvidia), default gemini-3.5-flash-lite /
+  moonshotai/kimi-k3. Whole batches are translated in a single
+  numbered-lines request (2 calls per question set per target at most).
 - Results cached in translations_cache.json (sha256(model + target + text)),
-  so CI warm-ups and local re-runs cost nothing.
+  so CI warm-ups and local re-runs cost nothing. The cache is keyed by
+  model, so Gemini and Kimi/DeepSeek entries coexist.
 - If translation is unavailable or fails, callers degrade to the original
   query only and record it — translation is an enhancement, never a blocker.
 - RETRIEVAL-SIDE ONLY: nothing here generates answers; answer.py stays a stub.
@@ -113,13 +118,26 @@ class QueryTranslator:
     """
 
     def __init__(self, cfg):
-        self.model = str(getattr(cfg, "QUERY_TRANSLATION_MODEL", "gemini-3.5-flash-lite"))
+        self.provider = str(getattr(
+            cfg, "QUERY_TRANSLATION_PROVIDER", "gemini")).strip().lower()
+        if self.provider == "nvidia":
+            self.model = str(getattr(
+                cfg, "NVIDIA_TRANSLATION_MODEL", "moonshotai/kimi-k3"))
+            fallback_cfg = getattr(cfg, "NVIDIA_TRANSLATION_FALLBACK_MODELS",
+                                   "deepseek-ai/deepseek-v4-pro")
+            self.base_url = str(getattr(
+                cfg, "NVIDIA_TRANSLATION_BASE_URL",
+                "https://integrate.api.nvidia.com/v1/chat/completions"))
+        else:
+            self.provider = "gemini"  # normalize anything else to the default
+            self.model = str(getattr(
+                cfg, "QUERY_TRANSLATION_MODEL", "gemini-3.5-flash-lite"))
+            fallback_cfg = getattr(cfg, "QUERY_TRANSLATION_FALLBACK_MODELS", "")
+            self.base_url = ""
         # If the primary model is unavailable for this key/project, fall back
-        # to other free-tier flash models; the switch is loud and recorded.
+        # to the configured alternates; the switch is loud and recorded.
         self.fallback_models = [
-            m.strip() for m in str(getattr(
-                cfg, "QUERY_TRANSLATION_FALLBACK_MODELS", "")
-            ).split(",") if m.strip()]
+            m.strip() for m in str(fallback_cfg).split(",") if m.strip()]
         self.active_model = self.model
         self.cache_path = Path(getattr(cfg, "QUERY_TRANSLATION_CACHE_PATH", "translations_cache.json"))
         self.cache = TranslationCache(self.cache_path)
@@ -137,8 +155,23 @@ class QueryTranslator:
     # -- client ------------------------------------------------------------
 
     def _make_client(self) -> bool:
-        """Same key + SDK as the embedder; actionable message on failure."""
+        """Provider key + client handle; actionable message on failure."""
         import os
+
+        if self.provider == "nvidia":
+            api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+            if not api_key:
+                print("[translate] WARNING: no NVIDIA_API_KEY — query "
+                      "translation DISABLED, using original queries only "
+                      "(set NVIDIA_API_KEY in .env for "
+                      "QUERY_TRANSLATION_PROVIDER=nvidia)")
+                return False
+            # Raw HTTPS handle (no SDK): dict + urllib in _call_api.
+            self._client = {"api_key": api_key, "base_url": self.base_url}
+            print(f"[translate] ready (nvidia) | model={self.model} | "
+                  f"cache={self.cache_path.name} | "
+                  f"fallbacks={self.fallback_models or 'none'}")
+            return True
 
         api_key = (
             os.environ.get("GEMINI_API_KEY")
@@ -158,7 +191,8 @@ class QueryTranslator:
                 api_key=api_key,
                 http_options=types.HttpOptions(timeout=120_000),  # milliseconds
             )
-            print(f"[translate] ready | model={self.model} | cache={self.cache_path.name}")
+            print(f"[translate] ready (gemini) | model={self.model} | "
+                  f"cache={self.cache_path.name}")
             return True
         except SystemExit:
             raise
@@ -243,10 +277,8 @@ class QueryTranslator:
             for attempt in range(2):
                 try:
                     self.api_calls += 1
-                    response = self._client.models.generate_content(
-                        model=model, contents=[prompt]
-                    )
-                    parsed = self._parse(response.text or "", len(clean))
+                    text = self._chat(model, prompt)
+                    parsed = self._parse(text or "", len(clean))
                     if parsed is not None:
                         return parsed
                     self.last_error = f"malformed response (model={model})"
@@ -260,6 +292,66 @@ class QueryTranslator:
                     time.sleep(1.5)
         self.failures += 1
         return None
+
+    def _chat(self, model: str, prompt: str) -> str:
+        """One chat completion request; provider-branched (gemini / nvidia).
+
+        Returns the assistant text (never raises for HTTP errors — the
+        caller catches and retries/falls back; status codes are recorded in
+        self.last_error for transparency).
+        """
+        if self.provider == "nvidia":
+            import urllib.error
+            import urllib.request
+
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "max_tokens": 2000,
+                # NIM reasoning models support disabling thinking via the
+                # chat template; we only want the translation, not a chain.
+                "chat_template_kwargs": {"thinking": False},
+            }
+            req = urllib.request.Request(
+                self._client["base_url"],
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self._client['api_key']}",
+                    "Accept": "application/json",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    body = resp.read().decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                detail = ""
+                try:
+                    detail = exc.read().decode("utf-8")[:200]
+                except Exception:  # noqa: BLE001
+                    pass
+                raise RuntimeError(
+                    f"NVIDIA API HTTP {exc.code}: {detail or exc.reason}"
+                ) from exc
+            except (urllib.error.URLError, TimeoutError,
+                    ConnectionError) as exc:
+                raise RuntimeError(f"NVIDIA API connection error: {exc}") from exc
+            data = json.loads(body)
+            try:
+                content = data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError) as exc:
+                raise RuntimeError(
+                    f"NVIDIA API unexpected response: "
+                    f"{json.dumps(data)[:200]}") from exc
+            # Strip reasoning fences if a model returns them anyway.
+            content = re.sub(r"```(?:thinking|reasoning)?\s*", "", content)
+            return content.strip()
+        # gemini (default)
+        response = self._client.models.generate_content(model=model,
+                                                        contents=[prompt])
+        return response.text or ""
 
     @staticmethod
     def _parse(output: str, expected: int) -> list[str] | None:

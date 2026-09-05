@@ -74,6 +74,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         run: |
           if [ -n "$GEMINI_API_KEY" ]; then
             KEY="$GEMINI_API_KEY"; SRC="GEMINI_API_KEY"
@@ -97,6 +98,13 @@ jobs:
           else
             echo "JINA_API_KEY secret not set — jina provider leg will be skipped"
           fi
+          # Optional: NVIDIA NIM leg (embeddings + query translation A/B).
+          if [ -n "$NVIDIA_API_KEY" ]; then
+            printf 'NVIDIA_API_KEY=%s\n' "$NVIDIA_API_KEY" >> .env
+            echo "wrote NVIDIA_API_KEY to .env (optional nvidia leg enabled)"
+          else
+            echo "NVIDIA_API_KEY secret not set — nvidia provider leg will be skipped"
+          fi
 
       - name: Restore embedding cache from a previous run (best-effort)
         if: always()
@@ -111,7 +119,7 @@ jobs:
             mkdir -p /tmp/cachex && (cd /tmp/cachex && unzip -o -q /tmp/cache.zip || true) || true
             # upload-artifact keeps the workspace-relative path, so locate the
             # file anywhere in the zip instead of assuming a flat layout.
-            for CF in embeddings_cache.json embeddings_cache_jina.json; do
+            for CF in embeddings_cache.json embeddings_cache_jina.json embeddings_cache_nvidia.json; do
               CACHE_FILE=$(find /tmp/cachex -name "$CF" | head -1 || true)
               if [ -n "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
                 cp "$CACHE_FILE" "./$CF"
@@ -164,6 +172,7 @@ jobs:
           path: |
             raglab/embeddings_cache.json
             raglab/embeddings_cache_jina.json
+            raglab/embeddings_cache_nvidia.json
           if-no-files-found: warn
 
       - name: Upload translation cache (reproducible cross-run A/B)

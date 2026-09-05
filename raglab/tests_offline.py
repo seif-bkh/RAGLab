@@ -388,6 +388,241 @@ finally:
         os.environ["JINA_API_KEY"] = old_key
 
 
+# --- NVIDIA provider logic (stubbed HTTP, no network) ------------------------
+# Validates the NeMo Retriever path: input_type passage|query (NOT Jina's
+# retrieval.* task names), plain-string input list, optional Matryoshka
+# dimensions, provider-scoped cache, retryable-429 vs fail-fast 400,
+# NaN/malformed/order validation, missing-key SystemExit. Also stubs the
+# NVIDIA chat-completions translator (Kimi/DeepSeek) payload + parsing.
+_nv_calls = []
+
+
+def _nvidia_fake_open_factory(status: int | None = None, bad: str | None = None):
+    def _fake_open(req, timeout=None):
+        _nv_calls.append({
+            "url": req.full_url,
+            "auth": req.get_header("Authorization"),
+            "ctype": req.get_header("Content-type"),
+            "payload": json.loads(req.data.decode("utf-8")),
+        })
+        if status is not None:
+            raise urllib.error.HTTPError(
+                req.full_url, status, "simulated", {}, None)
+        n = len(_nv_calls[-1]["payload"]["input"])
+        if bad == "nan":
+            dim = len(_nv_calls[-1]["payload"].get("dimensions") or [0.25] * 6)
+            embs = [[0.25] * (dim - 1) + [float("nan")] for _ in range(n)]
+        elif bad == "missing":
+            embs = [None] * n  # items without an "embedding" key
+        elif bad == "short":
+            embs = [[0.25] * 6]  # fewer rows than inputs
+        else:
+            embs = [[0.25] * 6 for _ in range(n)]
+        body = {"object": "list", "data": [
+            {"object": "embedding", "index": i, "embedding": e}
+            for i, e in enumerate(embs)]}
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(body).encode("utf-8")
+        return _Resp()
+    return _fake_open
+
+
+def _patch_nvidia(dim: int = 0, status: int | None = None,
+                  bad: str | None = None):
+    """Run one nvidia embed_texts+embed_query with urlopen stubbed."""
+    global _nv_calls
+    _nv_calls = []
+    old_provider = cfg.EMBEDDING_PROVIDER
+    old_cache = getattr(cfg, "NVIDIA_EMBEDDING_CACHE_PATH", None)
+    old_dim = getattr(cfg, "NVIDIA_EMBEDDING_DIM", 0)
+    old_key = os.environ.get("NVIDIA_API_KEY", "")
+    cfg.EMBEDDING_PROVIDER = "nvidia"
+    cfg.NVIDIA_EMBEDDING_CACHE_PATH = Path(tempfile.mkdtemp()) / "nvidia_emb.json"
+    cfg.NVIDIA_EMBEDDING_DIM = dim
+    os.environ["NVIDIA_API_KEY"] = "test-secret"
+    real_open = urllib.request.urlopen
+    urllib.request.urlopen = _nvidia_fake_open_factory(status, bad)
+    try:
+        emb = build_embedder(cfg)
+        if bad == "short":  # row-count mismatch needs >= 2 inputs
+            vecs = emb.embed_texts(["a", "b"], input_type="search_document")
+            return emb, vecs, None
+        vecs = emb.embed_texts(["doc one"], input_type="search_document")
+        q = emb.embed_query("question?")
+        return emb, vecs, q
+    finally:
+        urllib.request.urlopen = real_open
+        cfg.EMBEDDING_PROVIDER = old_provider
+        cfg.NVIDIA_EMBEDDING_CACHE_PATH = old_cache
+        cfg.NVIDIA_EMBEDDING_DIM = old_dim
+        if old_key:
+            os.environ["NVIDIA_API_KEY"] = old_key
+        else:
+            os.environ.pop("NVIDIA_API_KEY", None)
+
+
+emb, vecs, q = _patch_nvidia()
+check("nvidia: passage/query input_type + bearer auth + plain-string input",
+      _nv_calls[0]["payload"]["input_type"] == "passage"
+      and _nv_calls[1]["payload"]["input_type"] == "query"
+      and _nv_calls[0]["payload"]["input"] == ["doc one"]
+      and _nv_calls[1]["payload"]["input"] == ["question?"]
+      and "task" not in _nv_calls[0]["payload"]
+      and _nv_calls[0]["payload"]["model"] == "nvidia/llama-3.2-nv-embedqa-1b-v2"
+      and _nv_calls[0]["auth"] == "Bearer test-secret"
+      and _nv_calls[0]["ctype"] == "application/json"
+      and _nv_calls[0]["url"].endswith("/v1/embeddings"),
+      str(_nv_calls[0]["payload"]))
+check("nvidia: Matryoshka dimensions honored + auto-detect without dim",
+      _patch_nvidia(dim=384) and _nv_calls[0]["payload"].get("dimensions") == 384,
+      str(_nv_calls[0]["payload"].get("dimensions")))
+emb, _, _ = _patch_nvidia()
+check("nvidia: dimension auto-detected + scoped cache file",
+      emb._dimension == 6 and emb.cache.path.name == "nvidia_emb.json"
+      and Path(emb.cache.path).exists(),
+      f"dim={emb._dimension} cache={emb.cache.path}")
+
+# Retryability: NvidiaHTTPError subclasses JinaHTTPError; 429/503 retryable,
+# 400/401 fail fast (backoff stays out of the unit test).
+check("nvidia: rate-limit/5xx retryable, client errors fail fast",
+      embedder_mod.BaseEmbedder._is_retryable(
+          embedder_mod.NvidiaHTTPError(429, "quota"))
+      and embedder_mod.BaseEmbedder._is_retryable(
+          embedder_mod.NvidiaHTTPError(503, "unavailable"))
+      and not embedder_mod.BaseEmbedder._is_retryable(
+          embedder_mod.NvidiaHTTPError(400, "bad request"))
+      and not embedder_mod.BaseEmbedder._is_retryable(
+          embedder_mod.NvidiaHTTPError(401, "unauthorized")))
+try:
+    _patch_nvidia(status=400)
+    check("nvidia: 400 propagates as NvidiaHTTPError", False, "no error raised")
+except embedder_mod.NvidiaHTTPError as _exc:
+    check("nvidia: 400 propagates as NvidiaHTTPError",
+          _exc.status_code == 400 and "NVIDIA API HTTP 400" in str(_exc),
+          str(_exc)[:60])
+
+# Strict response validation: NaN / missing embedding / wrong count.
+for bad, needle, label in (
+        ("nan", "contains NaN", "NaN rejected"),
+        ("missing", "no embedding list", "embedding-less item rejected"),
+        ("short", "returned 1 embeddings for 2 inputs", "row-count mismatch"),
+):
+    try:
+        _patch_nvidia(bad=bad)
+        check(f"nvidia: {label}", False, "no error raised")
+    except RuntimeError as _exc:
+        check(f"nvidia: {label}", needle in str(_exc), str(_exc)[:70])
+
+# Missing key -> actionable SystemExit.
+old_key = os.environ.pop("NVIDIA_API_KEY", None)
+old_provider = cfg.EMBEDDING_PROVIDER
+cfg.EMBEDDING_PROVIDER = "nvidia"
+try:
+    try:
+        build_embedder(cfg)._embed_batch(["x"], "search_document")
+        check("nvidia missing key fails actionably", False, "no error raised")
+    except SystemExit as _exc:
+        check("nvidia missing key fails actionably",
+              "NVIDIA_API_KEY" in str(_exc) and ".env" in str(_exc),
+              str(_exc)[:60])
+finally:
+    cfg.EMBEDDING_PROVIDER = old_provider
+    if old_key:
+        os.environ["NVIDIA_API_KEY"] = old_key
+
+
+# --- NVIDIA query-translation (stubbed chat-completions) ---------------------
+_nv_chat_calls = []
+
+
+def _nvidia_chat_open_factory(content: str | None = None):
+    def _fake_open(req, timeout=None):
+        _nv_chat_calls.append({
+            "auth": req.get_header("Authorization"),
+            "payload": json.loads(req.data.decode("utf-8")),
+        })
+        body = {"choices": [{"message": {"role": "assistant",
+                                         "content": content or "1. ترجمة"}}]}
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(body).encode("utf-8")
+        return _Resp()
+    return _fake_open
+
+
+class NvidiaCfg(FakeCfg):
+    QUERY_TRANSLATION_PROVIDER = "nvidia"
+    NVIDIA_TRANSLATION_MODEL = "moonshotai/kimi-k3"
+    NVIDIA_TRANSLATION_FALLBACK_MODELS = "deepseek-ai/deepseek-v4-pro"
+    NVIDIA_TRANSLATION_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+
+
+old_key = os.environ.get("NVIDIA_API_KEY")
+real_open = urllib.request.urlopen
+urllib.request.urlopen = _nvidia_chat_open_factory()
+try:
+    os.environ["NVIDIA_API_KEY"] = "test-secret"
+    tr_nv = QueryTranslator(NvidiaCfg())
+    out = tr_nv._chat("moonshotai/kimi-k3", "1. ما هو المبلغ؟")
+finally:
+    urllib.request.urlopen = real_open
+    if old_key:
+        os.environ["NVIDIA_API_KEY"] = old_key
+    else:
+        os.environ.pop("NVIDIA_API_KEY", None)
+check("nvidia chat: thinking off + temp 0 + bearer + content parsed",
+      tr_nv.available and out == "1. ترجمة"
+      and _nv_chat_calls[0]["payload"]["model"] == "moonshotai/kimi-k3"
+      and _nv_chat_calls[0]["payload"]["temperature"] == 0
+      and _nv_chat_calls[0]["payload"]["chat_template_kwargs"] == \
+          {"thinking": False}
+      and _nv_chat_calls[0]["auth"] == "Bearer test-secret"
+      and _nv_chat_calls[0]["payload"]["messages"][0]["role"] == "user",
+      str(_nv_chat_calls[0]["payload"]["model"]))
+
+# Reasoning fences are stripped if a model returns them anyway.
+real_open = urllib.request.urlopen
+urllib.request.urlopen = _nvidia_chat_open_factory(
+    "```thinking\n1. ترجمة\n```")
+try:
+    os.environ["NVIDIA_API_KEY"] = "test-secret"
+    tr_nv = QueryTranslator(NvidiaCfg())
+    fenced = tr_nv._chat("moonshotai/kimi-k3", "1. ما هو المبلغ؟")
+finally:
+    urllib.request.urlopen = real_open
+    if old_key:
+        os.environ["NVIDIA_API_KEY"] = old_key
+    else:
+        os.environ.pop("NVIDIA_API_KEY", None)
+check("nvidia chat: reasoning fence stripped", fenced == "1. ترجمة",
+      repr(fenced))
+
+# No NVIDIA key -> translator unavailable (graceful, never a crash).
+old_key = os.environ.pop("NVIDIA_API_KEY", None)
+try:
+    tr_nv = QueryTranslator(NvidiaCfg())
+finally:
+    if old_key:
+        os.environ["NVIDIA_API_KEY"] = old_key
+check("nvidia translator: missing key degrades gracefully",
+      tr_nv.available is False
+      and tr_nv.build_variants("x", "ar", ["fr", "ar"])[0]["lang"] == "ar",
+      f"available={tr_nv.available}")
+
+
 # --- the two bugs the user hit on sentence-transformers 6.x -----------------
 # (1) float32 embeddings must be JSON-serializable in the cache.
 payload = json.loads(cache_path.read_text(encoding="utf-8"))
