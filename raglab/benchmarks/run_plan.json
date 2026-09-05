@@ -1,1 +1,1 @@
-{"mode": "benchmark", "stage": "all", "iteration": "02-riva-supported-pairs-and-grounded-answers"}
+{"mode": "report", "stage": "all", "source_run": "33970405295", "iteration": "02-recover-byte-bounded-measurements"}

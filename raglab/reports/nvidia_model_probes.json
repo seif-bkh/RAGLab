@@ -1,0 +1,60 @@
+{
+  "run_id": 33968780265,
+  "recovery_run_id": 33969140257,
+  "models": [
+    {
+      "model": "nvidia/riva-translate-4b-instruct-v2",
+      "status": "ok",
+      "text": "وفقًا للرسالة الدورية 2019-08 الصادرة عن هيئة البورصة، ما هي الودائع الاستثمارية؟",
+      "requested_model": "nvidia/riva-translate-4b-instruct-v2",
+      "served_model": "nvidia/riva-translate-4b-instruct-v2",
+      "usage": {
+        "prompt_tokens": 37,
+        "total_tokens": 70,
+        "completion_tokens": 33,
+        "prompt_tokens_details": null
+      },
+      "finish_reason": "stop",
+      "seconds": 0.773
+    },
+    {
+      "model": "deepseek-ai/deepseek-v4-pro-0813",
+      "status": "failed",
+      "error": "NVIDIA connection error: The read operation timed out",
+      "http_status": 0
+    },
+    {
+      "model": "moonshotai/kimi-k3",
+      "status": "ok",
+      "text": "وفقًا للتعميم BCT رقم 2019-08، ما هي ودائع الاستثمار؟",
+      "requested_model": "moonshotai/kimi-k3",
+      "served_model": "moonshotai/kimi-k3",
+      "usage": {
+        "prompt_tokens": 136,
+        "completion_tokens": 172,
+        "total_tokens": 308,
+        "prompt_tokens_details": {
+          "audio_tokens": null,
+          "cached_tokens": 0
+        }
+      },
+      "finish_reason": "stop",
+      "seconds": 28.035
+    },
+    {
+      "model": "nvidia/nemotron-3-embed-1b",
+      "status": "ok",
+      "dimensions": 2048,
+      "served_model": "nvidia/nemotron-3-embed-1b",
+      "similarities": {
+        "en-fr": 0.6757258352350511,
+        "en-ar": 0.8077414799819617,
+        "fr-ar": 0.7434019215601972
+      },
+      "usage": {
+        "prompt_tokens": 14,
+        "total_tokens": 14
+      }
+    }
+  ]
+}

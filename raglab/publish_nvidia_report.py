@@ -11,11 +11,40 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent / "results/nvidia"
+MAX_CHECK_BYTES = 60000
+
+
+def check_text(data):
+    return '```json\n' + json.dumps(data, ensure_ascii=False, separators=(',', ':')) + '\n```'
+
+
+def answer_parts(run, rows):
+    """Bound by UTF-8 bytes, not just question count (Arabic quotes can be large)."""
+    metadata = {k: v for k, v in run.items() if k != 'questions'}
+    batch, number = [], 1
+    for row in rows:
+        candidate = {**metadata, 'questions': batch + [row]}
+        if batch and (len(batch) == 8 or len(check_text(candidate).encode('utf-8')) > MAX_CHECK_BYTES):
+            yield f"{run['label']}-{number}", {**metadata, 'questions': batch}
+            batch, number = [], number + 1
+        batch.append(row)
+        if len(check_text({**metadata, 'questions': batch}).encode('utf-8')) > MAX_CHECK_BYTES:
+            raise ValueError(f"Answer {row.get('id')} is too large for Checks; inspect full artifact instead")
+    yield f"{run['label']}-{number}", {**metadata, 'questions': batch}
 
 
 def report_parts(report):
     summary = {k: v for k, v in report.items() if k not in {'generation', 'translation_quality'}}
+    # Successful comparisons of all three models must fit too, not just the
+    # smaller reports produced when an endpoint fails. Keep metrics/ranks in
+    # the summary and put verbose query provenance in separate named checks.
+    verbose = {'translations', 'translation_events'}
+    summary['retrieval'] = [{k: v for k, v in row.items() if k not in verbose}
+                            for row in report.get('retrieval', [])]
     parts = [('summary', summary)]
+    for row in report.get('retrieval', []):
+        if any(row.get(k) for k in verbose):
+            parts.append((f"retrieval-{row['split']}-{row['label']}", row))
     for name, quality in report.get('translation_quality', {}).items():
         parts.append(('translations-' + name.split('/')[1], {'model_prompt': name, **quality}))
     for run in report.get('generation', []):
@@ -26,9 +55,7 @@ def report_parts(report):
             result = {k: v for k, v in q['result'].items() if k != 'sources'}
             result['source_ids'] = [{k: v for k, v in s.items() if k != 'text'} for s in q['result']['sources']]
             rows.append({**q, 'result': result})
-        for start in range(0, len(rows), 8):
-            parts.append((f"{run['label']}-{start//8+1}", {
-                **{k: v for k, v in run.items() if k != 'questions'}, 'questions': rows[start:start+8]}))
+        parts.extend(answer_parts(run, rows))
     return parts
 
 
@@ -48,8 +75,8 @@ def main():
         print(markdown)
         return
     for name, data in report_parts(report):
-        text = '```json\n' + json.dumps(data, ensure_ascii=False, separators=(',', ':')) + '\n```'
-        if len(text.encode('utf-8')) > 60000:
+        text = check_text(data)
+        if len(text.encode('utf-8')) > MAX_CHECK_BYTES:
             raise ValueError(f'Report part {name} is too large for Checks; inspect full artifact instead')
         payload = {
             'name': 'NVIDIA results / ' + name,

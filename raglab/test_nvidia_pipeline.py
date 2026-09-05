@@ -393,6 +393,42 @@ class Grounding(unittest.TestCase):
             self.assertEqual(len(json.loads(cfg.ANSWER_CACHE_PATH.read_text())), 8)
 
 
+class MeasurementReports(unittest.TestCase):
+    def test_verbose_retrieval_provenance_is_preserved_outside_summary(self):
+        from publish_nvidia_report import report_parts
+        row = {'split': 'dev', 'label': 'riva', 'metrics': {'hit@1': 1},
+               'translations': {'q1': [{'text': 'البنك المركزي', 'route': ['fr', 'en', 'ar']}]},
+               'translation_events': [{'seconds': 1.0}]}
+        report = {'retrieval': [row], 'production_ready': False}
+        parts = dict(report_parts(report))
+        self.assertNotIn('translations', parts['summary']['retrieval'][0])
+        self.assertEqual(parts['summary']['retrieval'][0]['metrics'], row['metrics'])
+        self.assertEqual(parts['retrieval-dev-riva'], row)
+        self.assertIn('translations', report['retrieval'][0])  # input not mutated
+
+    def test_answers_are_split_by_bytes_and_keep_evidence_not_unused_context(self):
+        from publish_nvidia_report import MAX_CHECK_BYTES, check_text, report_parts
+        quote = 'ع' * 12000
+        rows = [{'id': str(i), 'result': {
+            'claims': [{'text': 'Claim', 'evidence': [{'source_id': 'S1', 'quote': quote}]}],
+            'sources': [{'source_id': 'S1', 'chunk_id': 'chunk', 'text': 'UNUSED_BODY' * 20000}]
+        }} for i in range(8)]
+        parts = report_parts({'generation': [{'label': 'dev_model', 'questions': rows}]})
+        answers = [(name, data) for name, data in parts if name.startswith('dev_model-')]
+        self.assertGreater(len(answers), 1)
+        self.assertTrue(all(len(check_text(data).encode('utf-8')) <= MAX_CHECK_BYTES for _, data in answers))
+        collected = [q for _, data in answers for q in data['questions']]
+        self.assertEqual([q['id'] for q in collected], [str(i) for i in range(8)])
+        for q in collected:
+            self.assertEqual(q['result']['claims'][0]['evidence'][0]['quote'], quote)
+            self.assertEqual(q['result']['source_ids'], [{'source_id': 'S1', 'chunk_id': 'chunk'}])
+            self.assertNotIn('UNUSED_BODY', check_text(q))
+
+    def test_oversized_single_answer_is_not_silently_truncated(self):
+        from publish_nvidia_report import answer_parts
+        with self.assertRaisesRegex(ValueError, 'too large'):
+            list(answer_parts({'label': 'dev_model'}, [{'id': 'q1', 'answer': 'ع' * 40000}]))
+
 
 if __name__ == '__main__':
     unittest.main()
