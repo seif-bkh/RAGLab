@@ -137,6 +137,32 @@ class GoogleFallbackPolicy(unittest.TestCase):
 
 
 class DatasetIntegrity(unittest.TestCase):
+    def test_author_spans_are_exact_original_slices(self):
+        from hard_harness.authoring import evidence_spans
+        text = ('نص مصدر يوضح الشروط والاستثناءات والأحكام. ' * 25) + ' نهاية'
+        spans = evidence_spans(text, max_chars=160)
+        self.assertGreater(len(spans), 1)
+        for span in spans:
+            self.assertEqual(span['text'], text[span['start']:span['end']])
+        self.assertEqual(len({s['id'] for s in spans}), len(spans))
+
+    def test_author_resolves_evidence_ids_without_copying_model_quotes(self):
+        from hard_harness.authoring import validate_family, evidence_spans
+        text = 'لا يجوز تغيير شروط العقد دون موافقة الهيئة المختصة. وهذا نص مصدر ثابت.'
+        units = {'u':{'text':text}}
+        spec = {'id':'hh0001','category':'supported','source_unit_ids':['u'],'primary_unit_id':'u','expected_behavior':'answer'}
+        family = {'id':'hh0001','fact_summary':'approval needed','rationale':'source rule',
+                  'evidence':[{'unit_id':'u','span_ids':['E1']}],
+                  'languages':{lang:{'question':question,'reference_answer':'approval required',
+                                    'required_facts':['approval required'],'forbidden_claims':[]}
+                    for lang,question in [('ar','هل يجوز تغيير شروط العقد؟'),('fr','Peut-on modifier le contrat ?'),('en','Can the contract be modified?')]}}
+        result = validate_family(family,spec,units)
+        self.assertEqual(result['evidence'][0]['quote'],evidence_spans(text)[0]['text'])
+        self.assertEqual(result['evidence'][0]['quote_resolved_by'],'source_span_id')
+        family['evidence'][0]['span_ids']=['invented']
+        with self.assertRaisesRegex(ValueError,'span IDs'):
+            validate_family(family,spec,units)
+
     def family(self, number, category='supported'):
         languages = {lang: {'question': f'{lang} distinct question {number}?',
                             'reference_answer': f'expected fact {number}',

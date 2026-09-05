@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: hard-harness-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true  # a newly versioned protocol replaces an obsolete run
 
 jobs:
   plan:

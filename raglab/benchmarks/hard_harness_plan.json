@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "05-author-paired-reference-families",
+  "revision": "06-reference-span-ids-and-minimal-rubrics",
   "phase": "author",
   "languages": [
     "ar",
