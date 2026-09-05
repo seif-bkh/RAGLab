@@ -27,7 +27,7 @@ run_all() {
     echo "python=$($PY --version) mode=$mode"
     "$PY" -m compileall -q . || return 1
     "$PY" tests_offline.py || return 1
-    "$PY" -m unittest -v test_nvidia_pipeline || return 1
+    "$PY" -m unittest -v test_nvidia_pipeline test_hard_harness || return 1
     "$PY" main.py inspect || return 1
     "$PY" -m pip check || return 1
     if [ "$mode" = benchmark ]; then

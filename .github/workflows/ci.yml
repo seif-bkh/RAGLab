@@ -35,7 +35,7 @@ jobs:
       - name: Offline regression tests (no API, stubbed HF provider)
         run: |
           python tests_offline.py
-          python -m unittest -v test_nvidia_pipeline
+          python -m unittest -v test_nvidia_pipeline test_hard_harness
         working-directory: raglab
 
       - name: Offline inspect (load + chunk only, zero API calls)

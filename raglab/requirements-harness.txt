@@ -1,0 +1,4 @@
+-r requirements-benchmark.txt
+# Original PDF page rendering for reference transcription/audit only.
+# The answering agent's existing extraction/indexing path is not replaced.
+pymupdf==1.28.2

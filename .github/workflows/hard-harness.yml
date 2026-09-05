@@ -1,0 +1,76 @@
+name: Large multilingual answer harness
+
+on:
+  push:
+    branches: ["arena/01a071ba-raglab"]
+    paths: ["raglab/benchmarks/hard_harness_plan.json"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+
+concurrency:
+  group: hard-harness-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sources:
+    name: Audit original source pages and checkpoint references
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install harness dependencies and offline contracts
+        working-directory: raglab
+        run: |
+          python -m pip install -r requirements-harness.txt
+          python -m compileall -q .
+          python -m unittest -v test_nvidia_pipeline test_hard_harness
+      - name: Read explicit harness profile
+        id: plan
+        run: |
+          python - <<'PY'
+          import json, os
+          p=json.load(open('raglab/benchmarks/hard_harness_plan.json'))
+          assert p['phase']=='sources'
+          assert p['llm']['provider']=='xkiro'
+          assert p['llm']['model']=='qwen/qwen3.8-max:free'
+          assert p['llm']['credential_secret'] in {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'}
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+              f.write('key_secret='+p['llm']['credential_secret']+'\n')
+          PY
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/hard_harness/
+          key: hard-harness-v1-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: hard-harness-v1-${{ github.ref_name }}-
+      - name: Read original PDFs with selected Qwen; never use a paid fallback
+        working-directory: raglab
+        env:
+          HARNESS_API_KEY: ${{ secrets[steps.plan.outputs.key_secret] }}
+          HARNESS_CREDENTIAL_ALIAS: ${{ steps.plan.outputs.key_secret }}
+          PYTHONUNBUFFERED: "1"
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
+        run: python hard_harness_main.py sources
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache/hard_harness/
+          key: hard-harness-v1-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Publish source/audit checkpoints without credentials
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python raglab/hard_harness_main.py publish --phase sources
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hard-harness-sources
+          path: raglab/results/hard_harness/
+          retention-days: 30
+          if-no-files-found: warn

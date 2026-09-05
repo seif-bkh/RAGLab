@@ -39,12 +39,12 @@ def free_eligibility(provider, model, catalog):
     raise ValueError('Unknown gateway provider')
 
 
-def load_pricing(provider, opener=None):
+def load_pricing(provider, opener=None, *, api_key=None):
     if provider not in PRICING_URLS:
         raise ValueError('Only the xKiro pricing endpoint is supported')
     client = opener or urllib.request.build_opener(NoCredentialRedirects())
     headers = {'Accept': 'application/json', 'User-Agent': 'RAGLab-readonly-catalog/1.0'}
-    key = os.environ.get(PROVIDERS[provider]['key_env'], '').strip()
+    key = (os.environ.get(PROVIDERS[provider]['key_env'], '') if api_key is None else api_key).strip()
     if key:
         headers['Authorization'] = 'Bearer ' + key
     request = urllib.request.Request(PRICING_URLS[provider], headers=headers)
@@ -64,7 +64,7 @@ class FreeGatewayClient(NvidiaClient):
 Gateway-reported labels are NOT independent upstream identity attestation.
 Only the selected, live-price-approved request SKU may be called; no fallback.
 """
-    def __init__(self, provider, model, pricing, *, budget, opener=None):
+    def __init__(self, provider, model, pricing, *, budget, opener=None, api_key=None):
         validate_answer_selection(provider, model)
         eligible, reason, metadata = free_eligibility(provider, model, pricing['catalog'])
         if not eligible:
@@ -75,12 +75,13 @@ Only the selected, live-price-approved request SKU may be called; no fallback.
         self.model_metadata = metadata
         self.budget = budget
         settings = PROVIDERS[provider]
-        super().__init__(base_url=settings['base_url'], api_key=os.environ.get(settings['key_env'], ''),
+        key = os.environ.get(settings['key_env'], '') if api_key is None else api_key
+        super().__init__(base_url=settings['base_url'], api_key=key,
                          timeout=120, attempts=2, min_interval=3, max_retry_delay=60, stream=True,
                          opener=opener or urllib.request.build_opener(NoCredentialRedirects()))
 
     def recheck(self):
-        pricing = load_pricing(self.provider)
+        pricing = load_pricing(self.provider, api_key=self.api_key)
         eligible, _, metadata = free_eligibility(self.provider, self.approved_model, pricing['catalog'])
         if not eligible:
             raise ValueError('Model is no longer verified free; inference stopped')
