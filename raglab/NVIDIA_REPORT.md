@@ -16,12 +16,15 @@ end-to-end evaluation is not complete, and this is not production-ready.**
   injection testing were interrupted by HTTP 429 responses. Their missing
   measurements must not be presented as passed tests or as model-quality scores.
 
-A third, serial **basic-profile** comparison is now running using cached successes
-([run 33972170903](https://github.com/seif-bkh/RAGLab/actions/runs/33972170903)).
-A GitHub authentication interruption was resolved. **No iteration-03 results
-are available yet**.
-Additional provider keys have been mentioned, but they will not be sent to
-unverified endpoints or silently substituted into these NVIDIA measurements.
+The serial basic-profile resume also finished **incomplete**
+([run 33972170903](https://github.com/seif-bkh/RAGLab/actions/runs/33972170903),
+[measurements](reports/nvidia_iteration_03.json)). All successful answers in it
+came from cache; new answer attempts still returned HTTP 429. The temporary
+GitHub authentication interruption was resolved.
+
+The new xKiro/KiosAPI keys were detected in Actions and used only for read-only
+catalog checks. No gateway inference has been performed or mixed into these
+NVIDIA measurements. See the additional-provider section below.
 
 ## What was actually executed
 
@@ -31,7 +34,7 @@ unverified endpoints or silently substituted into these NVIDIA measurements.
 | Iteration 01: retrieval | [Run 33969545639](https://github.com/seif-bkh/RAGLab/actions/runs/33969545639), [measurements](reports/nvidia_iteration_01.json) | Original/Kimi retrieval measured; DeepSeek timeout, invalid direct Riva pair routing and a reference-test rate limit prevented completion |
 | Iteration 02: all stages | [Run 33970405295](https://github.com/seif-bkh/RAGLab/actions/runs/33970405295), [measurements](reports/nvidia_iteration_02.json) | All translators and their selected-prompt reference suites completed; answer/security testing incomplete |
 | Report recovery | [Run 33971261399](https://github.com/seif-bkh/RAGLab/actions/runs/33971261399) | Successful; no model calls. The original compact summary was 60,204 bytes, exceeding the publisher's 60,000-byte guard |
-| Iteration 03 | [Run 33972170903](https://github.com/seif-bkh/RAGLab/actions/runs/33972170903), [plan](benchmarks/run_plan.json) | In progress; no results yet |
+| Iteration 03 | [Run 33972170903](https://github.com/seif-bkh/RAGLab/actions/runs/33972170903), [measurements](reports/nvidia_iteration_03.json) | Incomplete: cached answers reused, new attempts rate-limited |
 
 Iteration 02 ran commit `be5f4448b09cd8905db6eaaf718d215bf4036e11`.
 Recovery published neutral measurement Checks, not passing quality certifications.
@@ -164,23 +167,60 @@ optional JSON claims with verbatim evidence/citation validation. Invalid outputs
 fail closed; provider failures are distinct from “not in the documents.” No
 orchestration framework, UI, account access or cloud vector database was added.
 
-**110 offline checks pass** (59 legacy + 51 pipeline/report/provider-catalog tests), together
+**113 offline checks pass** (59 legacy + 54 pipeline/report/provider-catalog tests), together
 with compilation and `pip check`. Remote CI has also passed
 ([run 33971261523](https://github.com/seif-bkh/RAGLab/actions/runs/33971261523));
 newer changes have also passed the local checks and are being pushed for CI. Offline/CI success is not a live
 model-quality or security certificate.
 
-## Next controlled run and production blockers
+## Resume findings, additional providers, and remaining work
 
-Iteration 03 changes operational pacing and corrects the reference fixture;
-it does not change source inputs, retrieval/answer labels or generation prompts.
-It compares **grounded-v1 for both answerers**, reuses exact successful responses,
-and retries missing answers serially: one worker, minimum 30 s request spacing,
-180 s request timeout, two attempts, default 60 s HTTP-429 backoff with bounded
-Retry-After handling. Expanded-context results remain explicitly incomplete.
+Iteration 03 kept source inputs, retrieval/answer labels and generation prompts
+unchanged. It compared **grounded-v1 for both answerers**, serially at minimum
+30-second spacing with 180-second timeouts and two attempts. Kimi reused five
+answers, then hit two provider failures; DeepSeek reused its completed development
+suite. The first two held-out attempts failed, as did the three security tests.
+No fresh successful generation measurement was obtained. Retry-After was absent
+from the recorded final answer errors.
 
-The versioned plan launches on a push to the current session branch. For an
-authorized local environment, the equivalent command is:
+The resume exposed two implementation defects, now fixed and regression-tested:
+
+- Concurrently existing translator objects saved stale copies of their shared
+  cache. Later Riva writes could erase newly recorded Kimi/DeepSeek reference
+  entries, causing avoidable calls on the next run. Writes now merge only dirty
+  entries under a per-path process lock; readers refresh changed files. The same
+  multi-instance protection was added to answer caches. Original model outputs
+  remain preserved in the immutable measurement reports.
+- The intended larger answer retry cap was not forwarded to the HTTP client, so
+  iteration 03's answer backoff was capped at **30 seconds**, not the intended
+  60-second default delay. The cap is now wired correctly, and subsequent reports
+  read timeout/pacing/retry settings from the actual client. These fixes are
+  protocol `nvidia-v4-cache-merge-and-retry-cap`; they have **not yet been live-tested**.
+
+The iteration-03 selected-translation gate was false because missing cached
+reference outputs could not be regenerated under rate limiting. This does not
+invalidate the separate zero-call audit of iteration-02 outputs (Kimi 18/18).
+Neither historical result is overwritten. Expanded-context testing remains incomplete.
+
+### New provider catalog checks
+
+[Catalog evidence](reports/provider_catalog_01.json),
+[Actions run 33972512410](https://github.com/seif-bkh/RAGLab/actions/runs/33972512410):
+
+- Both named repository secrets were present; neither key was exported to the
+  workspace or report. Each provider received only its own credential.
+- xKiro returned 112 advertised IDs, including `moonshotai/kimi-k3`. It also lists
+  `deepseek/deepseek-v4-pro-0813`, a **different namespace** from the requested
+  NVIDIA ID `deepseek-ai/deepseek-v4-pro-0813`. This was not silently substituted.
+- KiosAPI returned an empty model list. That is not proof that its key is invalid
+  or that every inference endpoint is unavailable; no model was guessed.
+- These were **GET /models only**: zero inference calls and no documents sent.
+  A public catalog does not validate a credential or prove upstream identity.
+  xKiro documents routing while reporting the requested model name in responses;
+  any gateway inference needs separate provenance and qualification.
+
+No further NVIDIA retries are currently running. For a future authorized resume,
+the basic-profile command is:
 
 ```bash
 cd raglab

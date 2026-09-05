@@ -1,9 +1,22 @@
-"""Atomic, JSON-safe local artifacts. Single writer per cache file by design."""
+"""Atomic JSON artifacts; cache locks coordinate instances within one process.
+
+Separate writer processes still need external coordination and are unsupported.
+"""
 import hashlib
 import json
 import os
 import tempfile
+import threading
 from pathlib import Path
+
+_CACHE_LOCKS = {}
+_CACHE_LOCKS_GUARD = threading.Lock()
+
+
+def cache_lock(path):
+    key = str(Path(path).resolve())
+    with _CACHE_LOCKS_GUARD:
+        return _CACHE_LOCKS.setdefault(key, threading.RLock())
 
 
 def fingerprint(value):

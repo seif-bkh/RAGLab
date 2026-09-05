@@ -189,8 +189,10 @@ selection rules and limitations. Important artifacts:
 The benchmark uses its **own** Chroma path and never resets the ordinary CLI
 index. Repeat runs reuse exact-input caches. A cached answer is labeled cached;
 its recorded first-call latency is not counted as a new live-call latency.
-Caches use atomic writes but are local process artifacts, not a shared production
-cache service. Do not run simultaneous writer processes against the same files.
+Translation and answer caches merge new entries under per-path locks, so several
+instances within one process do not overwrite each other's work. Writes are
+atomic, but these are local artifacts, not a shared production cache service.
+Do not run simultaneous writer processes against the same files.
 
 ### Metrics
 

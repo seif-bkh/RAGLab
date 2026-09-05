@@ -51,6 +51,32 @@ class Contracts(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
 
+    def test_explicit_empty_key_does_not_use_environment_credential(self):
+        client = NvidiaClient(api_key='')
+        with patch('urllib.request.urlopen') as request:
+            with self.assertRaises(NvidiaAPIError):
+                client.request('models')
+            request.assert_not_called()
+
+    def test_multiple_translation_cache_instances_merge_only_new_entries(self):
+        from translate import TranslationCache
+        path = self.path / 'shared-translations.json'
+        a, b = TranslationCache(path), TranslationCache(path)
+        a.put('model-a', 'ar', 'one', 'القديم')
+        a.save()
+        b.put('model-b', 'ar', 'two', 'الثاني')
+        b.put('model-a', 'ar', 'one', 'الجديد')
+        b.save()
+        a.put('model-a', 'ar', 'three', 'الثالث')
+        a.save()  # must not restore a stale copy of "one" or drop "two"
+        warm = TranslationCache(path)
+        self.assertEqual(len(warm.entries), 3)
+        self.assertEqual(warm.get('model-a', 'ar', 'one')['translation'], 'الجديد')
+        self.assertEqual(a.get('model-b', 'ar', 'two')['translation'], 'الثاني')
+        self.assertEqual(b.get('model-a', 'ar', 'three')['translation'], 'الثالث')
+        b.save()  # no dirty entries: must not overwrite another instance
+        self.assertEqual(len(TranslationCache(path).entries), 3)
+
     def test_native_dimensions_only(self):
         self.cfg.NVIDIA_EMBEDDING_DIM = 512
         with self.assertRaisesRegex(ValueError, '2048'):
@@ -380,6 +406,18 @@ class Grounding(unittest.TestCase):
             self.assertFalse(gen.answer('What year?', hits, 'en')['cached'])
             self.assertEqual(len(calls), 2)
 
+    def test_distinct_answer_generators_preserve_each_others_cache_entries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
+            client = SimpleNamespace(chat=lambda *a, **kw: {'text': json.dumps(self.valid), 'seconds': 1})
+            a, b = AnswerGenerator(cfg, client), AnswerGenerator(cfg, client)
+            hits = [{'id': 'a', 'text': self.sources[0]['text']}]
+            a.answer('Question one?', hits, 'en')
+            b.answer('Question two?', hits, 'en')
+            a.answer('Question three?', hits, 'en')
+            self.assertEqual(len(json.loads(cfg.ANSWER_CACHE_PATH.read_text())), 3)
+            self.assertTrue(b.answer('Question three?', hits, 'en')['cached'])
+
     def test_parallel_answer_cache_has_no_lost_entries(self):
         from concurrent.futures import ThreadPoolExecutor
         with tempfile.TemporaryDirectory() as temp:
@@ -469,6 +507,7 @@ class MeasurementReports(unittest.TestCase):
         cfg = answer_config(KIMI_MODEL, 'grounded-v1')
         self.assertEqual((cfg.ANSWER_WORKERS, cfg.NVIDIA_API_ATTEMPTS, cfg.ANSWER_NEIGHBOR_RADIUS), (1, 2, 0))
         self.assertGreaterEqual(cfg.NVIDIA_MIN_INTERVAL, 30)
+        self.assertEqual(AnswerGenerator(cfg).client.max_retry_delay, cfg.NVIDIA_MAX_RETRY_DELAY)
         self.assertEqual(answer_config(DEEPSEEK_MODEL, 'grounded-v2').ANSWER_NEIGHBOR_RADIUS, 1)
         args = build_parser().parse_args(['benchmark', '--stage', 'all', '--answer-profiles', 'grounded-v1'])
         self.assertEqual(args.answer_profiles, 'grounded-v1')

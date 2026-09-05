@@ -63,7 +63,13 @@ rates are not identical to this stricter benchmark's definition.
    rate limits interrupted iteration 02. Successful exact-request caches are
    reused; new answer calls are serial, paced at least 30 seconds apart, with
    two bounded attempts and a 60-second default 429 backoff (Retry-After honored).
-   This is protocol `nvidia-v3-source-valid-references-serial-answers`.
+   This was protocol `nvidia-v3-source-valid-references-serial-answers`.
+   **Audit:** that run's answer client actually retained a 30-second retry cap
+   because the larger configured cap was not forwarded. The corrected wiring
+   and runtime (rather than intended) parameter reporting are now covered by a
+   regression test. `nvidia-v4-cache-merge-and-retry-cap` also fixes stale
+   translator instances overwriting each other's persisted cache entries; it
+   has not yet been live-tested. Old measurements are not rewritten.
 
 An unavailable translator/model is **incomplete**, not a baseline score labeled
 with that model's name. No automatic model fallback is allowed. Bounded retries,

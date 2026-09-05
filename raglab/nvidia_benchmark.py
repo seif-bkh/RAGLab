@@ -254,8 +254,10 @@ def generate_arm(cfg, collection, cases, retrieval_run, label):
         print(f"[answer-test] circuit open for {cfg.ANSWER_MODEL}; untested questions remain unscored")
     return {"label": label, "model": cfg.ANSWER_MODEL, "prompt": cfg.ANSWER_PROMPT_VERSION,
             "neighbor_radius": cfg.ANSWER_NEIGHBOR_RADIUS, "workers": workers,
-            "timeout_s": cfg.NVIDIA_API_TIMEOUT, "attempts": cfg.NVIDIA_API_ATTEMPTS,
-            "min_interval_s": cfg.NVIDIA_MIN_INTERVAL,
+            "timeout_s": generator.client.timeout, "attempts": generator.client.attempts,
+            "min_interval_s": generator.client.min_interval,
+            "max_retry_delay_s": generator.client.max_retry_delay,
+            "api_endpoint": generator.client.base_url,
             "status": "completed" if len(rows) == len(cases) else "incomplete",
             "metrics": answer_metrics(rows), "result_file": f"answers_{label}.json", "questions": rows}
 
@@ -338,7 +340,7 @@ def run(stage="retrieval", quality=True, answer_profiles="all"):
     cfg = make_config()
     report = {"generated_at": datetime.now(timezone.utc).isoformat(), "stage": stage,
               "status": "running", "embedding_model": EMBED_MODEL, "exact_models": list(TRANSLATION_MODELS),
-              "protocol_version": "nvidia-v3-source-valid-references-serial-answers", "answer_profiles": list(versions),
+              "protocol_version": "nvidia-v4-cache-merge-and-retry-cap", "answer_profiles": list(versions),
               "retrieval": [], "translation_quality": {}, "generation": [], "errors": [], "gates": {"thresholds": GATES},
               "environment": {"python": platform.python_version(), "dependencies": {
                   name: importlib.metadata.version(name) for name in ["chromadb", "tiktoken", "pypdf", "sacrebleu"]}}}

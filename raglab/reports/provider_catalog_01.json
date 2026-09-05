@@ -1,0 +1,74 @@
+{
+  "generated_at": "2026-09-05T14:40:34.304303+00:00",
+  "mode": "catalog_only",
+  "inference_calls": 0,
+  "documents_sent": false,
+  "models_substituted": false,
+  "limitation": "A catalog listing, including HTTP 200, does not prove key validity, inference availability, exact upstream identity, or quality.",
+  "providers": [
+    {
+      "provider": "xkiro",
+      "base_url": "https://api.xkiro.com/v1",
+      "key_env": "XKIRO_API_KEY",
+      "documentation": "https://docs.xkiro.com/",
+      "identity_note": "Docs say the response reports the requested model across routing; not upstream identity proof.",
+      "credential_configured": true,
+      "inference_calls": 0,
+      "catalog_requests": 1,
+      "status": "catalog_listed",
+      "advertised_model_count": 112,
+      "listed_exact_ids": [
+        "moonshotai/kimi-k3"
+      ],
+      "absent_exact_ids": [
+        "nvidia/nemotron-3-embed-1b",
+        "deepseek-ai/deepseek-v4-pro-0813",
+        "nvidia/riva-translate-4b-instruct-v2"
+      ],
+      "related_ids": [
+        "deepseek/deepseek-chat-v3.1",
+        "deepseek/deepseek-v3.2",
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-flash-0731",
+        "deepseek/deepseek-v4-flash-vision-exp",
+        "deepseek/deepseek-v4-pro",
+        "deepseek/deepseek-v4-pro-0813",
+        "moonshotai/kimi-k2.5",
+        "moonshotai/kimi-k2.6",
+        "moonshotai/kimi-k2.7-code",
+        "moonshotai/kimi-k3",
+        "nvidia/llama-3.3-nemotron-super-49b",
+        "nvidia/nemotron-3-nano",
+        "nvidia/nemotron-3-nano-omni",
+        "nvidia/nemotron-3-super",
+        "nvidia/nemotron-3-ultra"
+      ],
+      "related_ids_truncated": false
+    },
+    {
+      "provider": "kiosapi",
+      "base_url": "https://kiosapi.com/v1",
+      "key_env": "KIOSAPI_API_KEY",
+      "documentation": "https://kiosapi.mintlify.app/getting-started/quickstart",
+      "identity_note": "An OpenAI-compatible catalog is not proof of exact upstream identity or inference availability.",
+      "credential_configured": true,
+      "inference_calls": 0,
+      "catalog_requests": 1,
+      "status": "catalog_listed",
+      "advertised_model_count": 0,
+      "listed_exact_ids": [],
+      "absent_exact_ids": [
+        "nvidia/nemotron-3-embed-1b",
+        "moonshotai/kimi-k3",
+        "deepseek-ai/deepseek-v4-pro-0813",
+        "nvidia/riva-translate-4b-instruct-v2"
+      ],
+      "related_ids": [],
+      "related_ids_truncated": false
+    }
+  ],
+  "measurement_source": {
+    "run_id": 33972512410,
+    "check_id": 101323428812
+  }
+}

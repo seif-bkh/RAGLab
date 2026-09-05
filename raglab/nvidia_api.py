@@ -42,9 +42,10 @@ class NvidiaAPIError(RuntimeError):
 def safe_error(value):
     """Provider errors can echo requests: redact key-shaped strings defensively."""
     text = str(value)
-    key = os.environ.get("NVIDIA_API_KEY", "").strip()
-    if key:
-        text = text.replace(key, "[REDACTED]")
+    for name in ('NVIDIA_API_KEY', 'XKIRO_API_KEY', 'KIOSAPI_API_KEY'):
+        key = os.environ.get(name, '').strip()
+        if key:
+            text = text.replace(key, '[REDACTED]')
     return re.sub(r"(?:nvapi-|sk-)[A-Za-z0-9_-]{12,}", "[REDACTED]", text)[:600]
 
 
@@ -123,7 +124,8 @@ class NvidiaClient:
     def __init__(self, *, base_url=BASE_URL, timeout=120, attempts=3,
                  min_interval=1.6, max_retry_delay=30, api_key=None, stream=False):
         self.base_url = base_url.rstrip("/")
-        self.api_key = (api_key or os.environ.get("NVIDIA_API_KEY", "")).strip()
+        # An explicitly empty key must not fall back to another provider's key.
+        self.api_key = (os.environ.get('NVIDIA_API_KEY', '') if api_key is None else api_key).strip()
         self.timeout = float(timeout)
         self.attempts = int(attempts)
         self.min_interval = float(min_interval)

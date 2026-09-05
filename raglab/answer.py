@@ -6,10 +6,9 @@ access, web lookup, or transactions are available to the generator.
 """
 import json
 import re
-import threading
 from pathlib import Path
 
-from artifacts import fingerprint, write_json
+from artifacts import cache_lock, fingerprint, write_json
 from chunker import count_tokens
 from loader import normalize_arabic
 from nvidia_api import ANSWER_MODELS, NvidiaClient, safe_error
@@ -146,18 +145,25 @@ class AnswerGenerator:
             base_url=getattr(cfg, "NVIDIA_TRANSLATION_BASE_URL", "https://integrate.api.nvidia.com/v1/chat/completions").removesuffix("/chat/completions"),
             timeout=getattr(cfg, "NVIDIA_API_TIMEOUT", 120), attempts=getattr(cfg, "NVIDIA_API_ATTEMPTS", 3),
             min_interval=getattr(cfg, "NVIDIA_MIN_INTERVAL", 1.6),
+            max_retry_delay=getattr(cfg, 'NVIDIA_MAX_RETRY_DELAY', 30),
             stream=getattr(cfg, "NVIDIA_CHAT_STREAM", False))
         self.cache_path = Path(cfg.ANSWER_CACHE_PATH)
-        self.cache = {}
-        self._cache_lock = threading.Lock()
-        if self.cache_path.exists():
-            try:
-                data = json.loads(self.cache_path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    self.cache = data
-            except (OSError, ValueError):
-                print("[answer] WARNING: unreadable cache; answers will be regenerated")
+        self._cache_lock = cache_lock(self.cache_path)
+        with self._cache_lock:
+            self.cache = self._read_cache()
         self.cache_hits = 0
+
+    def _read_cache(self):
+        try:
+            data = json.loads(self.cache_path.read_text(encoding='utf-8'))
+            if not isinstance(data, dict):
+                raise ValueError('Malformed answer cache')
+            return data
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError):
+            print("[answer] WARNING: unreadable cache; answers will be regenerated")
+            return {}
 
     def answer(self, question, hits, language=None, use_cache=True):
         language = language or detect_language(question)
@@ -178,6 +184,8 @@ class AnswerGenerator:
                            "endpoint": getattr(self.client, "base_url", "injected"),
                            "messages": messages, "max_tokens": max_tokens})
         with self._cache_lock:
+            if use_cache and key not in self.cache:
+                self.cache.update(self._read_cache())
             cached = self.cache.get(key) if use_cache else None
         try:
             if cached:
@@ -198,7 +206,7 @@ class AnswerGenerator:
                     "answer": REFUSALS[language], "error": safe_error(exc)}
         if not cached and use_cache:
             with self._cache_lock:
-                self.cache[key] = response
+                self.cache = {**self._read_cache(), key: response}
                 write_json(self.cache_path, self.cache)
         answer = "\n".join(c["text"] + " " + " ".join(f"[{s}]" for s in
                            dict.fromkeys(e["source_id"] for e in c["evidence"])) for c in claims)

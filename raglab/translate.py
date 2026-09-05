@@ -16,7 +16,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-from artifacts import fingerprint, write_json
+from artifacts import cache_lock, fingerprint, write_json
 from embedder import require_provider_sdk
 from nvidia_api import (RIVA_MODEL, DEEPSEEK_MODEL, NvidiaClient,
                         NvidiaAPIError, safe_error)
@@ -66,30 +66,66 @@ def translation_issues(source, translated, target):
 class TranslationCache:
     def __init__(self, path):
         self.path = Path(path)
-        self.entries = {}
         self.model = ""
-        if self.path.exists():
-            try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
-                if isinstance(data.get("entries"), dict):
-                    self.entries = data["entries"]
-            except (OSError, ValueError, AttributeError):
-                print("[translate] WARNING: unreadable cache; translations will be regenerated")
+        self._lock = cache_lock(self.path)
+        self._dirty = {}
+        with self._lock:
+            self.entries = self._read()
+            self._stamp = self._file_stamp()
+
+    def _read(self):
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get('entries'), dict):
+                return data['entries']
+            raise ValueError('Malformed translation cache')
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError):
+            print("[translate] WARNING: unreadable cache; translations will be regenerated")
+            return {}
+
+    def _file_stamp(self):
+        try:
+            stat = self.path.stat()
+            return stat.st_mtime_ns, stat.st_size, stat.st_ino
+        except FileNotFoundError:
+            return None
+
+    def _refresh(self):
+        stamp = self._file_stamp()
+        if stamp != self._stamp:
+            self.entries = {**self._read(), **self._dirty}
+            self._stamp = stamp
 
     @staticmethod
     def key(model, target, text):
         return hashlib.sha256(f"{model}\n{target}\n{text}".encode()).hexdigest()
 
     def get(self, model, target, text):
-        item = self.entries.get(self.key(model, target, text))
-        return item if isinstance(item, dict) and item.get("translation") else None
+        with self._lock:
+            self._refresh()
+            item = self.entries.get(self.key(model, target, text))
+            return dict(item) if isinstance(item, dict) and item.get("translation") else None
 
     def put(self, identity, target, text, translation, **metadata):
-        self.entries[self.key(identity, target, text)] = {
-            "target": target, "preview": text[-90:], "translation": translation, **metadata}
+        with self._lock:
+            key = self.key(identity, target, text)
+            item = {"target": target, "preview": text[-90:], "translation": translation, **metadata}
+            self.entries[key] = self._dirty[key] = item
 
     def save(self):
-        write_json(self.path, {"schema_version": 2, "model": self.model, "entries": self.entries})
+        with self._lock:
+            if not self._dirty:
+                self._refresh()
+                return
+            # Several benchmark translators coexist. An older instance must
+            # never replace entries subsequently written by another model.
+            merged = {**self._read(), **self._dirty}
+            write_json(self.path, {"schema_version": 2, "model": self.model, "entries": merged})
+            self.entries = merged
+            self._dirty.clear()
+            self._stamp = self._file_stamp()
 
 
 class QueryTranslator:
