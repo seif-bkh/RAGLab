@@ -58,15 +58,39 @@ hit@1 (at 85–95% vector dominance); λ=0.70 maximizes recall (q10 10→15,
 h5 .929). Choose with `HYBRID_BLEND_LAMBDA`; CI prints both verdicts on every
 run.
 
-## Real docs (docs/, 4 Arabic documents → 573 chunks, n=14)
+## Real docs — 2026-09-05: rq13 root cause FOUND AND FIXED (chunker)
 
-The user's actual corpus and question set (`questions_real.json`, rq01–rq14
-scored; rq15/rq16 out-of-scope, excluded). REQUIRES: 573 chunks vs the
-earlier local count of 213: the sandbox could not download the tiktoken BPE
-files, so local chunking used the fallback estimator; CI uses the real
-tokenizer and 573 chunks is the authoritative split. 13/14 ground-truth
-chunks are retrieved in the top-20 by the vector baseline on the CI split
-(rq13 is the single hard miss — correct chunk not in top-20 for ANY mode).
+**rq13's hard miss was never a ranking problem — it was a chunking bug.**
+`normalize_text()` claimed to keep "one blank line between paragraphs" but
+never emitted any separator: every document reached the chunker as ONE giant
+paragraph, which the chunker then hard-split at WORD boundaries (573 chunks
+under CI's tiktoken). Expected-match phrases straddling a word cut were
+simply not in any chunk → unreachable for every retriever (rq13).
+
+Fix (committed `63ec02e`):
+- `normalize_text` now really preserves paragraph boundaries (blank line
+  between paragraphs and around block lines; wrapped lines still reflow;
+  consecutive list items / table rows stay contiguous).
+- `read_docx` separates each `<w:p>` paragraph (a .docx has no blank lines).
+- `_hard_split` now splits oversized paragraphs at SENTENCE boundaries
+  (Latin + Arabic) first; only single sentences over the whole budget fall
+  back to word cuts.
+
+Deterministic proof (offline, zero API calls — new CI STEP 1b):
+`real-docs offline chunking: chunks=836 coverage=16/16 all covered` (run
+`33943254671`, real tiktoken). **rq13 is now reachable.**
+
+Offline BM25 upper bounds over the new chunks (regex tokenizer ⇒ identical
+in CI): rq13 Arabic phrase → rank 1 (was None); rq14 → 1; rq10 → 1; rq12 → 1.
+Original-language queries stay weak for cross-lingual cases (expected — the
+eval uses query translations).
+
+Real-docs retrieval numbers are being re-measured after the daily embedding
+quota reset (the run that would contain them deferred on 429; quota resets
+~07:00 UTC). Historical numbers below are the OLD (buggy) split and are
+superseded:
+
+### Historical (OLD 573-chunk split, pre-fix — superseded)
 
 Vector baseline: h1 .786 / h3 .857 / h5 .929 — cross-lingual h1 .571,
 verbatim/paraphrase h1 1.000, Arabic questions h1 1.000; separation gap
@@ -79,16 +103,13 @@ rq12 3→1 but breaks rq03 1→3, rq08 1→2, rq14 5→13, verbatim 1.0→.8.
 
 Blend (real sweep): λ=.65/.70/.75/.85 → h1 .429/.429/.500/.643 (all
 rq10 rank=1, h3 .714, h5 .786). Best λ=.85 h1 .643 < vector .786 → the
-acceptance verdict on the REAL corpus is **hit@1 recovered: NO** (and
-λ=0.70 h1 .429 → NO). On the Arabic real corpus, hybrid/BM25 strictly
-hurts: the naive Arabic keyword matching (no morphological normalization)
-and the strong vector baseline mean the measured optimum is pure vector
-(λ→1.0). Recommendation: `HYBRID_BLEND_LAMBDA=1.0` (or `--hybrid-blend`
-kept only for the fictional/FR-AR corpus).
+acceptance verdict on the REAL corpus was **hit@1 recovered: NO** (and
+λ=0.70 h1 .429 → NO) — but this was measured on the buggy split, where
+hybrid could only rescue reachable chunks. The verdict is void until the
+post-fix sweep re-runs.
 
-NOTE: these results only became possible after the API key was renewed —
-the old key's daily quota never allowed the 573-chunk ingest + evaluations;
-the new key ran the full real-docs pipeline in one job.
+NOTE: only superseded by the post-fix re-measurement; the old key's quota
+limitations are historical (renewed key enabled the full real pipeline).
 
 ## CI run IDs (branch push, all jobs)
 
@@ -107,6 +128,20 @@ the new key ran the full real-docs pipeline in one job.
   completed (573 chunks, n=14); PASSED.
 - `33937314918` — merged notices (`7a6bbfb`): real-docs blend/sweep +
   acceptance verdicts now visible; reproduces the same numbers. PASSED.
+- `33942433980` — BM25 metadata cue on (`123b6bf`): real blend h1 .429→.643,
+  rq14 rank 5→1 (source-name cue); rq13 None → coverage FAIL (root cause
+  lead). FAILED only on the coverage assertion.
+- `33942581451` — aggregated diagnostics (`4ddc9b6`): `UNREACHABLE (substring
+  not in any chunk): rq13` — chunk-boundary bug confirmed. FAILED on
+  coverage.
+- `33942678443` — split-point evidence (prefix/suffix chunk holders) +
+  env-gated chunk sizes (`a5a999f`). FAILED on coverage.
+- `33942821027` — chunk-size A/B attempt; evidence shows prefix and suffix
+  INSIDE chunk_0023 (phrase cut in the middle) — then the 340-token ingest
+  hit the daily 429 and crashed (pre-deferral-wrap). FAILED.
+- `33943254671` — **chunker fix (`63ec02e`) + offline coverage gate**:
+  `chunks=836 coverage=16/16 all covered`, fictional metrics unchanged
+  (markdown was unaffected), real leg deferred on quota. PASSED.
 
 ## 2026-09-05 — free local Arabic-capable embeddings + log-pushing runner
 
