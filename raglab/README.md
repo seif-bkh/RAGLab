@@ -4,11 +4,12 @@ RAGLab keeps raw, inspectable provider calls and a local ChromaDB index. It has
 no web UI, authentication, transaction tools, or cloud vector store. Generation
 is now **optional**; `query` and `evaluate` still stop at retrieval.
 
-**[Current measured results and production blockers](NVIDIA_REPORT.md).** The
-experimental defaults are Nemotron embeddings, Kimi/banking-v2 translation, and
-DeepSeek/grounded-v1 answers (the only completed development answer profile so
-far). Held-out generation and security testing are incomplete; none is a
-production-certified choice.
+**[Tested free-model recommendation](FREE_MODELS_REPORT.md)** and
+[separate exact NVIDIA results](NVIDIA_REPORT.md). The best measured free answer
+profile is **xKiro `qwen/qwen3.8-max:free` with original-query Nemotron retrieval**.
+It passed the small development/holdout/source-injection gates; it is not
+production-certified. Native NVIDIA defaults are retained for compatibility;
+the tested free path is an explicit provider/model choice below.
 
 ## Setup
 
@@ -138,10 +139,22 @@ an answer. Free/trial endpoints have no production latency guarantee.
 ## Optional grounded answers
 
 ```bash
+# Native NVIDIA model path (existing default)
 python main.py answer "Which year was Bank Al Baraka Tunisia founded?" --query-lang en
+
+# Best tested free gateway profile: keep native Nemotron, no chat translation
 python main.py answer "Quelle est la définition du financement Salam ?" \
-  --query-lang fr --model moonshotai/kimi-k3 --neighbor-radius 1 --show-context
+  --query-lang fr --provider xkiro --model 'qwen/qwen3.8-max:free' --no-translation
 ```
+
+`--provider xkiro|kiosapi` is explicit opt-in. The factory checks the requested
+SKU against live zero-price rules before billable embedding calls; it never
+retries a paid sibling or swaps to a different model. Set that provider's own
+key in `.env` or the environment. Private/live-account refusals happen locally,
+before pricing/provider construction or index access. KiosAPI additionally needs
+a token permitted to use its **Free** group; the tested default-group token had
+no matching channels. Ordinary NVIDIA answers remain restricted to the two
+requested Kimi/DeepSeek IDs.
 
 `answer.py` asks the selected Kimi/DeepSeek model for JSON claims, each with a
 source ID and a contiguous verbatim evidence quote. It renders only validated
@@ -252,8 +265,8 @@ A catalog listing—even HTTP 200—does not prove key validity, inference avail
 model quality, or the actual upstream engine. Family/alias matches are reported
 separately, **never substituted** for the exact requested model IDs. xKiro's docs
 say that its response reports the requested model across routing, so checking
-that response field alone cannot establish exact upstream identity. These are
-not active pipeline providers and are not folded into the NVIDIA benchmark.
+that response field alone cannot establish exact upstream identity. Catalog checks alone do not activate a provider. Subsequent free-gateway
+inference is explicitly selected and reported separately from the NVIDIA benchmark.
 
 Published endpoints/docs: [xKiro](https://docs.xkiro.com/),
 [KiosAPI](https://kiosapi.mintlify.app/getting-started/quickstart).

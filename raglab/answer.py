@@ -135,10 +135,49 @@ def validate_answer(output, sources):
     return clean
 
 
+def local_private_refusal(cfg, question, language=None):
+    """Capability refusal without provider construction, pricing, or inference."""
+    language = language or detect_language(question)
+    if language not in REFUSALS:
+        raise ValueError('Answer language must be en, fr or ar')
+    if not needs_private_or_live_data(question):
+        return None
+    return {'model': cfg.ANSWER_MODEL, 'provider': getattr(cfg, 'ANSWER_PROVIDER', 'nvidia'),
+            'prompt_version': getattr(cfg, 'ANSWER_PROMPT_VERSION', 'grounded-v1'),
+            'api_endpoint': None, 'language': language, 'claims': [], 'sources': [],
+            'cached': False, 'inference_performed': False, 'validation_ok': True,
+            'provider_ok': True, 'seconds': 0, 'status': 'refused',
+            'reason': 'private_or_live_request', 'answer': REFUSALS[language]}
+
+
+def build_answer_generator(cfg, *, call_budget=1):
+    """One-shot CLI factory. Alternative gateways must pass live free-price checks."""
+    provider = getattr(cfg, 'ANSWER_PROVIDER', 'nvidia')
+    if provider == 'nvidia':
+        return AnswerGenerator(cfg)
+    if provider not in {'xkiro', 'kiosapi'}:
+        raise ValueError(f'Unknown answer provider {provider!r}')
+    from free_gateway import FreeGatewayClient, load_pricing
+    from provider_catalog import PROVIDERS
+    import os
+    key_name = PROVIDERS[provider]['key_env']
+    if not os.environ.get(key_name, '').strip():
+        raise ValueError(f'{key_name} is not configured; set the environment or .env')
+    try:
+        pricing = load_pricing(provider)
+    except Exception as exc:
+        raise RuntimeError(f'Cannot verify current free pricing for {provider}: {safe_error(exc)}') from None
+    client = FreeGatewayClient(provider, cfg.ANSWER_MODEL, pricing,
+                               budget={'used': 0, 'limit': call_budget})
+    return AnswerGenerator(cfg, client, approved_models=(cfg.ANSWER_MODEL,))
+
+
 class AnswerGenerator:
     def __init__(self, cfg, client=None, *, approved_models=None):
         self.cfg = cfg
         self.model = cfg.ANSWER_MODEL
+        if client is None and getattr(cfg, 'ANSWER_PROVIDER', 'nvidia') != 'nvidia':
+            raise ValueError('Gateway answers require an explicit price-checked client; use build_answer_generator')
         if approved_models is not None and client is None:
             raise ValueError('Alternative-model experiments require an explicit provider client')
         allowed = ANSWER_MODELS if approved_models is None else tuple(approved_models)
@@ -178,8 +217,9 @@ class AnswerGenerator:
                 "api_endpoint": getattr(self.client, 'base_url', 'injected'),
                 "language": language, "claims": [], "sources": [], "cached": False,
                 "validation_ok": True, "provider_ok": True, "seconds": 0.0}
-        if needs_private_or_live_data(question):
-            return {**base, "status": "refused", "reason": "private_or_live_request", "answer": REFUSALS[language]}
+        guarded = local_private_refusal(self.cfg, question, language)
+        if guarded is not None:
+            return guarded
         sources = build_sources(hits, getattr(self.cfg, "ANSWER_CONTEXT_TOKENS", 3000))
         base["sources"] = sources
         if not sources:
@@ -236,4 +276,9 @@ def generate_answer(question, retrieved_chunks, model_name=None):
         cfg.ANSWER_MODEL = model_name
     else:
         cfg = config
-    return AnswerGenerator(cfg).answer(question, retrieved_chunks)["answer"]
+    guarded = local_private_refusal(cfg, question)
+    if guarded is not None:
+        return guarded['answer']
+    if not retrieved_chunks:
+        return REFUSALS[detect_language(question)]
+    return build_answer_generator(cfg).answer(question, retrieved_chunks)["answer"]

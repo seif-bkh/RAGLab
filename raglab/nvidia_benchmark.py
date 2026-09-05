@@ -58,6 +58,7 @@ def make_config(**overrides):
     cfg.QUERY_TRANSLATION_STRICT = True
     cfg.NVIDIA_TRANSLATION_FALLBACK_MODELS = ""
     cfg.QUERY_TRANSLATION_CACHE_PATH = CACHE / "translations_cache.json"
+    cfg.ANSWER_PROVIDER = 'nvidia'  # never inherit a gateway CLI choice into this benchmark
     cfg.ANSWER_CACHE_PATH = CACHE / "answers_cache.json"
     cfg.RESULTS_DIR = OUTPUT
     cfg.CHROMA_DIR = CACHE / "chroma_db"

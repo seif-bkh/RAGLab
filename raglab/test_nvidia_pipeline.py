@@ -505,6 +505,39 @@ class FreeGatewayPolicy(unittest.TestCase):
         row['billing_expr'] = 'fixed_fee'
         self.assertFalse(free_eligibility('kiosapi', 'free-sku', catalog)[0])
 
+    def test_cli_gateway_factory_is_explicit_and_price_checked(self):
+        from answer import build_answer_generator
+        cfg = make_config(ANSWER_PROVIDER='xkiro', ANSWER_MODEL='example/model:free')
+        with patch.dict(os.environ, {'XKIRO_API_KEY': 'x-only', 'NVIDIA_API_KEY': 'nvidia-only'}), \
+             patch('free_gateway.load_pricing', return_value={'catalog': self.xcatalog()}):
+            generator = build_answer_generator(cfg)
+        self.assertEqual(generator.client.base_url, 'https://api.xkiro.com/v1')
+        self.assertEqual(generator.client.api_key, 'x-only')
+        self.assertEqual(generator.model, 'example/model:free')
+        self.assertEqual(generator.client.budget['limit'], 1)
+
+    def test_cli_private_guard_needs_no_gateway_or_index(self):
+        from main import main
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'refusal.json'
+            with patch.dict(os.environ, {}, clear=True), \
+                 patch('answer.build_answer_generator', side_effect=AssertionError('provider call')), \
+                 patch('main.get_collection', side_effect=AssertionError('index access')), \
+                 patch('sys.stdout', new_callable=io.StringIO):
+                code = main(['answer', 'What is my account balance?', '--provider', 'xkiro',
+                             '--model', 'example/model:free', '--query-lang', 'en', '--output', str(path)])
+            self.assertEqual(code, 0)
+            result = json.loads(path.read_text())
+            self.assertEqual(result['reason'], 'private_or_live_request')
+            self.assertFalse(result['inference_performed'])
+            self.assertEqual(result['provider'], 'xkiro')
+
+    def test_native_benchmark_does_not_inherit_gateway_cli_provider(self):
+        import config
+        with patch.object(config, 'ANSWER_PROVIDER', 'xkiro'):
+            self.assertEqual(make_config().ANSWER_PROVIDER, 'nvidia')
+        self.assertEqual(make_config(ANSWER_PROVIDER='kiosapi').ANSWER_PROVIDER, 'kiosapi')
+
     def test_pricing_reads_scope_credentials_and_identify_the_client(self):
         from free_gateway import load_pricing
         requests = []

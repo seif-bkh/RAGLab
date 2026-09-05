@@ -22,9 +22,10 @@ The serial basic-profile resume also finished **incomplete**
 came from cache; new answer attempts still returned HTTP 429. The temporary
 GitHub authentication interruption was resolved.
 
-The new xKiro/KiosAPI keys were detected in Actions and used only for read-only
-catalog checks. No gateway inference has been performed or mixed into these
-NVIDIA measurements. See the additional-provider section below.
+The initial xKiro/KiosAPI key checks were read-only catalogs. Subsequent
+user-authorized free-gateway inference is documented separately in
+[FREE_MODELS_REPORT.md](FREE_MODELS_REPORT.md), including the Qwen result and
+KiosAPI routing blocker. Those results are **not mixed into these NVIDIA measurements**.
 
 ## What was actually executed
 
@@ -167,7 +168,7 @@ optional JSON claims with verbatim evidence/citation validation. Invalid outputs
 fail closed; provider failures are distinct from “not in the documents.” No
 orchestration framework, UI, account access or cloud vector database was added.
 
-**113 offline checks pass** (59 legacy + 54 pipeline/report/provider-catalog tests), together
+**128 offline checks pass** (59 legacy + 69 pipeline/report/gateway/CLI tests), together
 with compilation and `pip check`. Remote CI has also passed
 ([run 33971261523](https://github.com/seif-bkh/RAGLab/actions/runs/33971261523));
 newer changes have also passed the local checks and are being pushed for CI. Offline/CI success is not a live

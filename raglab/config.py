@@ -236,6 +236,7 @@ RETRIEVAL_CANDIDATE_K = 20
 
 # Only completed development answer arm in iteration 02; still provisional:
 # held-out generation and security testing were rate-limited, not passed.
+ANSWER_PROVIDER = os.getenv("ANSWER_PROVIDER", "nvidia").strip().lower()
 ANSWER_MODEL = os.getenv("ANSWER_MODEL", "deepseek-ai/deepseek-v4-pro-0813")
 ANSWER_PROMPT_VERSION = os.getenv("ANSWER_PROMPT_VERSION", "grounded-v1")
 ANSWER_WORKERS = int(os.getenv("ANSWER_WORKERS", "1"))

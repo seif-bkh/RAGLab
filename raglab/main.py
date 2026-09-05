@@ -279,26 +279,29 @@ def cmd_evaluate(args) -> int:
 
 
 def cmd_answer(args):
-    from answer import AnswerGenerator, needs_private_or_live_data
+    from answer import build_answer_generator, local_private_refusal
     local = SimpleNamespace(**{key: getattr(cfg, key) for key in dir(cfg) if key.isupper()})
     local.ANSWER_MODEL = args.model
-    generator = AnswerGenerator(local)
+    local.ANSWER_PROVIDER = args.provider
     question = " ".join(args.question).strip()
-    if not question:
-        raise ValueError("Question must not be empty")
+    if not question or args.k <= 0:
+        raise ValueError("Question must not be empty and k must be positive")
     language = args.query_lang or detect_language(question)
     hits, variants = [], []
-    if not needs_private_or_live_data(question):
+    result = local_private_refusal(local, question, language)
+    if result is None:
         collection = get_collection(cfg)
         if not collection.count():
             raise ValueError("Collection is empty; run python main.py ingest --reset --data-dir ../docs")
+        # Validate model/provider/free-price eligibility before billable embedding calls.
+        generator = build_answer_generator(local)
         embedder = make_embedder(skip_sanity=True)
         translator = None if args.no_translation else make_translator()
         hits, variants = retrieve(cfg, embedder, collection, prepare_query_text(question),
                                   language=language, translator=translator, top_k=args.k,
                                   variant_strategy=args.variant_strategy)
         hits = expand_neighbors(collection, hits, args.neighbor_radius)
-    result = generator.answer(question, hits, language)
+        result = generator.answer(question, hits, language)
     result.update(question=question, query_variants=variants)
     print(result["answer"])
     for source in result["sources"]:
@@ -394,10 +397,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="skip the default 3-language sanity check")
     p_eval.set_defaults(func=cmd_evaluate)
 
-    from nvidia_api import ANSWER_MODELS
     p_answer = sub.add_parser("answer", help="generate a document-grounded, cited answer or refusal")
     p_answer.add_argument("question", nargs="+")
-    p_answer.add_argument("--model", choices=ANSWER_MODELS, default=cfg.ANSWER_MODEL)
+    p_answer.add_argument('--provider', choices=['nvidia', 'xkiro', 'kiosapi'], default=cfg.ANSWER_PROVIDER,
+                          help='gateway choices enforce current zero-priced SKUs; no paid fallback')
+    p_answer.add_argument("--model", default=cfg.ANSWER_MODEL,
+                          help='exact provider request ID; NVIDIA remains restricted to the requested Kimi/DeepSeek IDs')
     p_answer.add_argument("--query-lang", choices=["en", "fr", "ar"], default=None)
     p_answer.add_argument("-k", type=int, default=cfg.ANSWER_TOP_K)
     p_answer.add_argument("--no-translation", action="store_true")
