@@ -157,6 +157,8 @@ def author_messages(specs, units, prior_error=''):
               'Test different policy facets, exceptions, conditional applications and misleading premises; '
               'do not pad with near-identical paraphrases, questions about page numbers, or answers copied into questions. '
               'Use concise questions a real user could ask, honoring the assigned question_style. '
+              'Keep each reference answer to one to three short sentences (normally at most 70 words), '
+              'required_facts to one to four concise semantic points, and forbidden_claims to at most three specific errors. '
               'Conversational Arabic may use light Tunisian phrasing but remain Arabic script; French/English should sound natural. '
               'Minor typos must not alter essential numbers, entities or negation; all language versions must retain the same intended problem. '
               'For supported cases, answer solely from the supplied original-source units; '

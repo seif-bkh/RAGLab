@@ -1,7 +1,7 @@
 {
   "version": "hard-harness-v1",
-  "revision": "04-verified-reference-source-release",
-  "phase": "sources",
+  "revision": "05-author-paired-reference-families",
+  "phase": "author",
   "languages": [
     "ar",
     "fr",
@@ -47,5 +47,6 @@
   "answer_shards": 30,
   "answer_shard_size": 100,
   "random_seed": 20260905,
-  "source_runtime_manifest": "807785db25fb798499e67f12f59589f6db33792e88cb00cf104752853046e60e"
+  "source_runtime_manifest": "807785db25fb798499e67f12f59589f6db33792e88cb00cf104752853046e60e",
+  "sources_run": "33985662461"
 }

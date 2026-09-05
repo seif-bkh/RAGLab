@@ -96,8 +96,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
-      fail-fast: true
-      max-parallel: 1
+      fail-fast: false
+      max-parallel: 2
       matrix:
         shard: [0,1,2,3,4,5,6,7,8]
     steps:
@@ -117,13 +117,30 @@ jobs:
           restore-keys: hard-author-v1-${{ github.ref_name }}-${{ matrix.shard }}-
       - id: paths
         run: echo "output_dir=$(printf 'raglab/results/hard_harness/author_%02d' ${{ matrix.shard }})" >> "$GITHUB_OUTPUT"
+      - name: Check for a shared quota pause before authoring
+        id: gate
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: python raglab/hard_harness_main.py gate --phase author --shard ${{ matrix.shard }}
       - name: Author references without candidate answers
+        id: work
+        if: steps.gate.outputs.run == 'true'
         env:
           HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.key_secret] }}
           HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.key_secret }}
           PYTHONUNBUFFERED: "1"
           TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
-        run: python raglab/hard_harness_main.py author --shard ${{ matrix.shard }}
+        run: |
+          set +e
+          python raglab/hard_harness_main.py author --shard ${{ matrix.shard }}
+          RESULT=$?
+          python raglab/hard_harness_main.py record-pause --phase author --shard ${{ matrix.shard }}
+          exit "$RESULT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.work.outputs.paused == 'true'
+        with:
+          name: hard-harness-pause-author-${{ matrix.shard }}
+          path: ${{ steps.paths.outputs.output_dir }}/manifest.json
+          retention-days: 30
       - uses: actions/cache/save@v4
         if: always()
         with:
@@ -240,8 +257,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
-      fail-fast: true
-      max-parallel: 1
+      fail-fast: false
+      max-parallel: 2
       matrix:
         shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
     steps:
@@ -259,13 +276,30 @@ jobs:
           restore-keys: hard-answer-v1-${{ github.ref_name }}-${{ matrix.shard }}-
       - id: paths
         run: echo "output_dir=$(printf 'raglab/results/hard_harness/predictions_%02d' ${{ matrix.shard }})" >> "$GITHUB_OUTPUT"
+      - name: Check for a shared quota pause before answering
+        id: gate
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: python raglab/hard_harness_main.py gate --phase predict --shard ${{ matrix.shard }}
       - name: Run candidate; completed outputs (including failures) are checkpointed
+        id: work
+        if: steps.gate.outputs.run == 'true'
         env:
           HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.key_secret] }}
           HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.key_secret }}
           TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
           PYTHONUNBUFFERED: "1"
-        run: python raglab/hard_harness_main.py predict --shard ${{ matrix.shard }}
+        run: |
+          set +e
+          python raglab/hard_harness_main.py predict --shard ${{ matrix.shard }}
+          RESULT=$?
+          python raglab/hard_harness_main.py record-pause --phase predict --shard ${{ matrix.shard }}
+          exit "$RESULT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.work.outputs.paused == 'true'
+        with:
+          name: hard-harness-pause-predict-${{ matrix.shard }}
+          path: ${{ steps.paths.outputs.output_dir }}/manifest.json
+          retention-days: 30
       - uses: actions/cache/save@v4
         if: always()
         with:

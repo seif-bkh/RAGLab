@@ -51,8 +51,9 @@ identify the exact earlier artifacts; ordinary code changes do not spend API quo
 - Candidate results are checkpointed per case. A malformed but completed response
   is a measured failure; it is not rerun until it happens to become valid.
 - Shard-specific Actions cache keys avoid one worker replacing another worker's
-  checkpoint. Matrices run serially and stop on failure so a quota event does not
-  trigger dozens of additional requests.
+  checkpoint. At most two shards run concurrently. A shared pause artifact prevents queued
+  shards from making model calls after a quota event; in-flight shards preserve
+  their own checkpoints rather than being forcibly cancelled.
 - Every completed/paused job saves artifacts and neutral, byte-bounded Checks.
   `hard_harness_main.py collect --sha SHA` verifies and reconstructs those files
   when redirected artifact downloads are unavailable in the sandbox.

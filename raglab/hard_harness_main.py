@@ -12,6 +12,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('sources')
+    for action in ('gate','record-pause'):
+        command = sub.add_parser(action)
+        command.add_argument('--phase', choices=['author','predict'], required=True)
+        command.add_argument('--shard', type=int, required=True)
     author = sub.add_parser('author'); author.add_argument('--shard', type=int, required=True)
     sub.add_parser('compile-dataset')
     sub.add_parser('retrieve')
@@ -23,6 +27,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     OUTPUT.mkdir(parents=True, exist_ok=True)
     WORK.mkdir(parents=True, exist_ok=True)
+    if args.command in {'gate','record-pause'}:
+        from hard_harness.control import gate, record_pause
+        (gate if args.command == 'gate' else record_pause)(args.phase,args.shard)
+        return 0
     if args.command == 'publish':
         from hard_harness.publishing import publish
         publish(args.phase); return 0
@@ -58,7 +66,7 @@ def main(argv=None):
     except Exception as exc:
         phase = {'author': f'author_{getattr(args,"shard",0):02d}', 'compile-dataset': 'dataset',
                  'predict': f'predictions_{getattr(args,"shard",0):02d}', 'retrieve': 'retrieval', 'grade': 'grading'}.get(args.command,args.command)
-        report = {'status': 'paused' if getattr(exc,'status_code',0) in {401,402,403,429} else 'blocked',
+        report = {'status': 'paused' if getattr(exc,'status_code',getattr(exc,'code',0)) in {401,402,403,429} else 'blocked',
                   'phase': args.command, 'timestamp': now(), 'error': safe_error(exc)}
         write_json(OUTPUT / phase / 'manifest.json', report)
         print(json.dumps(report, ensure_ascii=False)); return 2
