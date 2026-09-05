@@ -7,6 +7,7 @@ mechanics and the lambda=0/lambda=1 edge cases. Exits 0 when everything
 passes; prints one PASS/FAIL line per check.
 """
 import json
+import os
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -265,6 +266,126 @@ check("hf prompts disabled -> raw text both sides",
       _hf_calls[0][0] == ["doc one", "doc two"]
       and _hf_calls[1][0] == ["question?"])
 cfg.HF_EMBEDDING_USE_PROMPTS = True
+
+
+# --- Jina provider logic (stubbed HTTP, no network) --------------------------
+# Validates: task mapping (retrieval.passage/retrieval.query), normalized=true,
+# provider-scoped cache, dimension auto-detect, retryable-429 vs fail-fast 400.
+import urllib.error
+import urllib.request
+import embedder as embedder_mod
+
+_jina_calls = []
+
+
+def _jina_fake_open_factory(status: int | None = None):
+    def _fake_open(req, timeout=None):
+        _jina_calls.append({
+            "url": req.full_url,
+            "auth": req.get_header("Authorization"),
+            "ctype": req.get_header("Content-type"),
+            "payload": json.loads(req.data.decode("utf-8")),
+        })
+        if status is not None:
+            raise urllib.error.HTTPError(
+                req.full_url, status, "simulated", {}, None)
+        n = len(_jina_calls[-1]["payload"]["input"])
+        body = {"object": "list", "data": [
+            {"object": "embedding", "index": i, "embedding": [0.25] * 6}
+            for i in range(n)]}
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(body).encode("utf-8")
+        return _Resp()
+    return _fake_open
+
+
+def _patch_jina(status=None):
+    """Run one jina embed_texts+embed_query with urlopen stubbed."""
+    global _jina_calls
+    _jina_calls = []
+    old_provider = cfg.EMBEDDING_PROVIDER
+    old_cache = getattr(cfg, "JINA_EMBEDDING_CACHE_PATH", None)
+    old_key = os.environ.get("JINA_API_KEY", "")
+    cfg.EMBEDDING_PROVIDER = "jina"
+    cfg.JINA_EMBEDDING_CACHE_PATH = Path(tempfile.mkdtemp()) / "jina_emb.json"
+    os.environ["JINA_API_KEY"] = "test-secret"
+    real_open = urllib.request.urlopen
+    urllib.request.urlopen = _jina_fake_open_factory(status)
+    try:
+        emb = build_embedder(cfg)
+        vecs = emb.embed_texts(["doc one"], input_type="search_document")
+        q = emb.embed_query("question?")
+        return emb, vecs, q
+    finally:
+        urllib.request.urlopen = real_open
+        cfg.EMBEDDING_PROVIDER = old_provider
+        cfg.JINA_EMBEDDING_CACHE_PATH = old_cache
+        if old_key:
+            os.environ["JINA_API_KEY"] = old_key
+        else:
+            os.environ.pop("JINA_API_KEY", None)
+
+
+emb, vecs, q = _patch_jina()
+check("jina: passage/query task mapping + normalized + bearer auth",
+      _jina_calls[0]["payload"]["task"] == "retrieval.passage"
+      and _jina_calls[1]["payload"]["task"] == "retrieval.query"
+      and _jina_calls[0]["payload"]["normalized"] is True
+      and _jina_calls[0]["payload"]["model"] == "jina-embeddings-v5-omni-small"
+      and _jina_calls[0]["auth"] == "Bearer test-secret"
+      and _jina_calls[0]["ctype"] == "application/json",
+      str(_jina_calls[0]["payload"]))
+check("jina: input is a list of {text} objects (sample format)",
+      [_jina_calls[0]["payload"]["input"][0]["text"]] == ["doc one"]
+      and _jina_calls[1]["payload"]["input"][0]["text"] == "question?",
+      str(_jina_calls[0]["payload"]["input"]))
+check("jina: dimension auto-detected + scoped cache file",
+      emb._dimension == 6 and emb.cache.path.name == "jina_emb.json"
+      and Path(emb.cache.path).exists(),
+      f"dim={emb._dimension} cache={emb.cache.path}")
+
+# Retryability classification: 429/503 retryable, 400 fails fast (the
+# backoff sleep stays out of the unit test).
+check("jina: rate-limit/5xx retryable, client errors fail fast",
+      embedder_mod.BaseEmbedder._is_retryable(
+          embedder_mod.JinaHTTPError(429, "quota"))
+      and embedder_mod.BaseEmbedder._is_retryable(
+          embedder_mod.JinaHTTPError(503, "unavailable"))
+      and not embedder_mod.BaseEmbedder._is_retryable(
+          embedder_mod.JinaHTTPError(400, "bad request"))
+      and not embedder_mod.BaseEmbedder._is_retryable(
+          embedder_mod.JinaHTTPError(401, "unauthorized")))
+try:
+    _patch_jina(status=400)
+    check("jina: 400 propagates as JinaHTTPError", False, "no error raised")
+except embedder_mod.JinaHTTPError as _exc:
+    check("jina: 400 propagates as JinaHTTPError",
+          _exc.status_code == 400 and "Jina API HTTP 400" in str(_exc),
+          str(_exc)[:60])
+
+# Missing key -> actionable SystemExit.
+old_key = os.environ.pop("JINA_API_KEY", None)
+old_provider = cfg.EMBEDDING_PROVIDER
+cfg.EMBEDDING_PROVIDER = "jina"
+try:
+    try:
+        build_embedder(cfg)._embed_batch(["x"], "search_document")
+        check("jina missing key fails actionably", False, "no error raised")
+    except SystemExit as _exc:
+        check("jina missing key fails actionably",
+              "JINA_API_KEY" in str(_exc) and ".env" in str(_exc),
+              str(_exc)[:60])
+finally:
+    cfg.EMBEDDING_PROVIDER = old_provider
+    if old_key:
+        os.environ["JINA_API_KEY"] = old_key
 
 
 # --- the two bugs the user hit on sentence-transformers 6.x -----------------

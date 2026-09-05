@@ -38,6 +38,30 @@ CHROMA_COLLECTION_NAME = "raglab_docs"
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "gemini")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
 
+# Jina embeddings — EMBEDDING_PROVIDER = "jina" -------------------------------
+# Hosted multilingual embeddings via https://api.jina.ai/v1/embeddings
+# (needs JINA_API_KEY; raw HTTPS call, no SDK dependency). The model supports
+# 100+ languages incl. Arabic (and text+image; we use text inputs only).
+# Jina v5 tasks map to our inputs automatically: retrieval.passage for
+# documents, retrieval.query for questions. Output is L2-normalized by the API
+# (normalized=true) and always an object per input (never truncated).
+JINA_EMBEDDING_MODEL = os.getenv("JINA_EMBEDDING_MODEL",
+                                 "jina-embeddings-v5-omni-small")
+# Known embedding dimension for the sanity check. 0 = auto-detect from the
+# first real embedding (recommended).
+JINA_EMBEDDING_DIM = int(os.getenv("JINA_EMBEDDING_DIM", "0") or 0)
+# API base (override only for proxies/mirrors).
+JINA_EMBEDDING_BASE_URL = os.getenv("JINA_EMBEDDING_BASE_URL",
+                                    "https://api.jina.ai/v1/embeddings")
+# Batch inputs per request (Jina accepts many texts in one call; a bigger
+# batch means fewer requests per ingest, so a per-minute quota suffocates
+# less often).
+JINA_EMBEDDING_BATCH_SIZE = int(os.getenv("JINA_EMBEDDING_BATCH_SIZE", "64"))
+# Provider-scoped cache: Jina vectors live in a different space than Gemini,
+# so the A/B runs never clobber each other's resumable caches.
+JINA_EMBEDDING_CACHE_PATH = PROJECT_DIR / os.getenv(
+    "JINA_EMBEDDING_CACHE_FILE", "embeddings_cache_jina.json")
+
 # Local multilingual embeddings — EMBEDDING_PROVIDER = "huggingface" ----------
 # Fully offline: no API key, no daily quota, no cost. The model runs on YOUR
 # machine (CPU is fine). Recommended model: Qwen3-Embedding-0.6B (Apache-2.0,
@@ -79,6 +103,8 @@ def active_embedding_model() -> str:
             "huggingface", "hf", "sentence_transformers",
             "sentence-transformers"}:
         return HF_EMBEDDING_MODEL
+    if (EMBEDDING_PROVIDER or "").strip().lower() == "jina":
+        return JINA_EMBEDDING_MODEL
     return EMBEDDING_MODEL
 
 # Gemini-specific knobs ------------------------------------------------------

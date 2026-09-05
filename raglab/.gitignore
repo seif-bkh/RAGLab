@@ -13,4 +13,5 @@ __pycache__/
 chroma_db/
 results/
 embeddings_cache.json
+embeddings_cache_jina.json
 translations_cache.json

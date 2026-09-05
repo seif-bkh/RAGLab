@@ -819,6 +819,76 @@ def run_steps() -> None:
             cfg.CHUNK_SIZE_TOKENS = old_size
             cfg.CHUNK_OVERLAP_TOKENS = old_overlap
 
+    # --- 6c. REAL docs with Jina embeddings (provider A/B) --------------------
+    # The user added a Jina API key. jina-embeddings-v5-omni-small is
+    # multilingual (100+ langs incl. Arabic); the SAME 836 chunks are re-
+    # embedded with retrieval.passage/query tasks. Runs even when the Gemini
+    # daily quota is exhausted (separate key/quota); 429 defers cleanly.
+    # Provider-scoped cache => the Gemini resumable cache is never clobbered.
+    CURRENT_STEP = "real-jina"
+    progress("\n[ci] STEP 11c — real-docs Jina A/B "
+             "(jina-embeddings-v5-omni-small)")
+    jina_summary = ""
+    if not os.environ.get("JINA_API_KEY", "").strip():
+        progress("[ci]   JINA_API_KEY not set — jina A/B skipped")
+    else:
+        old_provider = cfg.EMBEDDING_PROVIDER
+        old_model = cfg.EMBEDDING_MODEL
+        cfg.EMBEDDING_PROVIDER = "jina"
+        cfg.EMBEDDING_MODEL = getattr(cfg, "JINA_EMBEDDING_MODEL",
+                                      "jina-embeddings-v5-omni-small")
+        try:
+            jemb = main.make_embedder(skip_sanity=False)
+            jdims = jemb._dimension
+            jsan = " | ".join(getattr(jemb, "sanity_lines", ["dimension: ?"]))
+            rc = main.main(["ingest", "--reset", "--data-dir",
+                            real_docs_dir, "--skip-sanity-check"])
+            check("jina ingest exits 0", rc == 0, f"rc={rc}")
+            jcol = get_collection(cfg, reset=False)
+            jcnt = jcol.count()
+            progress(f"[ci]   jina ingest: {jcnt} chunks, dims={jdims}")
+            notify(f"real-docs jina: embedder dims={jdims} | {jsan}")
+            jina_res = {}
+            for mode, margs, key in (("vector", [], "vector"),
+                                     ("rrf", ["--hybrid"], "rrf"),
+                                     ("blend0.75", ["--hybrid-blend"],
+                                      "blend")):
+                rc = _real_eval(["evaluate", *margs, "--questions",
+                                 "questions_real.json",
+                                 "--skip-sanity-check"],
+                                f"real-jina-{mode}")
+                if rc is None:
+                    progress(f"[ci]   jina {mode}: deferred")
+                    break
+                runj = get_latest_eval()
+                if runj is not None:
+                    o = runj["metrics"]["overall"]
+                    jina_res[key] = (o["hit@1"], o["hit@3"], o["hit@5"])
+                    progress(f"[ci]   jina {mode}: h1={o['hit@1']:.3f} "
+                             f"h3={o['hit@3']:.3f} h5={o['hit@5']:.3f}")
+            if jina_res:
+                jline = " | ".join(
+                    f"{k}={v[0]:.3f}/{v[1]:.3f}/{v[2]:.3f}"
+                    for k, v in jina_res.items())
+                gline = ("gemini vector " + hit3(run_real["metrics"]["overall"])
+                         if run_real else "gemini vector (deferred)")
+                jina_summary = (f" || real-docs jina A/B (h1/h3/h5): "
+                                f"chunks={jcnt} {jline} (vs {gline})")
+                notify(f"real-docs jina: chunks={jcnt} | {jline}"
+                       + (f" | vs gemini vector {hit3(run_real['metrics']['overall'])}"
+                          if run_real else ""))
+        except RuntimeError as exc:
+            if _REAL_QUOTA.search(str(exc)):
+                progress("[ci] jina A/B DEFERRED — API quota/rate limit (429); "
+                         "cache saved, rerun continues.")
+                notify("real-docs jina A/B: DEFERRED (429 — cache saved; "
+                       "rerun continues from cache)")
+            else:
+                raise
+        finally:
+            cfg.EMBEDDING_PROVIDER = old_provider
+            cfg.EMBEDDING_MODEL = old_model
+
     # --- 7. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"
     progress("\n[ci] STEP 12 — answer.py stub")
@@ -858,7 +928,7 @@ def run_steps() -> None:
         summary = ""
     notify("RAGLab CI PASSED: full pipeline mechanics + evaluation OK "
            "(metrics above, results JSON in the raglab-eval-results artifact)"
-           + summary)
+           + summary + jina_summary)
     progress("[ci] CI PIPELINE PASSED — all mechanics verified; metrics above are the report.")
     print("=" * 78)
     sys.exit(0)

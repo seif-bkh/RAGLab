@@ -73,6 +73,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
         run: |
           if [ -n "$GEMINI_API_KEY" ]; then
             KEY="$GEMINI_API_KEY"; SRC="GEMINI_API_KEY"
@@ -89,6 +90,13 @@ jobs:
           fi
           printf 'GEMINI_API_KEY=%s\n' "$KEY" > .env
           echo "wrote .env from repository secret: $SRC"
+          # Optional: Jina embeddings A/B provider (EMBEDDING_PROVIDER=jina).
+          if [ -n "$JINA_API_KEY" ]; then
+            printf 'JINA_API_KEY=%s\n' "$JINA_API_KEY" >> .env
+            echo "wrote JINA_API_KEY to .env (optional jina provider leg enabled)"
+          else
+            echo "JINA_API_KEY secret not set — jina provider leg will be skipped"
+          fi
 
       - name: Restore embedding cache from a previous run (best-effort)
         if: always()
@@ -103,13 +111,15 @@ jobs:
             mkdir -p /tmp/cachex && (cd /tmp/cachex && unzip -o -q /tmp/cache.zip || true) || true
             # upload-artifact keeps the workspace-relative path, so locate the
             # file anywhere in the zip instead of assuming a flat layout.
-            CACHE_FILE=$(find /tmp/cachex -name embeddings_cache.json | head -1 || true)
-            if [ -n "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
-              cp "$CACHE_FILE" ./embeddings_cache.json
-              echo "restored embedding cache (artifact $ART, $(wc -c < embeddings_cache.json) bytes)"
-            else
-              echo "embedding cache artifact existed but file was missing — starting fresh"
-            fi
+            for CF in embeddings_cache.json embeddings_cache_jina.json; do
+              CACHE_FILE=$(find /tmp/cachex -name "$CF" | head -1 || true)
+              if [ -n "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
+                cp "$CACHE_FILE" "./$CF"
+                echo "restored $CF (artifact $ART, $(wc -c < "$CACHE_FILE") bytes)"
+              else
+                echo "$CF not present in artifact — starting fresh for it"
+              fi
+            done
             TFILE=$(find /tmp/cachex -name translations_cache.json | head -1 || true)
             if [ -n "$TFILE" ] && [ -s "$TFILE" ]; then
               cp "$TFILE" ./translations_cache.json
@@ -151,7 +161,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: raglab-embed-cache
-          path: raglab/embeddings_cache.json
+          path: |
+            raglab/embeddings_cache.json
+            raglab/embeddings_cache_jina.json
           if-no-files-found: warn
 
       - name: Upload translation cache (reproducible cross-run A/B)

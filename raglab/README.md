@@ -181,11 +181,22 @@ ils sont exonérés si Salaire mensuel d'au moins 1 500 € versé sur le compte
   Google AI Studio key (the `google-genai` SDK also accepts `GOOGLE_API_KEY`).
 - Provider behind a tiny interface: `BaseEmbedder` + one class per provider.
   Switch by changing **two strings in `config.py`**:
-  - `EMBEDDING_PROVIDER = "gemini"` → `"openai"`, `"cohere"`, `"voyage"`
-    or `"huggingface"`
+  - `EMBEDDING_PROVIDER = "gemini"` → `"openai"`, `"cohere"`, `"voyage"`,
+    `"jina"` or `"huggingface"`
   - `EMBEDDING_MODEL = "gemini-embedding-2"` →
     e.g. `"gemini-embedding-001"`, `"text-embedding-3-large"`,
-    `"embed-multilingual-v3.0"` or `"voyage-multilingual-2"`
+    `"embed-multilingual-v3.0"`, `"jina-embeddings-v5-omni-small"` or
+    `"voyage-multilingual-2"`
+- **`"jina"` — hosted multilingual embeddings (API key, no SDK needed)**:
+  raw HTTPS to `https://api.jina.ai/v1/embeddings` (stdlib `urllib`, per the
+  no-new-dependency rule). `JINA_API_KEY` from `.env`; model
+  `JINA_EMBEDDING_MODEL = "jina-embeddings-v5-omni-small"` (100+ languages
+  incl. Arabic). Jina's per-request `task` is mapped automatically:
+  documents → `retrieval.passage`, questions → `retrieval.query`;
+  `normalized=true`; dimension auto-detected. Vectors live in a
+  provider-scoped cache (`embeddings_cache_jina.json`) so a Gemini ↔ Jina
+  A/B never clobbers the other's resumable cache. Switching re-ingests with
+  `python main.py ingest --reset` (spaces are not comparable).
 - **`"huggingface"` — free local Arabic-capable embeddings (recommended
   addition)**: runs entirely on your machine, no API key, no daily quota,
   no cost. Default model `HF_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"`

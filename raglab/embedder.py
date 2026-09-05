@@ -152,6 +152,7 @@ class BaseEmbedder:
     provider_name = "base"
 
     def __init__(self, cfg):
+        self.cfg = cfg
         self.model = cfg.active_embedding_model()
         self.batch_size = cfg.EMBEDDING_BATCH_SIZE
         self.max_retries = cfg.EMBEDDING_MAX_RETRIES
@@ -539,6 +540,122 @@ class VoyageEmbedder(BaseEmbedder):
                                 input_type=input_type)
         return [list(item) for item in response.embeddings]
 
+class JinaHTTPError(RuntimeError):
+    """HTTP failure from the Jina API with a status_code for retry decision."""
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class JinaEmbedder(BaseEmbedder):
+    """Hosted multilingual embeddings via https://api.jina.ai/v1/embeddings.
+
+    Raw HTTPS (stdlib urllib — no SDK dependency, per the lab's minimal-dep
+    rule). Jina has a per-request `task` field; we map our inputs the way the
+    docs recommend:
+      - documents  -> task="retrieval.passage"
+      - questions  -> task="retrieval.query"
+    normalized=true is always set (we rely on cosine anyway, but normalized
+    vectors keep scores comparable across providers). The response is an
+    object per input, ordered by `index`; dimension is auto-detected from the
+    first real embedding.
+    """
+
+    provider_name = "jina"
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        # Provider-scoped cache (Jina space != Gemini space; A/Bs must not
+        # clobber each other's resumable caches).
+        self.cache = EmbeddingCache(
+            getattr(cfg, "JINA_EMBEDDING_CACHE_PATH", cfg.EMBEDDING_CACHE_PATH))
+        self.cache.model = self.model
+        self.cache.note_expected_model(self.model)
+        self.batch_size = int(getattr(cfg, "JINA_EMBEDDING_BATCH_SIZE",
+                                      self.batch_size) or self.batch_size)
+
+    def _make_client(self):
+        if self._client is not None:
+            return self._client
+        api_key = os.environ.get("JINA_API_KEY", "").strip()
+        if not api_key:
+            raise SystemExit(
+                "[embedder] JINA_API_KEY is not set. "
+                "Copy .env.example to .env and paste your key "
+                "(https://jina.ai — Settings > API Keys)."
+            )
+        self._client = {"api_key": api_key, "base_url": self._base_url()}
+        return self._client
+
+    def _base_url(self) -> str:
+        return getattr(self.cfg, "JINA_EMBEDDING_BASE_URL",
+                       "https://api.jina.ai/v1/embeddings")
+
+    def _task_for(self, input_type: str) -> str:
+        return ("retrieval.query" if input_type == "search_query"
+                else "retrieval.passage")
+
+    def _embed_batch(self, texts: list[str], input_type: str = "search_document"):
+        client = self._make_client()
+        payload = {
+            "model": self.model,
+            "task": self._task_for(input_type),
+            "normalized": True,
+            "input": [{"text": t} for t in texts],
+        }
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(
+            client["base_url"],
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {client['api_key']}",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                body = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8")[:300]
+            except Exception:  # noqa: BLE001
+                pass
+            raise JinaHTTPError(
+                exc.code,
+                f"Jina API HTTP {exc.code}: {detail or exc.reason}",
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            raise JinaHTTPError(0, f"Jina API connection error: {exc}") from exc
+
+        data = json.loads(body)
+        if data.get("object") == "list" and isinstance(data.get("data"), list):
+            ordered = sorted(data["data"], key=lambda item: item.get("index", 0))
+            embs = [list(item["embedding"]) for item in ordered]
+            if len(embs) != len(texts):
+                raise RuntimeError(
+                    f"Jina API returned {len(embs)} embeddings for "
+                    f"{len(texts)} inputs"
+                )
+            if embs:
+                self._dimension = len(embs[0])
+            return embs
+        raise RuntimeError(
+            f"Jina API unexpected response: {json.dumps(data)[:300]}"
+        )
+
+    def _provider_notes(self) -> list[str]:
+        return [
+            "task mapping: docs->retrieval.passage | queries->retrieval.query",
+            "normalized=true (L2-normalized vectors) | dimension auto-detected",
+        ]
+
+
 class HuggingFaceEmbedder(BaseEmbedder):
     """Local multilingual embeddings via `sentence-transformers` (free).
 
@@ -703,6 +820,7 @@ def build_embedder(cfg) -> BaseEmbedder:
         "openai": OpenAIEmbedder,
         "cohere": CohereEmbedder,
         "voyage": VoyageEmbedder,
+        "jina": JinaEmbedder,
         "huggingface": HuggingFaceEmbedder,
         "hf": HuggingFaceEmbedder,
         "sentence_transformers": HuggingFaceEmbedder,

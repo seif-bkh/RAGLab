@@ -37,7 +37,7 @@ while [ $# -gt 0 ]; do
         --real-only) real_only=1 ;;
         --no-push) push=0 ;;
         --provider)
-            provider="${2:?--provider needs a value (gemini|huggingface|openai|cohere|voyage)}"
+            provider="${2:?--provider needs a value (gemini|jina|huggingface|openai|cohere|voyage)}"
             shift ;;
         -h|--help) sed -n '1,20p' "$0"; exit 0 ;;
         *) echo "unknown option: $1 (see header comments)"; exit 2 ;;
