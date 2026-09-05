@@ -397,7 +397,8 @@ finally:
 _nv_calls = []
 
 
-def _nvidia_fake_open_factory(status: int | None = None, bad: str | None = None):
+def _nvidia_fake_open_factory(status: int | None = None, bad: str | None = None,
+                              bad_text: str | None = None):
     def _fake_open(req, timeout=None):
         _nv_calls.append({
             "url": req.full_url,
@@ -408,16 +409,23 @@ def _nvidia_fake_open_factory(status: int | None = None, bad: str | None = None)
         if status is not None:
             raise urllib.error.HTTPError(
                 req.full_url, status, "simulated", {}, None)
-        n = len(_nv_calls[-1]["payload"]["input"])
-        if bad == "nan":
-            dim = len(_nv_calls[-1]["payload"].get("dimensions") or [0.25] * 6)
-            embs = [[0.25] * (dim - 1) + [float("nan")] for _ in range(n)]
-        elif bad == "missing":
-            embs = [None] * n  # items without an "embedding" key
-        elif bad == "short":
+        inputs = _nv_calls[-1]["payload"]["input"]
+        n = len(inputs)
+        bad_vec = {
+            "nan": [0.25, float("nan")],
+            "inf": [0.25, float("inf")],
+            "zero": [0.0] * 6,
+            "missing": None,  # item without an "embedding" key
+        }.get(bad)
+        if bad == "short":
             embs = [[0.25] * 6]  # fewer rows than inputs
         else:
-            embs = [[0.25] * 6 for _ in range(n)]
+            embs = []
+            for t in inputs:
+                if bad and (bad_text is None or t == bad_text):
+                    embs.append(bad_vec)
+                else:
+                    embs.append([0.25] * 6)
         body = {"object": "list", "data": [
             {"object": "embedding", "index": i, "embedding": e}
             for i, e in enumerate(embs)]}
@@ -435,7 +443,7 @@ def _nvidia_fake_open_factory(status: int | None = None, bad: str | None = None)
 
 
 def _patch_nvidia(dim: int = 0, status: int | None = None,
-                  bad: str | None = None):
+                  bad: str | None = None, bad_text: str | None = None):
     """Run one nvidia embed_texts+embed_query with urlopen stubbed."""
     global _nv_calls
     _nv_calls = []
@@ -448,10 +456,11 @@ def _patch_nvidia(dim: int = 0, status: int | None = None,
     cfg.NVIDIA_EMBEDDING_DIM = dim
     os.environ["NVIDIA_API_KEY"] = "test-secret"
     real_open = urllib.request.urlopen
-    urllib.request.urlopen = _nvidia_fake_open_factory(status, bad)
+    urllib.request.urlopen = _nvidia_fake_open_factory(status, bad, bad_text)
     try:
         emb = build_embedder(cfg)
-        if bad == "short":  # row-count mismatch needs >= 2 inputs
+        if bad == "short" or bad_text is not None:
+            # row-count mismatch / bisection isolation need >= 2 inputs
             vecs = emb.embed_texts(["a", "b"], input_type="search_document")
             return emb, vecs, None
         vecs = emb.embed_texts(["doc one"], input_type="search_document")
@@ -508,9 +517,15 @@ except embedder_mod.NvidiaHTTPError as _exc:
           _exc.status_code == 400 and "NVIDIA API HTTP 400" in str(_exc),
           str(_exc)[:60])
 
-# Strict response validation: NaN / missing embedding / wrong count.
+# Strict response validation: NaN / infinity / zero-norm / missing / count.
+# A zero-norm vector would pass a NaN-only check and then become NaN inside
+# chroma's L2 normalization ("0-dimensional array nan" at add()); infinity
+# would poison every cosine. Both must be rejected at parse time with the
+# input preview.
 for bad, needle, label in (
         ("nan", "contains NaN", "NaN rejected"),
+        ("inf", "contains infinite", "infinity rejected"),
+        ("zero", "contains zero-norm", "zero-norm rejected"),
         ("missing", "no embedding list", "embedding-less item rejected"),
         ("short", "returned 1 embeddings for 2 inputs", "row-count mismatch"),
 ):
@@ -519,6 +534,15 @@ for bad, needle, label in (
         check(f"nvidia: {label}", False, "no error raised")
     except RuntimeError as _exc:
         check(f"nvidia: {label}", needle in str(_exc), str(_exc)[:70])
+
+# Bisection: one bad input inside a batch must be isolated by splitting the
+# batch in halves, and the error must name THE BAD INPUT (not just the batch).
+try:
+    _patch_nvidia(bad="zero", bad_text="b")
+    check("nvidia: bisection isolates the bad input", False, "no error raised")
+except RuntimeError as _exc:
+    check("nvidia: bisection isolates the bad input",
+          "'b'" in str(_exc) and "'a'" not in str(_exc), str(_exc)[:90])
 
 # Missing key -> actionable SystemExit.
 old_key = os.environ.pop("NVIDIA_API_KEY", None)

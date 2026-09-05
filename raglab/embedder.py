@@ -221,6 +221,24 @@ class BaseEmbedder:
             f"embedding failed after {self.max_retries} attempts: {last_error}"
         )
 
+    def _call_with_bisect(self, texts: list[str], input_type: str) -> list:
+        """Embed a batch, bisecting on a degenerate (NaN/inf/zero) vector.
+
+        One bad provider response currently fails the WHOLE batch with no
+        hint of which input caused it. Split the batch in halves until the
+        offending input is a singleton; the InvalidVectorError then carries
+        that exact input's preview. Healthy halves keep their results.
+        """
+        try:
+            return self._call_with_retry(texts, input_type)
+        except InvalidVectorError:
+            if len(texts) == 1:
+                raise
+            mid = len(texts) // 2
+            left = self._call_with_bisect(texts[:mid], input_type)
+            right = self._call_with_bisect(texts[mid:], input_type)
+            return left + right
+
     def embed_texts(self, texts: list[str], input_type: str = "search_document") -> list:
         """Embed a list of texts. Cache-first, deduplicated, batched.
 
@@ -256,7 +274,7 @@ class BaseEmbedder:
         for start in range(0, len(todo), self.batch_size):
             batch = todo[start : start + self.batch_size]
             texts_batch = [item[1] for item in batch]
-            embs = self._call_with_retry(texts_batch, input_type)
+            embs = self._call_with_bisect(texts_batch, input_type)
             self.api_calls += 1
             print(f"[embedder] embedded {len(batch)} text(s) "
                   f"({start + 1}-{start + len(batch)} of {len(todo)}) in 1 API call")
@@ -336,18 +354,45 @@ class BaseEmbedder:
         return vectors
 
 
-def _finite_vector(v) -> bool:
-    """True if v is a non-empty list of finite floats (usable by chroma)."""
+def _vector_issue(v) -> str | None:
+    """Describe why a vector is unusable by chroma, or None when it is fine.
+
+    chroma L2-normalizes every vector it stores: an all-zero vector becomes
+    NaN (0/0) and an `inf` component poisons every cosine — both produce the
+    cryptic "Expected a 1-dimensional array, got a 0-dimensional array nan"
+    crash at add() time. NaN is caught right away; infinity and zero-norm
+    must be rejected too or they hide inside chroma.
+    """
     if not isinstance(v, list) or not v:
-        return False
+        return "empty"
     try:
-        for x in v:
-            f = float(x)
-            if f != f:  # NaN
-                return False
+        vals = [float(x) for x in v]
     except (TypeError, ValueError):
-        return False
-    return True
+        return "non-numeric"
+    for f in vals:
+        if f != f:
+            return "NaN"
+        if f in (float("inf"), float("-inf")):
+            return "infinite"
+    if all(f == 0.0 for f in vals):
+        return "zero-norm"
+    return None
+
+
+def _finite_vector(v) -> bool:
+    """True if v is a non-empty list of finite, non-degenerate floats."""
+    return _vector_issue(v) is None
+
+
+class InvalidVectorError(RuntimeError):
+    """A provider returned a vector that chroma cannot store (NaN/inf/zero).
+
+    Non-retryable: re-requesting the same input reproduces the same vector.
+    The message carries the exact input preview so the offending chunk is
+    identifiable; `embed_texts` bisects large batches down to the bad input.
+    """
+
+    status_code = None
 
 
 def cosine(a: list, b: list) -> float:
@@ -692,13 +737,14 @@ class JinaEmbedder(BaseEmbedder):
                             f"value {v!r} not numeric; input preview: "
                             f"{texts[idx][:120]!r}"
                         ) from exc
-                    if fv != fv:  # NaN
-                        raise RuntimeError(
-                            f"Jina API item {item.get('index')} embedding "
-                            f"contains NaN; input preview: "
-                            f"{texts[idx][:120]!r}"
-                        )
                     vals.append(fv)
+                issue = _vector_issue(vals)
+                if issue is not None:
+                    raise InvalidVectorError(
+                        f"Jina API item {item.get('index')} embedding "
+                        f"contains {issue}; input preview: "
+                        f"{texts[idx][:120]!r}"
+                    )
                 embs.append(vals)
             if len(embs) != len(texts):
                 raise RuntimeError(
@@ -840,13 +886,14 @@ class NvidiaEmbedder(BaseEmbedder):
                             f"value {v!r} not numeric; input preview: "
                             f"{texts[idx][:120]!r}"
                         ) from exc
-                    if fv != fv:  # NaN
-                        raise RuntimeError(
-                            f"NVIDIA API item {item.get('index')} embedding "
-                            f"contains NaN; input preview: "
-                            f"{texts[idx][:120]!r}"
-                        )
                     vals.append(fv)
+                issue = _vector_issue(vals)
+                if issue is not None:
+                    raise InvalidVectorError(
+                        f"NVIDIA API item {item.get('index')} embedding "
+                        f"contains {issue}; input preview: "
+                        f"{texts[idx][:120]!r}"
+                    )
                 embs.append(vals)
             if len(embs) != len(texts):
                 raise RuntimeError(
