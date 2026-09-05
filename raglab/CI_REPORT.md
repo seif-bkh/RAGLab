@@ -230,13 +230,39 @@ The gap to Gemini's historical h1 (.786 on the OLD 573-chunk split) cannot
 be judged yet: Gemini has not re-run on the NEW 836-chunk split (daily quota);
 the post-reset run gives the apples-to-apples comparison.
 
+## Gemini ↔ Jina on IDENTICAL chunks (2026-09-05, run `33946260011`) — apples-to-apples
+
+Swapped Google key verified by an **uncached live probe** (unique text,
+`probe=OK(dims=768, live API call)` — the old key's 429s were quota, not the
+credential) and the **full Gemini real leg now runs on the 836-chunk split**:
+
+| mode | Gemini 768d | Jina 1024d | winner |
+|---|---|---|---|
+| vector | **.786 / 1.000 / 1.000** | .714 / 1.000 / 1.000 | Gemini (h1 +.072) |
+| rrf (BM25+meta) | .429 / .929 / .929 | **.571 / .786 / .857** | Jina (h1 +.143) |
+| blend (best λ) | **.714** / .929 / .929 @λ=.85 | .643 / .929 / .929 @λ=.75 | Gemini (h1 +.071) |
+| rq13 @v | 2 | **1** | Jina |
+| rq14 @v | **1** | 3 | Gemini |
+
+Verdict: **Gemini stays the default** — better vector + blend hit@1, and the
+hybrid legs both underperform pure vector on this set (blend never recovers
+the vector h1; every hybrid loss is a ranking miss, all 14 phrases remain in
+the index top-5 — `real-diagnostics: all questions covered and reachable`).
+Jina is competitive but not better, so it stays an opt-in provider.
+BM25+metadata cue lifts rq13→3 but breaks rq08 3→1? no — rq08 3→? (see
+per-question rows above); rrf's h1 drop is concentrated in cross-lingual
+verbatim rows (rq03/rq14 drop from 1).
+
+Pending (deferred on the daily 429, cache saved): the **220-vs-340 token
+chunk-size A/B** — rerun after quota reset completes it on the same 836/340
+chunks; rq13's post-fix rank under the *translated-Arabic* query leg will
+also be confirmed there (offline BM25 upper bound with the Arabic phrase:
+rank 1).
+
 ## Next step (after quota reset ~07:00 UTC)
 
-Re-run once (`workflow_run` on `arena/01a06d64-raglab`, or push a trivial
-commit): the 836-chunk real ingest resumes from the saved batch cache, then
-the vector/rrf/blend + lambda sweep + 220-vs-340 chunk-size A/B all rerun on
-the FIXED split. Those numbers will replace the "historical" block above and
-complete the Gemini ↔ Jina comparison on identical chunks.
+Re-run once: the resumable cache finishes the 340-token A/B ingest, then its
+vector/rrf/blend rows + rq13@v land in the PASS line. No code change needed.
 
 ## Prod-readiness verdict (2026-09-05)
 
@@ -244,12 +270,17 @@ complete the Gemini ↔ Jina comparison on identical chunks.
 deployable product. What blocks it, in priority order:
 
 P0 — correctness/trust
-1. Collection staleness: nothing records the loader/chunker version, so an
-   existing local DB silently mixes old-split chunks after a chunker change.
-   Fix: chunker/loader fingerprint in metadata + warn/require `--reset`.
+1. Collection staleness: **FIXED** (this branch). `chunk_fp` =
+   `chunkv<version>:s<size>:o<overlap>:h<split_headings>:sen<sentence>` is
+   stamped into every chunk's metadata at ingest (`CHUNK_FINGERPRINT_VERSION`
+   bumps when the chunker algorithm changes; v2 = the paragraph-boundary fix).
+   `store.query_vector`/`keyword_search`/`store_chunks` refuse a mismatched
+   collection with an actionable `raglab ingest --reset` error; pre-fingerprint
+   (legacy) collections warn once instead of hard-failing. 43/43 offline
+   tests cover fresh / changed / legacy / empty cases.
 2. Heading detection is markdown-only (`#`): docx/PDF headings (Arabic
-   "1-…", "الفصل 86", "2.1.2-…") are plain text, so real docs have no
-   heading context and the BM25 heading cue is mostly empty.
+   "1-…", "الفصل 86", "2.1.2-…") are plain text, so the real docs' heading
+   metadata cue is mostly EMPTY. Next lever after the chunk-size A/B.
 3. The one-time Jina NaN was absorbed but never root-caused. Fix: on an
    invalid batch, retry in halves to isolate the bad input and fail with
    its preview (then it can't hide inside chroma).

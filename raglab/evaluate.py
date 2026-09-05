@@ -178,14 +178,14 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
         variant_hit_lists = []
         for variant in variants:
             q_embedding = embedder.embed_query(variant["text"])
-            vector_hits = query_vector(collection, q_embedding, k=top_k)
+            vector_hits = query_vector(collection, q_embedding, k=top_k, cfg=cfg)
             if mode == "vector":
                 variant_hit_lists.append(vector_hits)
             elif mode == "rrf":
                 kw_hits = keyword_search(collection, variant["text"], k=top_k,
                             include_metadata=getattr(
                                 cfg, "KEYWORD_SEARCH_INCLUDE_METADATA",
-                                True))
+                                True), cfg=cfg)
                 variant_hit_lists.append(
                     rrf_merge(vector_hits, kw_hits,
                               k=cfg.RRF_RANK_CONSTANT)[:top_k])
@@ -194,7 +194,7 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
                                          include_metadata=getattr(
                                              cfg,
                                              "KEYWORD_SEARCH_INCLUDE_METADATA",
-                                             True))
+                                             True), cfg=cfg)
                 variant_hit_lists.append(
                     blend_hybrid(vector_hits, kw_hits, lambd=lambd)[:top_k])
 

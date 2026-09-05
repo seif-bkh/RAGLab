@@ -415,7 +415,7 @@ check("hf dimension detect falls back to legacy method",
 class _FakeCollection:
     def __init__(self, ids, docs, metas):
         self._ids = ids; self._docs = docs; self._metas = metas
-    def get(self, include=None):
+    def get(self, include=None, limit=None, **kw):
         return {"ids": list(self._ids), "documents": list(self._docs),
                 "metadatas": list(self._metas)}
     def count(self):
@@ -507,5 +507,70 @@ check("hard split keeps every sentence whole in one chunk",
 check("oversized paragraph is still flagged (transparency)",
       any(c.notes for c in _chunks),
       str([c.notes for c in _chunks if c.notes][:1]))
+
+# --- collection staleness fingerprint (P0-1) --------------------------------
+from chunker import chunk_fingerprint          # noqa: E402
+from store import ensure_fresh_chunks, chunk_fp  # noqa: E402
+
+
+class FpCfg:
+    CHUNK_SIZE_TOKENS = 220
+    CHUNK_OVERLAP_TOKENS = 40
+    SPLIT_ON_HEADINGS_FIRST = True
+    CHUNK_OVERLAP_SENTENCE_AWARE = True
+
+
+class FpCol:
+    def __init__(self, fp):
+        self.fp = fp
+
+    def get(self, include=None, limit=None, **kw):
+        meta = {"chunk_fp": self.fp} if self.fp is not None else {}
+        return {"metadatas": [meta] if self.fp is not None else [{}]}
+
+
+try:
+    ensure_fresh_chunks(FpCol(chunk_fp(FpCfg())), FpCfg())
+    _fp_fresh = True
+except Exception as _e:  # noqa: BLE001
+    _fp_fresh = False
+check("fresh fingerprint: retrieval allowed",
+      _fp_fresh, "")
+
+_fp_old = chunk_fingerprint(220, 40, True, True)
+_fp_new = chunk_fingerprint(340, 60, True, True)
+check("fingerprint changes with chunk size",
+      _fp_old != _fp_new and chunk_fp(FpCfg()) == _fp_old, "")
+
+try:
+    ensure_fresh_chunks(FpCol("chunkv1:s500:o100:h1:sen0"), FpCfg())
+    _fp_stale = False
+except RuntimeError as _e:
+    _fp_stale = True
+    _fp_msg = str(_e)
+check("stale collection: actionable refusal",
+      _fp_stale and "ingest --reset" in _fp_msg,
+      str(_fp_msg)[:120])
+
+try:
+    ensure_fresh_chunks(FpCol(None), FpCfg())
+    _fp_legacy = True
+except Exception as _e:  # noqa: BLE001
+    _fp_legacy = False
+check("legacy collection (no fingerprint): warn but do not fail",
+      _fp_legacy, "")
+
+class _EmptyCol:
+    def get(self, include=None, limit=None, **kw):
+        return {"metadatas": []}
+
+
+try:
+    ensure_fresh_chunks(_EmptyCol(), FpCfg())
+    _fp_empty = True
+except Exception as _e:  # noqa: BLE001
+    _fp_empty = False
+check("empty collection: no fingerprint required",
+      _fp_empty, "")
 
 sys.exit(0 if ok else 1)

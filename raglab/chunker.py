@@ -53,6 +53,27 @@ def count_tokens(text: str) -> int:
     return max(words, approx)
 
 
+# Bump this whenever the chunker's ALGORITHM changes chunk boundaries (not
+# merely parameters): collections built by an older version must be rebuilt
+# or their chunks silently carry different (misaligned) text.
+# v2 = paragraph+heading boundaries preserved (loader reflow fix) and
+#      sentence-aligned hard splits; v1 = single-paragraph hard splits.
+CHUNK_FINGERPRINT_VERSION = 2
+
+
+def chunk_fingerprint(chunk_size: int, overlap: int,
+                      split_on_headings: bool,
+                      sentence_aware_overlap: bool) -> str:
+    """Deterministic fingerprint of every chunking input that changes OUTPUT.
+
+    Stored in each chunk's metadata at ingest; retrieval refuses to run over a
+    collection whose fingerprint differs from the current settings (a stale
+    collection makes every hit wrong — the fix is `ingest --reset`)."""
+    return (f"chunkv{CHUNK_FINGERPRINT_VERSION}:"
+            f"s{chunk_size}:o{overlap}:h{int(bool(split_on_headings))}:"
+            f"sen{int(bool(sentence_aware_overlap))}")
+
+
 # Sentence boundaries for the sentence-aware overlap (covers Latin + Arabic).
 SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?…؟;؛۔])\s+")
 

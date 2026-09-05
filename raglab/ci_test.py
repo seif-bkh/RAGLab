@@ -654,7 +654,7 @@ def run_steps() -> None:
             ranks = {}
             for v in variants:
                 emb = diag_embedder.embed_query(v["text"])
-                hits = query_vector(collection_real, emb, k=count_real)
+                hits = query_vector(collection_real, emb, k=count_real, cfg=cfg)
                 ranks[v["label"]] = next((h["rank"] for h in hits
                                           if h["id"] == correct_id), None)
             best = min((r for r in ranks.values() if r), default=None)

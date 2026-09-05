@@ -219,7 +219,8 @@ def cmd_query(args) -> int:
         q_embedding = embedder.embed_query(variant["text"])
         print(f"[query] embedded variant {variant['label']} "
               f"dimension={len(q_embedding)}")
-        v_hits = query_vector(collection, q_embedding, k=k, lang=lang)
+        v_hits = query_vector(collection, q_embedding, k=k, lang=lang,
+                        cfg=cfg)
         if mode == "rrf":
             kw_hits = keyword_search(collection, variant["text"], k=k,
                         include_metadata=getattr(
@@ -227,7 +228,7 @@ def cmd_query(args) -> int:
                             True))
             v_hits = rrf_merge(v_hits, kw_hits, k=cfg.RRF_RANK_CONSTANT)[:k]
         elif mode == "blend":
-            kw_hits = keyword_search(collection, variant["text"], k=k)
+            kw_hits = keyword_search(collection, variant["text"], k=k, cfg=cfg)
             v_hits = blend_hybrid(v_hits, kw_hits,
                                   lambd=cfg.HYBRID_BLEND_LAMBDA)[:k]
         variant_hit_lists.append(v_hits)

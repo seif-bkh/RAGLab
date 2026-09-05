@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 
 import chromadb
 
+from chunker import chunk_fingerprint
+
 # ---------------------------------------------------------------------------
 # Collection handling
 # ---------------------------------------------------------------------------
@@ -32,6 +34,47 @@ def _client(cfg):
     if settings is not None:
         kwargs["settings"] = settings
     return chromadb.PersistentClient(**kwargs)
+
+
+def chunk_fp(cfg) -> str:
+    """Fingerprint of the chunking inputs currently configured (see
+    chunker.chunk_fingerprint — it must match exactly what chunk_all uses)."""
+    return chunk_fingerprint(
+        chunk_size=cfg.CHUNK_SIZE_TOKENS,
+        overlap=cfg.CHUNK_OVERLAP_TOKENS,
+        split_on_headings=cfg.SPLIT_ON_HEADINGS_FIRST,
+        sentence_aware_overlap=cfg.CHUNK_OVERLAP_SENTENCE_AWARE)
+
+
+def ensure_fresh_chunks(collection, cfg) -> None:
+    """Refuse retrieval/extension over a collection built with other settings.
+
+    Chunks are immutable records: if the chunker version, size, overlap or
+    heading/sentence policy changed, every stored chunk's text is outdated
+    and any retrieval result is silently wrong — so raise an actionable
+    error instead of returning misleading hits.
+
+    Collections from before fingerprinting (no 'chunk_fp' metadata field)
+    warn instead of failing: they are almost certainly stale, but the old
+    ones had no way to know, so we do not hard-block first use.
+    """
+    metas = (collection.get(include=["metadatas"], limit=1)
+             .get("metadatas") or [])
+    if not metas:
+        return  # empty collection: the next ingest will tag it
+    stored = (metas[0] or {}).get("chunk_fp")
+    current = chunk_fp(cfg)
+    if not stored:
+        print("[store] WARNING: collection carries no chunk fingerprint "
+              "(built by an older RAGLab). Rebuild with "
+              "`raglab ingest --reset` to enable staleness checks.")
+        return
+    if stored != current:
+        raise RuntimeError(
+            "[store] collection is STALE — chunks were built with "
+            f"fingerprint '{stored}' but the current settings produce "
+            f"'{current}'. Chunk texts changed, so retrieval results would "
+            "be wrong. Rebuild with:  raglab ingest --reset")
 
 
 def get_collection(cfg, reset: bool = False):
@@ -75,6 +118,9 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
     if not chunks_with_embeddings:
         print("[store] nothing to store")
         return 0
+    if collection.count() > 0:
+        # Adding to an existing collection: never mix chunk formats.
+        ensure_fresh_chunks(collection, cfg)
 
     exclude = bool(getattr(cfg, "INDEX_EXCLUDE_BOILERPLATE", False))
     kept, skipped = [], []
@@ -119,6 +165,7 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
                 "ingested_at": timestamp,
                 "embedding_model": cfg.active_embedding_model(),
                 "token_count": chunk.token_count,
+                "chunk_fp": chunk_fp(cfg),
             })
 
         collection.add(ids=ids, embeddings=embeddings,
@@ -135,13 +182,19 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
 # ---------------------------------------------------------------------------
 
 
-def query_vector(collection, query_embedding: list, k: int, lang: str = None) -> list:
+def query_vector(collection, query_embedding: list, k: int, lang: str = None,
+                 cfg=None) -> list:
     """Vector search: top-k hits, optional 'where' filter on language.
 
     Chroma returns distances (0 = identical for cosine). We convert to
     similarity = 1 - distance for readability and keep both.
     Each hit dict: {id, text, metadata, distance, similarity, rank}.
+    cfg: when given, the collection's chunk fingerprint must match the
+    current chunking settings (ensure_fresh_chunks) — stale indexes are
+    refused with an actionable error instead of returning wrong hits.
     """
+    if cfg is not None:
+        ensure_fresh_chunks(collection, cfg)
     params = {
         "query_embeddings": [query_embedding],
         "n_results": k,
@@ -216,14 +269,19 @@ class BM25Index:
 
 
 def keyword_search(collection, query: str, k: int,
-                    include_metadata: bool = True) -> list:
+                    include_metadata: bool = True, cfg=None) -> list:
     """BM25 over every stored chunk text; returns top-k keyword hits.
 
     include_metadata (config KEYWORD_SEARCH_INCLUDE_METADATA) appends the
     source file name + heading to each text: questions that name the document
     ("BCT circular 2019-08", "the internal guide") then match the right
     corpus even if the cue never appears inside the chunk text itself.
+    cfg: when given, the collection's chunk fingerprint must match the
+    current chunking settings (ensure_fresh_chunks) — stale indexes are
+    refused with an actionable error instead of returning wrong hits.
     """
+    if cfg is not None:
+        ensure_fresh_chunks(collection, cfg)
     all_docs = collection.get(include=["documents", "metadatas"])
     if not all_docs["ids"]:
         print("[store] keyword search: collection is empty")
