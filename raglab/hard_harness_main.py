@@ -12,6 +12,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('sources')
+    author = sub.add_parser('author'); author.add_argument('--shard', type=int, required=True)
+    sub.add_parser('compile-dataset')
+    sub.add_parser('retrieve')
+    predict = sub.add_parser('predict'); predict.add_argument('--shard', type=int, required=True)
+    sub.add_parser('grade')
     pub = sub.add_parser('publish'); pub.add_argument('--phase', required=True)
     get = sub.add_parser('collect'); get.add_argument('--repo', default='seif-bkh/RAGLab')
     get.add_argument('--sha', required=True); get.add_argument('--destination', default=str(OUTPUT))
@@ -30,9 +35,32 @@ def main(argv=None):
             report = prepare_sources()
             print(json.dumps(report, ensure_ascii=False, indent=2))
             return 0 if report['status'] == 'ready_for_reference_authoring' else 2
+        if args.command == 'author':
+            from hard_harness.authoring import author_shard
+            report = author_shard(args.shard)
+            return 0 if report['status'] == 'drafts_complete' else 2
+        if args.command == 'compile-dataset':
+            from hard_harness.dataset import compile_dataset
+            report = compile_dataset()
+            return 0 if report['status'] == 'frozen' else 2
+        if args.command == 'retrieve':
+            from hard_harness.predict import prepare_retrieval
+            report = prepare_retrieval()
+            return 0 if report['status'] == 'retrieval_complete' else 2
+        if args.command == 'predict':
+            from hard_harness.predict import predict_shard
+            report = predict_shard(args.shard)
+            return 0 if report['status'] == 'predictions_complete' else 2
+        if args.command == 'grade':
+            from hard_harness.grading import grade_all
+            report = grade_all()
+            return 0 if report['status'] == 'complete' else 2
     except Exception as exc:
-        report = {'status': 'blocked', 'phase': args.command, 'timestamp': now(), 'error': safe_error(exc)}
-        write_json(OUTPUT / args.command / 'manifest.json', report)
+        phase = {'author': f'author_{getattr(args,"shard",0):02d}', 'compile-dataset': 'dataset',
+                 'predict': f'predictions_{getattr(args,"shard",0):02d}', 'retrieve': 'retrieval', 'grade': 'grading'}.get(args.command,args.command)
+        report = {'status': 'paused' if getattr(exc,'status_code',0) in {401,402,403,429} else 'blocked',
+                  'phase': args.command, 'timestamp': now(), 'error': safe_error(exc)}
+        write_json(OUTPUT / phase / 'manifest.json', report)
         print(json.dumps(report, ensure_ascii=False)); return 2
     return 2
 

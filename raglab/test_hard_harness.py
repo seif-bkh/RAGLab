@@ -117,5 +117,92 @@ class Checkpoints(unittest.TestCase):
             self.assertTrue(all(p['fingerprint'] == fingerprint(rows) for p in parts))
 
 
+class GoogleFallbackPolicy(unittest.TestCase):
+    def test_google_requires_explicit_free_project_confirmation(self):
+        from hard_harness.google_client import GoogleHarnessClient
+        with self.assertRaises(ValueError):
+            GoogleHarnessClient('gemini-3.1-flash-lite','dummy',free_project_confirmed=False,budget={'used':0,'limit':1})
+        with self.assertRaises(ValueError):
+            GoogleHarnessClient('some-paid-model','dummy',free_project_confirmed=True,budget={'used':0,'limit':1})
+
+    def test_google_translates_only_explicit_messages_and_local_images(self):
+        from hard_harness.google_client import google_payload
+        messages=[{'role':'system','content':'policy'},image_message('read source',b'image')]
+        data=google_payload(messages,2000)
+        self.assertEqual(data['systemInstruction']['parts'][0]['text'],'policy')
+        self.assertEqual(data['generationConfig']['responseMimeType'],'application/json')
+        self.assertIn('inlineData',data['contents'][0]['parts'][1])
+        with self.assertRaises(ValueError):
+            google_payload([{'role':'user','content':[{'type':'image_url','image_url':{'url':'https://untrusted.example/image'}}]}],100)
+
+
+class DatasetIntegrity(unittest.TestCase):
+    def family(self, number, category='supported'):
+        languages = {lang: {'question': f'{lang} distinct question {number}?',
+                            'reference_answer': f'expected fact {number}',
+                            'required_facts': ['required meaning'], 'forbidden_claims': []}
+                     for lang in ('ar','fr','en')}
+        return {'id':f'hh{number:04d}','category':category,'expected_behavior':'answer' if category=='supported' else 'abstain',
+                'fact_summary':f'fact {number}','rationale':'test-only fixture, not a real benchmark case',
+                'languages':languages,'evidence':[{'unit_id':'unit','quote':'original source evidence text'}] if category=='supported' else []}
+
+    def test_three_thousand_public_questions_are_separate_from_keys(self):
+        from hard_harness.dataset import make_adversarial, validate_and_split
+        base = [self.family(i) for i in range(1,651)]
+        base += [self.family(i,'out_of_scope') for i in range(651,851)]
+        base += [self.family(i,'insufficient_information') for i in range(851,901)]
+        families = base + make_adversarial(base)
+        units = {'unit':{'id':'unit','document':'test.docx','page':None,'text':'original source evidence text','quality':'test'}}
+        plan = {'counts_per_language':{'supported':650,'out_of_scope':200,'insufficient_information':50,'adversarial':100}}
+        public, private = validate_and_split(families, units, plan)
+        for lang in ('ar','fr','en'):
+            self.assertEqual(len(public[lang]),1000)
+            self.assertEqual(len(private[lang]),1000)
+            self.assertEqual({r['id'] for r in public[lang]},{r['id'] for r in private[lang]})
+            self.assertTrue(all('reference_answer' not in row and 'required_facts' not in row and 'category' not in row for row in public[lang]))
+        self.assertEqual(sum('context_injections' in q for q in public['en']),50)
+        families[1]['languages']['en']['question'] = families[0]['languages']['en']['question']
+        with self.assertRaisesRegex(ValueError,'duplicate'):
+            validate_and_split(families,units,plan)
+
+    def test_invalid_outputs_are_terminal_but_quota_is_not_an_answer(self):
+        from hard_harness.predict import terminal_result
+        self.assertTrue(terminal_result({'provider_ok':True,'validation_ok':False,'status':'refused'}))
+        self.assertTrue(terminal_result({'provider_ok':False,'http_status':422}))
+        self.assertFalse(terminal_result({'provider_ok':False,'http_status':429}))
+
+    def test_scoring_separates_refusal_failures_and_provider_errors(self):
+        from hard_harness.grading import deterministic_grade
+        prediction={'id':'hh1.en','family_id':'hh1','language':'en','provider':'xkiro','model':'test',
+                    'result':{'provider_ok':True,'validation_ok':True,'status':'refused','reason':'private_or_live_request','answer':'No access'}}
+        reference={'category':'out_of_scope','fact_group':'g','expected_behavior':'abstain','forbidden_claims':[]}
+        self.assertEqual(deterministic_grade(prediction,reference)['grade'],'correct_abstention')
+        reference['expected_behavior']='answer'
+        self.assertEqual(deterministic_grade(prediction,reference)['grade'],'over_refusal')
+        prediction['result'].update(provider_ok=False,http_status=429,error='quota')
+        self.assertIsNone(deterministic_grade(prediction,reference)['correct'])
+
+    def test_semantic_judge_cannot_mark_unfaithful_wrong_language_as_correct(self):
+        from hard_harness.grading import validate_judgments
+        row={'id':'x','grade':'correct','language_ok':False,'grounded':True,'missing_facts':[],'unsupported_claims':[]}
+        with self.assertRaisesRegex(ValueError,'Inconsistent'):
+            validate_judgments({'judgments':[row]},['x'])
+        row.update(language_ok=True,grade='reference_issue')
+        self.assertEqual(validate_judgments({'judgments':[row]},['x'])[0]['grade'],'reference_issue')
+
+    def test_prediction_public_reader_rejects_answer_key_fields(self):
+        from hard_harness.predict import load_public_questions
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); manifest={'public_files':{}}
+            for lang in ('ar','fr','en'):
+                rows=[{'id':f'{i}.{lang}','family_id':str(i),'language':lang,'question':f'question {i}'} for i in range(1000)]
+                if lang=='en': rows[0]['reference_answer']='leaked gold'
+                name=f'questions.{lang}.jsonl';write_jsonl(root/name,rows)
+                manifest['public_files'][name]={'fingerprint':fingerprint(rows),'count':1000}
+            write_json(root/'manifest.json',manifest)
+            with self.assertRaisesRegex(ValueError,'Non-public'):
+                load_public_questions(root)
+
+
 if __name__ == '__main__':
     unittest.main()

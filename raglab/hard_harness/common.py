@@ -77,8 +77,16 @@ class CheckpointClient:
         self.role = role
         self.plan = read_json(PLAN_PATH)
         profile = self.plan['llm']
-        if profile['provider'] != 'xkiro' or profile['model'] != ANSWER_MODEL:
-            raise HarnessPause('Provider switch needs an explicitly implemented/audited adapter and plan; no silent fallback')
+        if profile['provider'] == 'xkiro':
+            if profile['model'] != ANSWER_MODEL:
+                raise HarnessPause('The xKiro harness profile must use the selected Qwen SKU')
+        elif profile['provider'] == 'google':
+            if not self.plan.get('google_fallback_authorized') or not self.plan.get('google_fallback_active'):
+                raise HarnessPause('Google is not active; ask the user before changing the harness plan')
+            if profile.get('free_tier_project_confirmed') is not True:
+                raise HarnessPause('Confirm the Google key is for a free-tier project before inference')
+        else:
+            raise HarnessPause('Unknown harness provider; no silent fallback')
         self.model = profile['model']
         self.provider = profile['provider']
         self.credential_alias = profile['credential_secret']
@@ -93,8 +101,13 @@ class CheckpointClient:
                 key = os.environ.get('HARNESS_API_KEY', '').strip()
             if not key:
                 raise HarnessPause(f'{self.credential_alias} is not configured for this harness; no older credential is used', 401)
-            self.client = FreeGatewayClient(self.provider, self.model,
-                load_pricing(self.provider, api_key=key), budget=self.budget, api_key=key)
+            if self.provider == 'xkiro':
+                self.client = FreeGatewayClient(self.provider, self.model,
+                    load_pricing(self.provider, api_key=key), budget=self.budget, api_key=key)
+            else:
+                from hard_harness.google_client import GoogleHarnessClient
+                self.client = GoogleHarnessClient(self.model, key,
+                    free_project_confirmed=profile.get('free_tier_project_confirmed'), budget=self.budget)
         self.base_url = self.client.base_url
         self.timeout = self.client.timeout
         self.attempts = self.client.attempts
@@ -103,6 +116,7 @@ class CheckpointClient:
         self.cached_calls = 0
         self.pause = None
         self.events = []
+        self.last_provenance = None
 
     @property
     def calls(self):
@@ -121,8 +135,13 @@ class CheckpointClient:
                 record = read_json(path)
                 if record['status'] == 'response':
                     self.cached_calls += 1
+                    self.last_provenance = {k:record.get(k) for k in ('request_hash','role','provider','model','credential_alias','timestamp')}
+                    self.last_provenance['cache_replayed'] = True
                     return {**record['response'], '_harness_cached': True, '_harness_request_hash': key}
                 if record.get('terminal_output_error'):
+                    self.cached_calls += 1
+                    self.last_provenance = {k:record.get(k) for k in ('request_hash','role','provider','model','credential_alias','timestamp')}
+                    self.last_provenance['cache_replayed'] = True
                     raise NvidiaAPIError(record['error'], record.get('http_status', 422))
             if self.pause is not None:
                 raise NvidiaAPIError(str(self.pause), self.pause.status_code)
@@ -139,6 +158,8 @@ class CheckpointClient:
                 # Preserve every attempt; don't overwrite a previous provider failure.
                 attempt = path.with_name(key + '.' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '.error.json')
                 write_json(attempt, record)
+                self.last_provenance = {k:record.get(k) for k in ('request_hash','role','provider','model','credential_alias','timestamp')}
+                self.last_provenance['cache_replayed'] = False
                 if status == 422:
                     write_json(path, record)
                 else:
@@ -151,6 +172,8 @@ class CheckpointClient:
                       'timestamp': now(), 'status': 'response', 'response': response,
                       'http_attempts': self.client.calls - prior}
             write_json(path, record)
+            self.last_provenance = {k:record.get(k) for k in ('request_hash','role','provider','model','credential_alias','timestamp')}
+            self.last_provenance['cache_replayed'] = False
             self.events.append({k: record[k] for k in ('request_hash', 'role', 'provider', 'model', 'timestamp', 'http_attempts')})
             return {**response, '_harness_cached': False, '_harness_request_hash': key}
 
@@ -180,6 +203,7 @@ class CheckpointClient:
             value = parse_object(response['text'])
         provenance = {k: response.get(k) for k in
                       ('_harness_request_hash', '_harness_cached', 'usage', 'seconds', 'served_model')}
+        provenance['source_call'] = self.last_provenance
         provenance['max_tokens'] = max_tokens
         provenance['budget_retry'] = budget_retry
         provenance['original_request_hash'] = original_hash

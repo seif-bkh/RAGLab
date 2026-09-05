@@ -147,7 +147,7 @@ def prepare_sources():
                                                    'reason': 'Source transcription requires review', 'uncertain': record['uncertain']})
                     else:
                         units.extend(units_from_text(document['name'], record['text'], page=page_number,
-                                                      quality='assistant_visual_reviewed_not_expert_certified' if record.get('assistant_visual_reviewed') else 'qwen_image_transcribed_and_audited_not_expert_certified'))
+                                                      quality='assistant_visual_reviewed_not_expert_certified' if record.get('assistant_visual_reviewed') else 'model_image_transcribed_and_audited_not_expert_certified'))
                     write_json(out / 'manifest.json', manifest)
                     write_json(out / 'gold_units.json', units)
                     print(f'[sources] {document["name"]} page {page_number}: approved={record["approved"]} uncertain={record["uncertain"]}', flush=True)
