@@ -18,6 +18,8 @@ from the uploaded artifact even if the raw log cannot be fetched.
 
 import glob
 import json
+import os
+import re
 import shutil
 import sys
 import traceback
@@ -35,6 +37,17 @@ cfg.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 PROGRESS_FILE = cfg.RESULTS_DIR / "ci_progress.txt"
 ERROR_FILE = cfg.RESULTS_DIR / "ci_test_error.txt"
 CURRENT_STEP = "startup"
+# RAGLAB_CI_REAL_ONLY=1 skips the fictional-corpus legs (saves ~40
+# embedding API calls/run — the free tier is ~100 RPD and the docs/
+# corpus alone needs ~15 ingest + ~32 query embeddings).
+REAL_ONLY = os.environ.get("RAGLAB_CI_REAL_ONLY", "0").strip() \
+    in {"1", "true", "yes", "on"}
+
+REQUIRED_METADATA_FIELDS = {
+    "document", "language", "heading", "chunk_index", "source",
+    "origin", "section_type", "ingested_at", "embedding_model",
+    "token_count",
+}
 
 
 def progress(line: str) -> None:
@@ -119,6 +132,97 @@ def delta_str(run: dict, baseline: dict) -> str:
             f"{c['hit@5'] - b['hit@5']:+.3f})")
 
 
+# --- hybrid-blend lambda sweep -----------------------------------------------
+SWEEP_LAMBDAS = (0.55, 0.65, 0.75, 0.85, 0.95)
+REAL_SWEEP_LAMBDAS = (0.65, 0.75, 0.85)
+
+
+def qrank(run: dict, qid: str):
+    """correct_rank of one question id (None when missing)."""
+    for q in run.get("questions", []):
+        if q["id"] == qid:
+            return q.get("correct_rank")
+    return None
+
+
+def eval_blend_at(lam: float, extra_args: tuple = ()) -> dict | None:
+    """Run evaluate --hybrid-blend with a specific lambda.
+
+    Query embeddings come from the persistent on-disk cache, so after the
+    first mode every extra lambda costs zero additional embedding API calls
+    (only local BM25 + fusion re-run). cfg.HYBRID_BLEND_LAMBDA is patched for
+    the duration of the call and restored afterwards.
+    """
+    global CURRENT_STEP
+    old = cfg.HYBRID_BLEND_LAMBDA
+    cfg.HYBRID_BLEND_LAMBDA = lam
+    try:
+        rc = main.main(["evaluate", "--hybrid-blend", *extra_args,
+                        "--skip-sanity-check"])
+    finally:
+        cfg.HYBRID_BLEND_LAMBDA = old
+    check(f"blend lambda={lam:.2f} evaluate exits 0", rc == 0, f"rc={rc}")
+    run = get_latest_eval()
+    check(f"blend lambda={lam:.2f} results JSON written", run is not None)
+    if run is None:
+        return None
+    got = run["config"].get("hybrid_blend_lambda")
+    check(f"blend lambda={lam:.2f} recorded in run config",
+          got is not None and abs(float(got) - lam) < 1e-9, f"recorded={got}")
+    return run
+
+
+def blend_sweep(extra_args: tuple, label: str, baseline: dict | None,
+                rrf_run: dict | None, default_run: dict | None,
+                anchor_q: str, lambdas: tuple) -> None:
+    """Evaluate several lambdas, report one compact line + the acceptance verdict.
+
+    Acceptance (user's): the blend should recover the vector hit@1 while
+    keeping the RRF recall gain on the anchor question (q10 on the fictional
+    set). Mechanics are asserted; quality is a reported finding.
+    """
+    global CURRENT_STEP
+    CURRENT_STEP = f"{label}-blend-sweep"
+    progress(f"\n[ci] STEP 7b — {label} blend score-lambda sweep "
+             f"({', '.join(f'{l:.2f}' for l in lambdas)})")
+    rows = []
+    for lam in lambdas:
+        run_lam = eval_blend_at(lam, extra_args)
+        if run_lam is None:
+            continue
+        shutil.copy(sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
+                    cfg.RESULTS_DIR / f"sweep_{label}_blend_l{lam:.2f}.json")
+        o = run_lam["metrics"]["overall"]
+        rows.append((lam, run_lam))
+        progress(f"[ci]   {label} lambda={lam:.2f}: h1={o['hit@1']:.3f} "
+                 f"h3={o['hit@3']:.3f} h5={o['hit@5']:.3f} "
+                 f"(n={o['n']}) {anchor_q} rank={qrank(run_lam, anchor_q)}")
+    if not rows:
+        return
+    if default_run is not None:
+        rows.append((cfg.HYBRID_BLEND_LAMBDA, default_run))
+    joined = " | ".join(
+        f"lambda={lam:.2f}:{hit3(r['metrics']['overall'])}"
+        f" {anchor_q}={qrank(r, anchor_q)}"
+        for lam, r in sorted(rows))
+    notify(f"{label} blend-lambda sweep ({joined})")
+    best_lam, best_run = max(rows, key=lambda t: (
+        t[1]["metrics"]["overall"]["hit@1"],
+        t[1]["metrics"]["overall"]["hit@3"],
+        t[1]["metrics"]["overall"]["hit@5"]))
+    b = baseline["metrics"]["overall"] if baseline else None
+    bh = best_run["metrics"]["overall"]
+    q_b, q_v, q_r = qrank(best_run, anchor_q), (qrank(baseline, anchor_q)
+                                                if baseline else None),         (qrank(rrf_run, anchor_q) if rrf_run else None)
+    recovered = bool(b is not None and bh["hit@1"] >= b["hit@1"])
+    notify(f"{label} blend acceptance: best lambda={best_lam:.2f} "
+           f"h1={bh['hit@1']:.3f}/h3={bh['hit@3']:.3f}/h5={bh['hit@5']:.3f}"
+           + (f" (vector {b['hit@1']:.3f}/{b['hit@3']:.3f}/{b['hit@5']:.3f})"
+              if b else "")
+           + f" | {anchor_q} rank={q_b} (vector={q_v}, rrf={q_r}) | "
+           f"hit@1 recovered: {'YES' if recovered else 'NO'}")
+
+
 def check(label: str, ok: bool, detail: str = "") -> bool:
     print(f"[ci] {'PASS' if ok else 'FAIL'}  {label}" + (f"  ({detail})" if detail else ""))
     if not ok:
@@ -158,39 +262,38 @@ def run_steps() -> None:
 
     # --- 3. Ingest (real embeddings, --reset) ---------------------------------
     CURRENT_STEP = "ingest"
-    progress("\n[ci] STEP 3 — ingest --reset")
-    rc = main.main(["ingest", "--reset", "--skip-sanity-check"])
-    check("ingest exits 0", rc == 0, f"rc={rc}")
-    check("embedding cache written", cfg.EMBEDDING_CACHE_PATH.exists())
+    if not REAL_ONLY:
+        progress("\n[ci] STEP 3 — ingest --reset")
+        rc = main.main(["ingest", "--reset", "--skip-sanity-check"])
+        check("ingest exits 0", rc == 0, f"rc={rc}")
+        check("embedding cache written", cfg.EMBEDDING_CACHE_PATH.exists())
 
-    collection = get_collection(cfg, reset=False)
-    count = collection.count()
-    check("collection count > 0", count > 0, f"count={count}")
+        collection = get_collection(cfg, reset=False)
+        count = collection.count()
+        check("collection count > 0", count > 0, f"count={count}")
 
-    raw = collection.get(include=["metadatas"])
-    metas = raw["metadatas"]
-    langs = {m.get("language") for m in metas}
-    check("both FR and AR documents stored", {"fr", "ar"} <= langs, str(sorted(langs)))
+        raw = collection.get(include=["metadatas"])
+        metas = raw["metadatas"]
+        langs = {m.get("language") for m in metas}
+        check("both FR and AR documents stored", {"fr", "ar"} <= langs, str(sorted(langs)))
 
-    required_fields = {"document", "language", "heading", "chunk_index", "source",
-                       "origin", "section_type", "ingested_at", "embedding_model",
-                       "token_count"}
-    check("every record carries required metadata",
-          bool(metas) and required_fields <= set(metas[0]),
-          str(sorted(metas[0]) if metas else []))
-    check("metadata embedding model matches config",
-          bool(metas) and metas[0].get("embedding_model") == cfg.EMBEDDING_MODEL,
-          metas[0].get("embedding_model") if metas else "none")
+        check("every record carries required metadata",
+              bool(metas) and REQUIRED_METADATA_FIELDS <= set(metas[0]),
+              str(sorted(metas[0]) if metas else []))
+        check("metadata embedding model matches config",
+              bool(metas) and metas[0].get("embedding_model") == cfg.EMBEDDING_MODEL,
+              metas[0].get("embedding_model") if metas else "none")
 
-    # v2 chunking strategy: boilerplate/front-matter chunks are chunked but
-    # not indexed, so they cannot act as retrieval magnets.
-    exclude = bool(getattr(cfg, "INDEX_EXCLUDE_BOILERPLATE", False))
-    types_seen = {m.get("section_type") for m in metas}
-    if exclude:
-        check("boilerplate chunks excluded from the index",
-              types_seen == {"content"}, f"stored types={sorted(types_seen)}")
-    notify(f"chunking: stored={count} chunks, section_types={sorted(types_seen)}, "
-           f"exclude_boilerplate={exclude} "
+        # v2 chunking strategy: boilerplate/front-matter chunks are chunked but
+        # not indexed, so they cannot act as retrieval magnets.
+        exclude = bool(getattr(cfg, "INDEX_EXCLUDE_BOILERPLATE", False))
+        types_seen = {m.get("section_type") for m in metas}
+        if exclude:
+            check("boilerplate chunks excluded from the index",
+                  types_seen == {"content"}, f"stored types={sorted(types_seen)}")
+        notify(f"chunking: stored={count} chunks, section_types={sorted(types_seen)}, "
+               f"exclude_boilerplate={exclude} "
+
            f"(size={cfg.CHUNK_SIZE_TOKENS} overlap={cfg.CHUNK_OVERLAP_TOKENS} "
            f"sentence_overlap={getattr(cfg, 'CHUNK_OVERLAP_SENTENCE_AWARE', True)})")
 
@@ -244,164 +347,175 @@ def run_steps() -> None:
                    f"cache_hits={translator.cache_hits} "
                    f"failures={translator.failures}{example}")
 
-    rc = main.main(["query",
-                    "Quel est le frais mensuel du Compte Courant Atlas ?",
-                    "--k", "5", "--skip-sanity-check"])
-    check("vector query exits 0", rc == 0, f"rc={rc}")
-    rc = main.main(["query",
-                    "Which Atlas account is meant for independent professionals?",
-                    "--k", "5", "--hybrid", "--lang", "fr", "--skip-sanity-check"])
-    check("hybrid query exits 0", rc == 0, f"rc={rc}")
+    if not REAL_ONLY:
+        rc = main.main(["query",
+                        "Quel est le frais mensuel du Compte Courant Atlas ?",
+                        "--k", "5", "--skip-sanity-check"])
+        check("vector query exits 0", rc == 0, f"rc={rc}")
+        rc = main.main(["query",
+                        "Which Atlas account is meant for independent professionals?",
+                        "--k", "5", "--hybrid", "--lang", "fr", "--skip-sanity-check"])
+        check("hybrid query exits 0", rc == 0, f"rc={rc}")
 
-    # --- 5. Evaluate (vector-only baseline) -------------------------------------
-    CURRENT_STEP = "evaluate"
-    progress("\n[ci] STEP 5 — evaluate (questions.json, vector-only)")
-    rc = main.main(["evaluate", "--skip-sanity-check"])
-    check("evaluate exits 0", rc == 0, f"rc={rc}")
 
-    v_metrics = v_sep = None
-    run = get_latest_eval()
-    check("timestamped results JSON written", run is not None,
-          f"results_dir={cfg.RESULTS_DIR}")
-    if run:
-        metrics = run["metrics"]
-        check("metrics sections present",
-              {"overall", "by_category", "by_language", "separation", "out_of_scope"}
-              <= set(metrics))
-        check("run config records model + chunking params",
-              run["config"].get("embedding_model") == cfg.EMBEDDING_MODEL
-              and "chunk_size_tokens" in run["config"])
-        check("run config records query translation status",
-              "query_translation_enabled" in run["config"])
-        check("per-question records include hits",
-              bool(run.get("questions"))
-              and all("hits" in q and "category" in q for q in run["questions"]))
-        check("per-question records include query variants",
-              bool(run.get("questions"))
-              and all("query_variants" in q for q in run["questions"]))
-        # Printable conclusions for the log + compact annotations (GitHub
-        # shows at most 10 annotations per step, so vector and hybrid runs
-        # share compressed lines).
-        v_metrics = metrics
-        v_sep = sep = metrics["separation"]
-        overall = metrics["overall"]
-        oos = metrics["out_of_scope"]
-        progress(f"\n[ci] CONCLUSION — overall hit rates:"
-                 f"  hit@1={overall['hit@1']:.3f}  hit@3={overall['hit@3']:.3f}"
-                 f"  hit@5={overall['hit@5']:.3f}  (n={overall['n']})")
-        xl = [q for q in run.get("questions", [])
-              if q.get("category") == "cross-lingual"]
-        if xl:
-            progress("[ci]   cross-lingual detail (translation variants):")
-            for q in xl:
-                progress(f"[ci]     {q['id']} {q.get('language')}"
-                         f"->{q.get('expected_lang')} "
-                         f"correct_rank={q.get('correct_rank')} "
-                         f"correct_variant={q.get('correct_variant')} "
-                         f"top_variant={q.get('top_variant')} "
-                         f"variants="
-                         f"{[v['label'] for v in q.get('query_variants', [])]}")
-        for cat, d in sorted(metrics["by_category"].items()):
-            progress(f"[ci]   category {cat:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
-                     f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
-        for lang, d in sorted(metrics["by_language"].items()):
-            progress(f"[ci]   language {lang:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
-                     f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
-        progress(f"[ci]   separation  correct={sep['mean_correct_score']:.4f} "
-                 f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
-                 f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f}")
-        # One compact annotation line (GitHub shows at most 10 per step).
-        notify(f"evaluation: vector | {eval_summary(run)}")
-        misses = [q for q in run["questions"]
-                  if not q["is_out_of_scope"] and q["correct_rank"] is None]
-        for q in misses:
-            progress(f"[ci]   MISS  {q['id']} [{q['language']}/{q['category']}] "
-                     f"not in top {run['config']['retrieval_top_k']} — "
-                     f"{q['question'][:70]}")
-            # What DID come back instead? Top 3 hits (log-level only).
-            top = q["hits"][:3]
-            parts = []
-            for h in top:
-                sid = h.get("id", "?")
-                if "::" in sid:
-                    sid = sid.split("::", 1)[1]
-                score = h.get("score")
-                score_s = f"{score:.4f}" if isinstance(score, (int, float)) else "?"
-                heading = (h.get("heading") or "").replace("\n", " ")
-                snippet = (h.get("text") or "").replace("\n", " ")[:42]
-                parts.append(
-                    f"#{h['rank']} {sid} sim={score_s} "
-                    f"{h.get('language') or '?'} "
-                    f"v={h.get('variant') or '?'} h='{heading[:20]}' "
-                    f"txt='{snippet}...'"
-                )
-            progress(f"[ci]     " + " | ".join(parts))
+    if not REAL_ONLY:
+        # --- 5. Evaluate (vector-only baseline) -------------------------------------
+        CURRENT_STEP = "evaluate"
+        progress("\n[ci] STEP 5 — evaluate (questions.json, vector-only)")
+        rc = main.main(["evaluate", "--skip-sanity-check"])
+        check("evaluate exits 0", rc == 0, f"rc={rc}")
 
-    # --- 5b. Hybrid A/B: same questions, vector + BM25 RRF per variant ---------
-    CURRENT_STEP = "hybrid-evaluate"
-    progress("\n[ci] STEP 6 — hybrid evaluation "
-             "(vector + BM25 RRF, translated variants)")
-    # eval_*.json names have 1-second precision; the hybrid run could overwrite
-    # the vector file, so preserve it under a clearly-labelled copy.
-    vector_files = sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))
-    if vector_files:
-        shutil.copy(vector_files[-1], cfg.RESULTS_DIR / "eval_000_vector_ab.json")
-    rc = main.main(["evaluate", "--hybrid", "--skip-sanity-check"])
-    check("hybrid evaluate exits 0", rc == 0, f"rc={rc}")
-    run_h = get_latest_eval()
-    check("hybrid results JSON written", run_h is not None)
-    if run_h:
-        check("hybrid run records hybrid=True",
-              run_h["config"].get("hybrid") is True)
-        m_h = run_h["metrics"]
-        o_h = m_h["overall"]
-        s_h = m_h["separation"]
-        oos_h = m_h["out_of_scope"]
+        v_metrics = v_sep = None
+        run = get_latest_eval()
+        check("timestamped results JSON written", run is not None,
+              f"results_dir={cfg.RESULTS_DIR}")
+        if run:
+            metrics = run["metrics"]
+            check("metrics sections present",
+                  {"overall", "by_category", "by_language", "separation", "out_of_scope"}
+                  <= set(metrics))
+            check("run config records model + chunking params",
+                  run["config"].get("embedding_model") == cfg.EMBEDDING_MODEL
+                  and "chunk_size_tokens" in run["config"])
+            check("run config records query translation status",
+                  "query_translation_enabled" in run["config"])
+            check("per-question records include hits",
+                  bool(run.get("questions"))
+                  and all("hits" in q and "category" in q for q in run["questions"]))
+            check("per-question records include query variants",
+                  bool(run.get("questions"))
+                  and all("query_variants" in q for q in run["questions"]))
+            # Printable conclusions for the log + compact annotations (GitHub
+            # shows at most 10 annotations per step, so vector and hybrid runs
+            # share compressed lines).
+            v_metrics = metrics
+            v_sep = sep = metrics["separation"]
+            overall = metrics["overall"]
+            oos = metrics["out_of_scope"]
+            progress(f"\n[ci] CONCLUSION — overall hit rates:"
+                     f"  hit@1={overall['hit@1']:.3f}  hit@3={overall['hit@3']:.3f}"
+                     f"  hit@5={overall['hit@5']:.3f}  (n={overall['n']})")
+            xl = [q for q in run.get("questions", [])
+                  if q.get("category") == "cross-lingual"]
+            if xl:
+                progress("[ci]   cross-lingual detail (translation variants):")
+                for q in xl:
+                    progress(f"[ci]     {q['id']} {q.get('language')}"
+                             f"->{q.get('expected_lang')} "
+                             f"correct_rank={q.get('correct_rank')} "
+                             f"correct_variant={q.get('correct_variant')} "
+                             f"top_variant={q.get('top_variant')} "
+                             f"variants="
+                             f"{[v['label'] for v in q.get('query_variants', [])]}")
+            for cat, d in sorted(metrics["by_category"].items()):
+                progress(f"[ci]   category {cat:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
+                         f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
+            for lang, d in sorted(metrics["by_language"].items()):
+                progress(f"[ci]   language {lang:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
+                         f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
+            progress(f"[ci]   separation  correct={sep['mean_correct_score']:.4f} "
+                     f"best_incorrect={sep['mean_best_incorrect_score']:.4f} "
+                     f"gap={sep['gap_mean_correct_minus_best_incorrect']:.4f}")
+            # One compact annotation line (GitHub shows at most 10 per step).
+            notify(f"evaluation: vector | {eval_summary(run)}")
+            misses = [q for q in run["questions"]
+                      if not q["is_out_of_scope"] and q["correct_rank"] is None]
+            for q in misses:
+                progress(f"[ci]   MISS  {q['id']} [{q['language']}/{q['category']}] "
+                         f"not in top {run['config']['retrieval_top_k']} — "
+                         f"{q['question'][:70]}")
+                # What DID come back instead? Top 3 hits (log-level only).
+                top = q["hits"][:3]
+                parts = []
+                for h in top:
+                    sid = h.get("id", "?")
+                    if "::" in sid:
+                        sid = sid.split("::", 1)[1]
+                    score = h.get("score")
+                    score_s = f"{score:.4f}" if isinstance(score, (int, float)) else "?"
+                    heading = (h.get("heading") or "").replace("\n", " ")
+                    snippet = (h.get("text") or "").replace("\n", " ")[:42]
+                    parts.append(
+                        f"#{h['rank']} {sid} sim={score_s} "
+                        f"{h.get('language') or '?'} "
+                        f"v={h.get('variant') or '?'} h='{heading[:20]}' "
+                        f"txt='{snippet}...'"
+                    )
+                progress(f"[ci]     " + " | ".join(parts))
 
-        progress(f"\n[ci] HYBRID — overall hit rates:"
-                 f"  hit@1={o_h['hit@1']:.3f}  hit@3={o_h['hit@3']:.3f}"
-                 f"  hit@5={o_h['hit@5']:.3f}  (n={o_h['n']})")
-        for cat, d in sorted(m_h["by_category"].items()):
-            progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
-                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                     f"hit@5={d['hit@5']:.3f}")
-        for lang, d in sorted(m_h["by_language"].items()):
-            progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
-                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                     f"hit@5={d['hit@5']:.3f}")
-        progress(f"[ci]   separation  correct={s_h['mean_correct_score']:.4f} "
-                 f"best_incorrect={s_h['mean_best_incorrect_score']:.4f} "
-                 f"gap={s_h['gap_mean_correct_minus_best_incorrect']:.4f}")
-        d = delta_str(run_h, run) if v_metrics is not None else ""
-        notify(f"evaluation: rrf {d} | {eval_summary(run_h)}")
+        # --- 5b. Hybrid A/B: same questions, vector + BM25 RRF per variant ---------
+        CURRENT_STEP = "hybrid-evaluate"
+        progress("\n[ci] STEP 6 — hybrid evaluation "
+                 "(vector + BM25 RRF, translated variants)")
+        # eval_*.json names have 1-second precision; the hybrid run could overwrite
+        # the vector file, so preserve it under a clearly-labelled copy.
+        vector_files = sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))
+        if vector_files:
+            shutil.copy(vector_files[-1], cfg.RESULTS_DIR / "eval_000_vector_ab.json")
+        rc = main.main(["evaluate", "--hybrid", "--skip-sanity-check"])
+        check("hybrid evaluate exits 0", rc == 0, f"rc={rc}")
+        run_h = get_latest_eval()
+        check("hybrid results JSON written", run_h is not None)
+        if run_h:
+            check("hybrid run records hybrid=True",
+                  run_h["config"].get("hybrid") is True)
+            m_h = run_h["metrics"]
+            o_h = m_h["overall"]
+            s_h = m_h["separation"]
+            oos_h = m_h["out_of_scope"]
 
-    # --- 5c. Score-blend A/B: vector + BM25 weighted blend per variant --------
-    CURRENT_STEP = "blend-evaluate"
-    progress("\n[ci] STEP 7 — blend evaluation "
-             "(vector + BM25 score-blend, translated variants)")
-    rc = main.main(["evaluate", "--hybrid-blend", "--skip-sanity-check"])
-    check("blend evaluate exits 0", rc == 0, f"rc={rc}")
-    run_b = get_latest_eval()
-    check("blend results JSON written", run_b is not None)
-    if run_b:
-        check("blend run records retrieval_mode=blend",
-              run_b["config"].get("retrieval_mode") == "blend")
-        m_b = run_b["metrics"]
-        progress(f"\n[ci] BLEND — overall hit rates:"
-                 f"  hit@1={m_b['overall']['hit@1']:.3f}  "
-                 f"hit@3={m_b['overall']['hit@3']:.3f}  "
-                 f"hit@5={m_b['overall']['hit@5']:.3f}  "
-                 f"(n={m_b['overall']['n']})")
-        for cat, d in sorted(m_b["by_category"].items()):
-            progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
-                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                     f"hit@5={d['hit@5']:.3f}")
-        for lang, d in sorted(m_b["by_language"].items()):
-            progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
-                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                     f"hit@5={d['hit@5']:.3f}")
-        d = delta_str(run_b, run) if v_metrics is not None else ""
-        notify(f"evaluation: blend {d} | {eval_summary(run_b)}")
+            progress(f"\n[ci] HYBRID — overall hit rates:"
+                     f"  hit@1={o_h['hit@1']:.3f}  hit@3={o_h['hit@3']:.3f}"
+                     f"  hit@5={o_h['hit@5']:.3f}  (n={o_h['n']})")
+            for cat, d in sorted(m_h["by_category"].items()):
+                progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
+                         f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                         f"hit@5={d['hit@5']:.3f}")
+            for lang, d in sorted(m_h["by_language"].items()):
+                progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
+                         f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                         f"hit@5={d['hit@5']:.3f}")
+            progress(f"[ci]   separation  correct={s_h['mean_correct_score']:.4f} "
+                     f"best_incorrect={s_h['mean_best_incorrect_score']:.4f} "
+                     f"gap={s_h['gap_mean_correct_minus_best_incorrect']:.4f}")
+            d = delta_str(run_h, run) if v_metrics is not None else ""
+            notify(f"evaluation: rrf {d} | {eval_summary(run_h)}")
+
+        # --- 5c. Score-blend A/B: vector + BM25 weighted blend per variant --------
+        CURRENT_STEP = "blend-evaluate"
+        progress("\n[ci] STEP 7 — blend evaluation "
+                 "(vector + BM25 score-blend, translated variants)")
+        rc = main.main(["evaluate", "--hybrid-blend", "--skip-sanity-check"])
+        check("blend evaluate exits 0", rc == 0, f"rc={rc}")
+        run_b = get_latest_eval()
+        check("blend results JSON written", run_b is not None)
+        if run_b:
+            check("blend run records retrieval_mode=blend",
+                  run_b["config"].get("retrieval_mode") == "blend")
+            m_b = run_b["metrics"]
+            progress(f"\n[ci] BLEND — overall hit rates:"
+                     f"  hit@1={m_b['overall']['hit@1']:.3f}  "
+                     f"hit@3={m_b['overall']['hit@3']:.3f}  "
+                     f"hit@5={m_b['overall']['hit@5']:.3f}  "
+                     f"(n={m_b['overall']['n']})")
+            for cat, d in sorted(m_b["by_category"].items()):
+                progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
+                         f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                         f"hit@5={d['hit@5']:.3f}")
+            for lang, d in sorted(m_b["by_language"].items()):
+                progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
+                         f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                         f"hit@5={d['hit@5']:.3f}")
+            d = delta_str(run_b, run) if v_metrics is not None else ""
+            notify(f"evaluation: blend {d} | {eval_summary(run_b)}")
+            # Preserve the default-lambda run, then sweep lambda. All lambdas
+            # reuse the cached query embeddings (zero extra API calls).
+            files = sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))
+            if files:
+                shutil.copy(files[-1], cfg.RESULTS_DIR / "eval_002_blend_ab.json")
+            blend_sweep((), "fictional", run, run_h, run_b, "q10",
+                        SWEEP_LAMBDAS)
+
 
     # --- 6b. REAL documents (docs/): ingest + vector/hybrid evaluation --------
     # The user's real corpus: BCT circular 2019-08, internal Islamic-banking
@@ -410,94 +524,117 @@ def run_steps() -> None:
     CURRENT_STEP = "real-docs-ingest"
     real_docs_dir = str((cfg.PROJECT_DIR.parent / "docs").resolve())
     progress(f"\n[ci] STEP 8 — ingest --reset --data-dir {real_docs_dir}")
-    rc = main.main(["ingest", "--reset", "--data-dir", real_docs_dir,
-                    "--skip-sanity-check"])
-    check("real-docs ingest exits 0", rc == 0, f"rc={rc}")
-    collection_real = get_collection(cfg, reset=False)
-    count_real = collection_real.count()
-    check("real-docs collection count > 0", count_real > 0, f"count={count_real}")
-    metas_real = (collection_real.get(include=["metadatas"])["metadatas"] or [])
-    langs_real = {m.get("language") for m in metas_real}
-    check("real-docs collection is Arabic-only", langs_real == {"ar"},
-          str(sorted(langs_real)))
-    check("real-docs metadata complete",
-          bool(metas_real) and required_fields <= set(metas_real[0]))
+    real_ready = False
+    try:
+        rc = main.main(["ingest", "--reset", "--data-dir", real_docs_dir,
+                        "--skip-sanity-check"])
+        check("real-docs ingest exits 0", rc == 0, f"rc={rc}")
+        collection_real = get_collection(cfg, reset=False)
+        count_real = collection_real.count()
+        check("real-docs collection count > 0", count_real > 0,
+              f"count={count_real}")
+        metas_real = (collection_real.get(include=["metadatas"])["metadatas"] or [])
+        langs_real = {m.get("language") for m in metas_real}
+        check("real-docs collection is Arabic-only", langs_real == {"ar"},
+              str(sorted(langs_real)))
+        check("real-docs metadata complete",
+              bool(metas_real) and REQUIRED_METADATA_FIELDS <= set(metas_real[0]))
+        real_ready = bool(rc == 0 and count_real > 0 and langs_real == {"ar"})
+    except RuntimeError as exc:
+        # Free-tier daily embedding quota (reset midnight Pacific): the batches
+        # embedded so far were saved into the embedding cache artifact by the
+        # workflow, so a rerun after the reset continues from where it stopped.
+        # A pure quota condition DEFERS instead of failing the pipeline.
+        if re.search(r"429|RESOURCE_EXHAUSTED|quota", str(exc), re.I):
+            progress("[ci] real-docs ingest DEFERRED — daily embedding quota "
+                     "exhausted (429 RESOURCE_EXHAUSTED). Batch cache saved; "
+                     "rerun after the reset continues the ingest from there.")
+            notify("real-docs: DEFERRED (daily embedding quota 429 — cache "
+                   "artifact saved; rerun after reset continues the ingest)")
+            (cfg.RESULTS_DIR / "real_docs_status.json").write_text(
+                json.dumps({"status": "deferred-quota",
+                            "detail": str(exc)[:500]},
+                           ensure_ascii=False, indent=2))
+        else:
+            raise
 
-    # 6b.1 vector evaluation on the REAL question set
-    CURRENT_STEP = "real-evaluate"
-    progress("\n[ci] STEP 9 — evaluate --questions questions_real.json "
-             "(vector-only)")
-    rc = main.main(["evaluate", "--questions", "questions_real.json",
-                    "--skip-sanity-check"])
-    check("real-docs vector evaluate exits 0", rc == 0, f"rc={rc}")
-    run_real = get_latest_eval()
-    check("real-docs vector results JSON written", run_real is not None)
-    if run_real:
-        shutil.copy(
-            sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
-            cfg.RESULTS_DIR / "eval_001_real_vector_ab.json")
-        m_real = run_real["metrics"]
-        o_real = m_real["overall"]
-        s_real = m_real["separation"]
-        oos_real = m_real["out_of_scope"]
-        progress(f"\n[ci] REAL-DOCS (vector) — overall hit rates:"
-                 f"  hit@1={o_real['hit@1']:.3f}  hit@3={o_real['hit@3']:.3f}"
-                 f"  hit@5={o_real['hit@5']:.3f}  (n={o_real['n']})")
-        for cat, d in sorted(m_real["by_category"].items()):
-            progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
-                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                     f"hit@5={d['hit@5']:.3f}")
-        for lang, d in sorted(m_real["by_language"].items()):
-            progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
-                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
-                     f"hit@5={d['hit@5']:.3f}")
-        notify(f"real-docs: vector | stored={count_real} chunks "
-               f"langs={sorted(langs_real)} | {eval_summary(run_real)}")
+    if real_ready:
+        # 6b.1 vector evaluation on the REAL question set
+        CURRENT_STEP = "real-evaluate"
+        progress("\n[ci] STEP 9 — evaluate --questions questions_real.json "
+                 "(vector-only)")
+        rc = main.main(["evaluate", "--questions", "questions_real.json",
+                        "--skip-sanity-check"])
+        check("real-docs vector evaluate exits 0", rc == 0, f"rc={rc}")
+        run_real = get_latest_eval()
+        check("real-docs vector results JSON written", run_real is not None)
+        if run_real:
+            shutil.copy(
+                sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
+                cfg.RESULTS_DIR / "eval_001_real_vector_ab.json")
+            m_real = run_real["metrics"]
+            o_real = m_real["overall"]
+            progress(f"\n[ci] REAL-DOCS (vector) — overall hit rates:"
+                     f"  hit@1={o_real['hit@1']:.3f}  hit@3={o_real['hit@3']:.3f}"
+                     f"  hit@5={o_real['hit@5']:.3f}  (n={o_real['n']})")
+            for cat, d in sorted(m_real["by_category"].items()):
+                progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
+                         f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                         f"hit@5={d['hit@5']:.3f}")
+            for lang, d in sorted(m_real["by_language"].items()):
+                progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
+                         f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                         f"hit@5={d['hit@5']:.3f}")
+            notify(f"real-docs: vector | stored={count_real} chunks "
+                   f"langs={sorted(langs_real)} | {eval_summary(run_real)}")
 
-    # 6b.2 hybrid evaluation on the REAL question set
-    CURRENT_STEP = "real-hybrid-evaluate"
-    progress("\n[ci] STEP 10 — evaluate --hybrid --questions questions_real.json")
-    rc = main.main(["evaluate", "--hybrid", "--questions", "questions_real.json",
-                    "--skip-sanity-check"])
-    check("real-docs hybrid evaluate exits 0", rc == 0, f"rc={rc}")
-    run_real_h = get_latest_eval()
-    check("real-docs hybrid results JSON written", run_real_h is not None)
-    if run_real_h:
-        shutil.copy(
-            sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
-            cfg.RESULTS_DIR / "eval_002_real_hybrid_ab.json")
-        m_rh = run_real_h["metrics"]
-        o_rh = m_rh["overall"]
-        s_rh = m_rh["separation"]
-        oos_rh = m_rh["out_of_scope"]
-        progress(f"\n[ci] REAL-DOCS (hybrid) — overall hit rates:"
-                 f"  hit@1={o_rh['hit@1']:.3f}  hit@3={o_rh['hit@3']:.3f}"
-                 f"  hit@5={o_rh['hit@5']:.3f}  (n={o_rh['n']})")
-        d = delta_str(run_real_h, run_real) if run_real is not None else ""
-        notify(f"real-docs: rrf {d} | {eval_summary(run_real_h)}")
+        # 6b.2 hybrid evaluation on the REAL question set
+        CURRENT_STEP = "real-hybrid-evaluate"
+        progress("\n[ci] STEP 10 — evaluate --hybrid --questions questions_real.json")
+        rc = main.main(["evaluate", "--hybrid", "--questions", "questions_real.json",
+                        "--skip-sanity-check"])
+        check("real-docs hybrid evaluate exits 0", rc == 0, f"rc={rc}")
+        run_real_h = get_latest_eval()
+        check("real-docs hybrid results JSON written", run_real_h is not None)
+        if run_real_h:
+            shutil.copy(
+                sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
+                cfg.RESULTS_DIR / "eval_002_real_hybrid_ab.json")
+            m_rh = run_real_h["metrics"]
+            o_rh = m_rh["overall"]
+            progress(f"\n[ci] REAL-DOCS (hybrid) — overall hit rates:"
+                     f"  hit@1={o_rh['hit@1']:.3f}  hit@3={o_rh['hit@3']:.3f}"
+                     f"  hit@5={o_rh['hit@5']:.3f}  (n={o_rh['n']})")
+            d = delta_str(run_real_h, run_real) if run_real is not None else ""
+            notify(f"real-docs: rrf {d} | {eval_summary(run_real_h)}")
 
-    # 6b.3 blend evaluation on the REAL question set
-    CURRENT_STEP = "real-blend-evaluate"
-    progress("\n[ci] STEP 11 — evaluate --hybrid-blend --questions questions_real.json")
-    rc = main.main(["evaluate", "--hybrid-blend", "--questions",
-                    "questions_real.json", "--skip-sanity-check"])
-    check("real-docs blend evaluate exits 0", rc == 0, f"rc={rc}")
-    run_real_b = get_latest_eval()
-    check("real-docs blend results JSON written", run_real_b is not None)
-    if run_real_b:
-        check("real-docs blend run records retrieval_mode=blend",
-              run_real_b["config"].get("retrieval_mode") == "blend")
-        shutil.copy(
-            sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
-            cfg.RESULTS_DIR / "eval_005_real_blend_ab.json")
-        m_rb = run_real_b["metrics"]
-        progress(f"\n[ci] REAL-DOCS (blend) — overall hit rates:"
-                 f"  hit@1={m_rb['overall']['hit@1']:.3f}  "
-                 f"hit@3={m_rb['overall']['hit@3']:.3f}  "
-                 f"hit@5={m_rb['overall']['hit@5']:.3f}  "
-                 f"(n={m_rb['overall']['n']})")
-        d = delta_str(run_real_b, run_real) if run_real is not None else ""
-        notify(f"real-docs: blend {d} | {eval_summary(run_real_b)}")
+        # 6b.3 blend evaluation on the REAL question set
+        CURRENT_STEP = "real-blend-evaluate"
+        progress("\n[ci] STEP 11 — evaluate --hybrid-blend --questions questions_real.json")
+        rc = main.main(["evaluate", "--hybrid-blend", "--questions",
+                        "questions_real.json", "--skip-sanity-check"])
+        check("real-docs blend evaluate exits 0", rc == 0, f"rc={rc}")
+        run_real_b = get_latest_eval()
+        check("real-docs blend results JSON written", run_real_b is not None)
+        if run_real_b:
+            check("real-docs blend run records retrieval_mode=blend",
+                  run_real_b["config"].get("retrieval_mode") == "blend")
+            m_rb = run_real_b["metrics"]
+            progress(f"\n[ci] REAL-DOCS (blend) — overall hit rates:"
+                     f"  hit@1={m_rb['overall']['hit@1']:.3f}  "
+                     f"hit@3={m_rb['overall']['hit@3']:.3f}  "
+                     f"hit@5={m_rb['overall']['hit@5']:.3f}  "
+                     f"(n={m_rb['overall']['n']})")
+            d = delta_str(run_real_b, run_real) if run_real is not None else ""
+            notify(f"real-docs: blend {d} | {eval_summary(run_real_b)}")
+            # Preserve the default-lambda run, then sweep lambda (cache reuse).
+            files = sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))
+            if files:
+                shutil.copy(files[-1], cfg.RESULTS_DIR
+                            / "eval_005_real_blend_ab.json")
+            blend_sweep(("--questions", "questions_real.json"), "real",
+                        run_real, run_real_h, run_real_b, "rq10",
+                        REAL_SWEEP_LAMBDAS)
 
     # --- 7. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"

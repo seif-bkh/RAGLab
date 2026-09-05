@@ -237,7 +237,15 @@ printed warning rather than mixed in.
   max per query variant; dense similarity stays the primary signal and BM25
   is a boost. RRF is rank-only (it lifts token-matching chunks above the
   fact chunk); the blend aims to keep both. Use `--hybrid-blend` anywhere
-  `--hybrid` works (`query` and `evaluate`).
+  `--hybrid` works (`query` and `evaluate`). The per-variant fusion breaks
+  cross-variant top-1 ties by the raw score (not variant order), otherwise
+  the original-language variant's champion can demote the correct chunk
+  found by a translated variant (observed as hit@1 drops).
+- CI runs a **lambda sweep** (`HYBRID_BLEND_LAMBDA` from 0.55 to 0.95) after
+  the default-0.7 blend run. Query embeddings are cached on disk, so every
+  extra lambda costs zero additional embedding API calls; the sweep picks the
+  lambda that maximizes hit@1 (hit@3/5 as tiebreakers) and reports whether it
+  recovers the vector hit@1 while keeping the RRF recall gain on q10.
 
 ### Query translation — cross-lingual retrieval (experimental, `translate.py`)
 
@@ -372,3 +380,13 @@ raglab/
   substring/chunk-index matching, not by LLM judgement.
 - No LLM answer generation is implemented. The clearly marked stub lives in
   `answer.py`; add a generator there only if you decide to go further.
+
+
+- The real-docs corpus (docs/, 4 Arabic documents → 213 chunks) needs more
+  embedded inputs than one free-tier daily budget can provide, so the CI
+  defers the ingest when the embedding quota (429) is exhausted: batches
+  embedded so far stay in `embeddings_cache.json`, uploaded as the
+  `raglab-embed-cache` artifact and restored by the next run, so the corpus
+  is built up across days without failing the pipeline. Run the real-docs
+  leg alone with `RAGLAB_CI_REAL_ONLY=1` (workflow dispatch input
+  `real-only`), which skips the fictional-corpus legs to save quota.

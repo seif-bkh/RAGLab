@@ -6,6 +6,12 @@ on:
       - "**"
   pull_request:
   workflow_dispatch:
+    inputs:
+      real-only:
+        description: "Skip fictional-corpus legs (Gemini free tier ~100 RPD); run only docs/ real-docs pipeline."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -80,7 +86,30 @@ jobs:
           printf 'GEMINI_API_KEY=%s\n' "$KEY" > .env
           echo "wrote .env from repository secret: $SRC"
 
+      - name: Restore embedding cache from a previous run (best-effort)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd raglab
+          ART=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" --paginate \
+                 --jq '[.artifacts[] | select(.name=="raglab-embed-cache" and .expired==false)][0].id' || true)
+          if [ -n "$ART" ] && [ "$ART" != "null" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART/zip" > /tmp/cache.zip || true
+            mkdir -p /tmp/cachex && (cd /tmp/cachex && unzip -o -q /tmp/cache.zip) || true
+            if [ -s /tmp/cachex/embeddings_cache.json ]; then
+              cp /tmp/cachex/embeddings_cache.json ./embeddings_cache.json
+              echo "restored embedding cache (artifact $ART, $(wc -c < embeddings_cache.json) bytes)"
+            else
+              echo "cache artifact downloaded but empty — starting fresh"
+            fi
+          else
+            echo "no previous ragLab-embed-cache artifact — starting fresh"
+          fi
+
       - name: Run full pipeline integration test
+        env:
+          RAGLAB_CI_REAL_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.real-only == true && '1' || '0' }}
         run: python ci_test.py
         working-directory: raglab
 
@@ -90,6 +119,14 @@ jobs:
         with:
           name: raglab-eval-results
           path: raglab/results/
+          if-no-files-found: warn
+
+      - name: Upload embedding cache (resumable quota-friendly ingest)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raglab-embed-cache
+          path: raglab/embeddings_cache.json
           if-no-files-found: warn
 
       - name: Report failure details (GitHub issue, best-effort)

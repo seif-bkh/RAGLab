@@ -126,14 +126,16 @@ def find_correct_any_lang(case: dict, hits: list) -> dict | None:
 
 
 def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
-                   top_k: int = 20, translator=None) -> dict:
+                   top_k: int = 20, translator=None,
+                   blend_lambda: float | None = None) -> dict:
     """Embed every question, retrieve, decide hit/miss, build the full run dict.
 
     mode selects the per-variant retrieval:
       - "vector": dense cosine only;
       - "rrf"    : vector + BM25 fused by reciprocal rank fusion;
       - "blend"  : vector + BM25 fused by weighted score blend
-                   (HYBRID_BLEND_LAMBDA * cosine + (1-lambda) * normalized BM25).
+                   (lambda * cosine + (1-lambda) * normalized BM25);
+                   blend_lambda overrides cfg.HYBRID_BLEND_LAMBDA (CI sweep).
 
     When translator is not None, each query is also translated into every
     corpus language (query variants); results are fused per chunk by their
@@ -151,9 +153,10 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
               f"| corpus languages={corpus_langs}")
     else:
         print("[evaluate] query translation disabled (original queries only)")
+    lambd = (getattr(cfg, "HYBRID_BLEND_LAMBDA", 0.7)
+             if blend_lambda is None else blend_lambda)
     print(f"[evaluate] running {len(cases)} question(s) | "
-          f"mode={mode} | blend_lambda="
-          f"{getattr(cfg, 'HYBRID_BLEND_LAMBDA', 0.7):.2f} | "
+          f"mode={mode} | blend_lambda={lambd:.2f} | "
           f"recording top_k={top_k}")
     score_key = {"vector": "similarity", "rrf": "rrf_score",
                  "blend": "blend_score"}[mode]
@@ -186,8 +189,7 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
             else:  # blend
                 kw_hits = keyword_search(collection, variant["text"], k=top_k)
                 variant_hit_lists.append(
-                    blend_hybrid(vector_hits, kw_hits,
-                                 lambd=cfg.HYBRID_BLEND_LAMBDA)[:top_k])
+                    blend_hybrid(vector_hits, kw_hits, lambd=lambd)[:top_k])
 
         fused = best_variant_merge(variant_hit_lists, score_key=score_key,
                                    labels=[v["label"] for v in variants])
@@ -258,7 +260,7 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
             "retrieval_top_k": top_k,
             "hybrid": mode == "rrf",
             "retrieval_mode": mode,
-            "hybrid_blend_lambda": getattr(cfg, "HYBRID_BLEND_LAMBDA", 0.7),
+            "hybrid_blend_lambda": lambd,
             "query_translation_enabled": translation_enabled,
             "query_translation_model": translator.model if translation_enabled else None,
             # Each variant's scores are normalized by its own best match, then

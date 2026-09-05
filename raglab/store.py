@@ -333,8 +333,16 @@ def best_variant_merge(variant_hit_lists: list, score_key: str = "similarity",
                 entry["_best_same_lang"] = same_lang
 
     merged = [e for e in fused.values() if e["relative_score"] is not None]
-    merged.sort(key=lambda e: (-e["relative_score"], e["_variant_order"],
-                               -(e.get("best_score") or 0.0)))
+    # Tie-break order matters: two DIFFERENT chunks can each be the top-1 of a
+    # different query variant (both relative_score == 1.0). Sorting by variant
+    # order then hands rank 1 to the ORIGINAL-language variant even when a
+    # translated variant's champion is the actual answer chunk (observed as
+    # cross-lingual hit@1 drops in the hybrid modes). The translated variant
+    # searching in the chunk's own language scores absolutely higher, so break
+    # such ties by the raw score; variant order stays as the last resort.
+    merged.sort(key=lambda e: (-e["relative_score"],
+                               -(e.get("best_score") or 0.0),
+                               e["_variant_order"]))
     for rank, entry in enumerate(merged, start=1):
         entry["rank"] = rank
         entry.pop("_variant_order", None)

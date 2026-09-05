@@ -246,8 +246,12 @@ class BaseEmbedder:
             for (i, text, key), emb in zip(batch, embs):
                 results[i] = emb
                 self.cache.put(key, text, emb)
+            # Save after EVERY batch, not only at the end: if the run later
+            # dies on a quota/rate limit, the batches already embedded stay
+            # cached and a rerun continues from where it stopped (used by the
+            # CI to split a large ingest across days on the free tier).
+            self.cache.save()
 
-        self.cache.save()
         return results
 
     def embed_query(self, text: str) -> list:
