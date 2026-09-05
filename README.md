@@ -25,8 +25,10 @@ python main.py answer "What is Murabaha?" --query-lang en
 python main.py benchmark --stage all # explicit live API use; saves results/nvidia/
 ```
 
-See [the guide](raglab/README.md) and
-[benchmark methodology](raglab/benchmarks/README.md). The previous session's
+See the **[measured NVIDIA results and readiness report](raglab/NVIDIA_REPORT.md)**,
+[CLI guide](raglab/README.md), and [benchmark methodology](raglab/benchmarks/README.md).
+All three translators are measured; end-to-end answer/security validation is
+incomplete. The previous session's
 measurements remain in [CI_REPORT.md](raglab/CI_REPORT.md); those are historical,
 not NVIDIA results. `chat_history.html` is the supplied previous-session archive.
 

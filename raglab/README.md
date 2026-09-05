@@ -4,6 +4,12 @@ RAGLab keeps raw, inspectable provider calls and a local ChromaDB index. It has
 no web UI, authentication, transaction tools, or cloud vector store. Generation
 is now **optional**; `query` and `evaluate` still stop at retrieval.
 
+**[Current measured results and production blockers](NVIDIA_REPORT.md).** The
+experimental defaults are Nemotron embeddings, Kimi/banking-v2 translation, and
+DeepSeek/grounded-v1 answers (the only completed development answer profile so
+far). Held-out generation and security testing are incomplete; none is a
+production-certified choice.
+
 ## Setup
 
 Python 3.11 is the tested interpreter.

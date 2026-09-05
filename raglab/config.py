@@ -80,7 +80,7 @@ NVIDIA_TRANSLATION_MODEL = os.getenv("NVIDIA_TRANSLATION_MODEL",
 NVIDIA_TRANSLATION_FALLBACK_MODELS = os.getenv("NVIDIA_TRANSLATION_FALLBACK_MODELS", "")
 NVIDIA_TRANSLATION_BASE_URL = os.getenv(
     "NVIDIA_TRANSLATION_BASE_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
-NVIDIA_API_TIMEOUT = float(os.getenv("NVIDIA_API_TIMEOUT", "120"))
+NVIDIA_API_TIMEOUT = float(os.getenv("NVIDIA_API_TIMEOUT", "180"))
 NVIDIA_API_ATTEMPTS = int(os.getenv("NVIDIA_API_ATTEMPTS", "2"))
 NVIDIA_CHAT_STREAM = os.getenv("NVIDIA_CHAT_STREAM", "1") == "1"
 NVIDIA_MIN_INTERVAL = float(os.getenv("NVIDIA_MIN_INTERVAL", "1.6"))
@@ -234,9 +234,11 @@ QUERY_TRANSLATION_BATCH_SIZE = 8
 QUERY_VARIANT_STRATEGY = os.getenv("QUERY_VARIANT_STRATEGY", "best")
 RETRIEVAL_CANDIDATE_K = 20
 
-ANSWER_MODEL = os.getenv("ANSWER_MODEL", "moonshotai/kimi-k3")
+# Only completed development answer arm in iteration 02; still provisional:
+# held-out generation and security testing were rate-limited, not passed.
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", "deepseek-ai/deepseek-v4-pro-0813")
 ANSWER_PROMPT_VERSION = os.getenv("ANSWER_PROMPT_VERSION", "grounded-v1")
-ANSWER_WORKERS = int(os.getenv("ANSWER_WORKERS", "2"))
+ANSWER_WORKERS = int(os.getenv("ANSWER_WORKERS", "1"))
 ANSWER_MAX_TOKENS = int(os.getenv("ANSWER_MAX_TOKENS", "4096"))
 ANSWER_CONTEXT_TOKENS = int(os.getenv("ANSWER_CONTEXT_TOKENS", "3000"))
 ANSWER_TOP_K = int(os.getenv("ANSWER_TOP_K", "5"))
