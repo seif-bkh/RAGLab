@@ -249,6 +249,35 @@ def get_latest_eval() -> dict | None:
         return json.load(fh)
 
 
+_REAL_QUOTA = re.compile(r"429|RESOURCE_EXHAUSTED|quota", re.I)
+
+
+def _real_eval(args: list, stage: str) -> int | None:
+    """Run one real-docs evaluation, deferring cleanly on the daily 429 quota.
+
+    Every query embedding is cache-saved as it completes, so a rerun (after
+    the cache artifact is restored) continues exactly where the quota stopped
+    the run — no progress is lost and the pipeline stays green.
+    """
+    global CURRENT_STEP
+    CURRENT_STEP = stage
+    try:
+        return main.main(args)
+    except RuntimeError as exc:
+        if _REAL_QUOTA.search(str(exc)):
+            progress(f"[ci] real-docs {stage} DEFERRED — daily embedding quota "
+                     "exhausted (429 RESOURCE_EXHAUSTED); query cache saved; "
+                     "rerun continues from where it stopped.")
+            notify(f"real-docs: {stage} DEFERRED (daily embedding quota 429 — "
+                   "cache artifact saved; rerun continues from where it stopped)")
+            (cfg.RESULTS_DIR / "real_docs_status.json").write_text(
+                json.dumps({"status": f"deferred-quota-{stage}",
+                            "detail": str(exc)[:300]},
+                           ensure_ascii=False, indent=2))
+            return None
+        raise
+
+
 def run_steps() -> None:
     """The full pipeline. Any failure here is caught by run_main()."""
     global CURRENT_STEP
@@ -470,7 +499,7 @@ def run_steps() -> None:
         # embedded so far were saved into the embedding cache artifact by the
         # workflow, so a rerun after the reset continues from where it stopped.
         # A pure quota condition DEFERS instead of failing the pipeline.
-        if re.search(r"429|RESOURCE_EXHAUSTED|quota", str(exc), re.I):
+        if _REAL_QUOTA.search(str(exc)):
             progress("[ci] real-docs ingest DEFERRED — daily embedding quota "
                      "exhausted (429 RESOURCE_EXHAUSTED). Batch cache saved; "
                      "rerun after the reset continues the ingest from there.")
@@ -488,8 +517,10 @@ def run_steps() -> None:
         CURRENT_STEP = "real-evaluate"
         progress("\n[ci] STEP 9 — evaluate --questions questions_real.json "
                  "(vector-only)")
-        rc = main.main(["evaluate", "--questions", "questions_real.json",
-                        "--skip-sanity-check"])
+        rc = _real_eval(["evaluate", "--questions", "questions_real.json",
+                         "--skip-sanity-check"], "real-evaluate")
+        if rc is None:
+            return
         check("real-docs vector evaluate exits 0", rc == 0, f"rc={rc}")
         run_real = get_latest_eval()
         check("real-docs vector results JSON written", run_real is not None)
@@ -516,8 +547,11 @@ def run_steps() -> None:
         # 6b.2 hybrid evaluation on the REAL question set
         CURRENT_STEP = "real-hybrid-evaluate"
         progress("\n[ci] STEP 10 — evaluate --hybrid --questions questions_real.json")
-        rc = main.main(["evaluate", "--hybrid", "--questions", "questions_real.json",
-                        "--skip-sanity-check"])
+        rc = _real_eval(["evaluate", "--hybrid", "--questions",
+                         "questions_real.json", "--skip-sanity-check"],
+                        "real-hybrid-evaluate")
+        if rc is None:
+            return
         check("real-docs hybrid evaluate exits 0", rc == 0, f"rc={rc}")
         run_real_h = get_latest_eval()
         check("real-docs hybrid results JSON written", run_real_h is not None)
@@ -536,8 +570,11 @@ def run_steps() -> None:
         # 6b.3 blend evaluation on the REAL question set
         CURRENT_STEP = "real-blend-evaluate"
         progress("\n[ci] STEP 11 — evaluate --hybrid-blend --questions questions_real.json")
-        rc = main.main(["evaluate", "--hybrid-blend", "--questions",
-                        "questions_real.json", "--skip-sanity-check"])
+        rc = _real_eval(["evaluate", "--hybrid-blend", "--questions",
+                         "questions_real.json", "--skip-sanity-check"],
+                        "real-blend-evaluate")
+        if rc is None:
+            return
         check("real-docs blend evaluate exits 0", rc == 0, f"rc={rc}")
         run_real_b = get_latest_eval()
         check("real-docs blend results JSON written", run_real_b is not None)

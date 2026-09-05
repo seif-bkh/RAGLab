@@ -396,8 +396,8 @@ raglab/
 
 
 - The real-docs corpus (docs/, 4 Arabic documents → 213 chunks) needs more
-  embedded inputs than one free-tier daily budget can provide, so the CI
-  defers the ingest when the embedding quota (429) is exhausted: batches
+  embedding API budget than one free-tier day always provides, so the CI
+  defers the ingest/evaluation when the quota (429) is exhausted: batches
   embedded so far stay in `embeddings_cache.json`, uploaded as the
   `raglab-embed-cache` artifact and restored by the next run, so the corpus
   is built up across days without failing the pipeline. Run the real-docs
