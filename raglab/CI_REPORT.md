@@ -207,3 +207,10 @@ likely the English "query" prompt + cross-lingual EN→AR gap; BGE-M3 or a
 larger Qwen3 variant are the candidates if we pursue local embeddings
 further. For now: keep `EMBEDDING_PROVIDER=gemini` (free hosted) as
 default; the huggingface provider remains an offline fallback (no quota).
+
+## Next step (after quota reset ~07:00 UTC)
+
+Re-run once (`workflow_run` on `arena/01a06d64-raglab`, or push a trivial
+commit): the 836-chunk real ingest resumes from the saved batch cache, then
+the vector/rrf/blend + lambda sweep + 220-vs-340 chunk-size A/B all rerun on
+the FIXED split. Those numbers will replace the "historical" block above.
