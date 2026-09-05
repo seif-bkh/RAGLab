@@ -333,4 +333,58 @@ check("BM25 heading cue also works for the Guide",
       h2 and h2[0]["id"] == "guide::2",
       str([(h["id"], round(h["keyword_score"], 3)) for h in h2[:2]]))
 
+
+# --- loader/chunker: paragraph boundaries + sentence-aligned hard splits -----
+# Regression for the rq13 failure: normalize_text() used to DROP every blank
+# line, so each document became one giant paragraph and the chunker hard-split
+# it at word boundaries — slicing expected-match phrases in half. These checks
+# pin the paragraph-preserving behavior and the sentence-aligned split.
+from zipfile import ZipFile  # noqa: E402
+from loader import normalize_text, read_docx  # noqa: E402
+from chunker import chunk_document  # noqa: E402
+
+_nm = normalize_text("P1.\n\nP2.\n- a\n- b\n\n| x | y |\n| z | w |\n\nP3.")
+check("normalize_text keeps paragraph + block boundaries",
+      "\n\n" in _nm and _nm.count("\n\n") == 4
+      and "- a\n- b" in _nm and "| x | y |\n| z | w |" in _nm,
+      repr(_nm))
+_nm2 = normalize_text("Wrapped line one\ncontinues here.\n\nNext paragraph.")
+check("normalize_text reflows wrapped lines into ONE paragraph",
+      "\n\n" in _nm2 and "\ncontinues" not in _nm2,
+      repr(_nm2))
+
+_DOCX_XML = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+             '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+             'wordprocessingml/2006/main"><w:body>'
+             '<w:p><w:r><w:t>First docx paragraph.</w:t></w:r></w:p>'
+             '<w:p><w:r><w:t>Second docx paragraph.</w:t></w:r></w:p>'
+             '<w:p><w:r><w:t>Third docx key phrase.</w:t></w:r></w:p>'
+             '</w:body></w:document>')
+with tempfile.TemporaryDirectory() as _td:
+    _docx_path = Path(_td) / "sample.docx"
+    with ZipFile(_docx_path, "w") as _zf:
+        _zf.writestr("word/document.xml", _DOCX_XML)
+    _docx_norm = normalize_text(read_docx(_docx_path))
+check("read_docx keeps every paragraph separate",
+      _docx_norm.count("\n\n") == 2
+      and "First docx paragraph." in _docx_norm
+      and "Third docx key phrase." in _docx_norm,
+      repr(_docx_norm))
+
+# Oversized paragraph: the cut must land BETWEEN sentences, never inside one.
+_key_sent = "Beta sentence contains the KEYPHRASE here."
+_big_para = ("Alpha sentence opens the paragraph. " + _key_sent +
+             " Gamma sentence closes the paragraph. " * 12)
+_doc = {"name": "t.txt", "text": _big_para, "language": "en",
+        "source": "t.txt", "origin": "data/"}
+_chunks = chunk_document(_doc, chunk_size=25, overlap=5)
+_txts = [c.text for c in _chunks]
+check("hard split keeps every sentence whole in one chunk",
+      any(_key_sent in t for t in _txts)
+      and all(t.strip().endswith(".") for t in _txts),
+      f"chunks={len(_txts)}")
+check("oversized paragraph is still flagged (transparency)",
+      any(c.notes for c in _chunks),
+      str([c.notes for c in _chunks if c.notes][:1]))
+
 sys.exit(0 if ok else 1)

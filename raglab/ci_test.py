@@ -290,6 +290,38 @@ def run_steps() -> None:
     rc = main.main(["inspect"])
     check("inspect exits 0", rc == 0, f"rc={rc}")
 
+    # --- 1b. Real-docs OFFLINE chunking coverage (no API, deterministic) -----
+    # With paragraph-boundary preservation, every expected substring must live
+    # inside >= 1 chunk BEFORE any embedding happens. This is the hard gate:
+    # if it fails the chunker must be fixed — no retriever can ever return a
+    # phrase that no chunk contains. Runs even when the daily quota is gone,
+    # so the chunker fix can be verified for free today.
+    CURRENT_STEP = "real-chunks-offline"
+    progress("\n[ci] STEP 1b — real-docs offline chunking coverage (no API)")
+    real_docs_dir = str((cfg.PROJECT_DIR.parent / "docs").resolve())
+    from loader import load_all  # noqa: E402
+    from chunker import chunk_all  # noqa: E402
+    offline_cases = load_question_set(cfg.PROJECT_DIR / "questions_real.json")
+    try:
+        docs_real = load_all([real_docs_dir])
+        chunks_real = chunk_all(docs_real, cfg)
+        norm_real = [normalize_for_match(c.text) for c in chunks_real]
+        missing = []
+        for case in offline_cases:
+            nsub = normalize_for_match(case.get("expected_substring") or "")
+            if nsub and not any(nsub in t for t in norm_real):
+                missing.append(case["id"])
+        ncov = len(offline_cases) - len(missing)
+        notify(f"real-docs offline chunking: chunks={len(chunks_real)} "
+               f"coverage={ncov}/{len(offline_cases)} "
+               + ("all covered" if not missing else "miss=" + ",".join(missing)))
+        check("real-docs offline: every expected substring in >= 1 chunk",
+              not missing,
+              ("all covered" if not missing else "missing=" + ",".join(missing)))
+    except Exception as exc:  # noqa: BLE001 — report, don't crash the pipeline
+        check("real-docs offline chunking runs", False,
+              f"{type(exc).__name__}: {exc}")
+
     # --- 2. Startup report + 3-language sanity check (1 small API call) ------
     CURRENT_STEP = "sanity"
     progress("\n[ci] STEP 2 — embedding sanity check (provider/model/dimension + "
@@ -718,63 +750,74 @@ def run_steps() -> None:
     chunksize_ab = {}
     # run only when the real leg actually completed
     if real_ready:
-            old_size = cfg.CHUNK_SIZE_TOKENS
-            old_overlap = cfg.CHUNK_OVERLAP_TOKENS
-            cfg.CHUNK_SIZE_TOKENS = 340
-            cfg.CHUNK_OVERLAP_TOKENS = 60
-            try:
-                rc = main.main(["ingest", "--reset", "--data-dir",
-                                real_docs_dir, "--skip-sanity-check"])
-                check("chunk-size 340 ingest exits 0", rc == 0, f"rc={rc}")
-                col340 = get_collection(cfg, reset=False)
-                cnt340 = col340.count()
-                progress(f"[ci]   chunk-size 340: {cnt340} chunks")
-                # coverage at 340 (local scan, no API): how many of the 14
-                # expected substrings live inside >= 1 chunk now?
-                cov340 = {"covered": 0, "total": 0, "miss": []}
-                if cnt340 > 0 and real_ready:
-                    all340 = col340.get(include=["documents"])["documents"] or []
-                    norm340 = [normalize_for_match(t) for t in all340]
-                    for case in real_cases:
-                        nsub = normalize_for_match(
-                            case.get("expected_substring") or "")
-                        if not nsub:
-                            continue
-                        cov340["total"] += 1
-                        if any(nsub in t for t in norm340):
-                            cov340["covered"] += 1
-                        else:
-                            cov340["miss"].append(case["id"])
-                progress(f"[ci]   chunk-size 340 coverage: "
-                         f"{cov340['covered']}/{cov340['total']} "
-                         + (f"miss={','.join(cov340['miss'])}"
-                            if cov340["miss"] else "all covered"))
-                if cnt340 > 0:
-                    for mode, margs, key in (("vector", [], "vector"),
-                                             ("rrf", ["--hybrid"], "rrf"),
-                                             ("blend0.7",
-                                              ["--hybrid-blend"], "blend07")):
-                        rc = _real_eval(["evaluate", *margs, "--questions",
-                                         "questions_real.json",
-                                         "--skip-sanity-check"],
-                                        f"real-chunk340-{mode}")
-                        if rc is None:
-                            progress(f"[ci]   chunk340 {mode}: deferred")
-                            break
-                        runx = get_latest_eval()
-                        if runx is not None:
-                            o = runx["metrics"]["overall"]
-                            chunksize_ab[key] = {
-                                "h1": o["hit@1"], "h3": o["hit@3"],
-                                "h5": o["hit@5"], "n": o["n"],
-                                "chunks": cnt340,
-                            }
-                            progress(f"[ci]   chunk340 {mode}: "
-                                     f"h1={o['hit@1']:.3f} h3={o['hit@3']:.3f} "
-                                     f"h5={o['hit@5']:.3f}")
-            finally:
-                cfg.CHUNK_SIZE_TOKENS = old_size
-                cfg.CHUNK_OVERLAP_TOKENS = old_overlap
+        old_size = cfg.CHUNK_SIZE_TOKENS
+        old_overlap = cfg.CHUNK_OVERLAP_TOKENS
+        cfg.CHUNK_SIZE_TOKENS = 340
+        cfg.CHUNK_OVERLAP_TOKENS = 60
+        try:
+            rc = main.main(["ingest", "--reset", "--data-dir",
+                            real_docs_dir, "--skip-sanity-check"])
+            check("chunk-size 340 ingest exits 0", rc == 0, f"rc={rc}")
+            col340 = get_collection(cfg, reset=False)
+            cnt340 = col340.count()
+            progress(f"[ci]   chunk-size 340: {cnt340} chunks")
+            # coverage at 340 (local scan, no API): how many of the 14
+            # expected substrings live inside >= 1 chunk now?
+            cov340 = {"covered": 0, "total": 0, "miss": []}
+            if cnt340 > 0:
+                all340 = col340.get(include=["documents"])["documents"] or []
+                norm340 = [normalize_for_match(t) for t in all340]
+                for case in real_cases:
+                    nsub = normalize_for_match(
+                        case.get("expected_substring") or "")
+                    if not nsub:
+                        continue
+                    cov340["total"] += 1
+                    if any(nsub in t for t in norm340):
+                        cov340["covered"] += 1
+                    else:
+                        cov340["miss"].append(case["id"])
+            progress(f"[ci]   chunk-size 340 coverage: "
+                     f"{cov340['covered']}/{cov340['total']} "
+                     + (f"miss={','.join(cov340['miss'])}"
+                        if cov340["miss"] else "all covered"))
+            if cnt340 > 0:
+                for mode, margs, key in (("vector", [], "vector"),
+                                         ("rrf", ["--hybrid"], "rrf"),
+                                         ("blend0.7",
+                                          ["--hybrid-blend"], "blend07")):
+                    rc = _real_eval(["evaluate", *margs, "--questions",
+                                     "questions_real.json",
+                                     "--skip-sanity-check"],
+                                    f"real-chunk340-{mode}")
+                    if rc is None:
+                        progress(f"[ci]   chunk340 {mode}: deferred")
+                        break
+                    runx = get_latest_eval()
+                    if runx is not None:
+                        o = runx["metrics"]["overall"]
+                        chunksize_ab[key] = {
+                            "h1": o["hit@1"], "h3": o["hit@3"],
+                            "h5": o["hit@5"], "n": o["n"],
+                            "chunks": cnt340,
+                        }
+                        progress(f"[ci]   chunk340 {mode}: "
+                                 f"h1={o['hit@1']:.3f} h3={o['hit@3']:.3f} "
+                                 f"h5={o['hit@5']:.3f}")
+        except RuntimeError as exc:
+            # Daily 429: defer cleanly (like the rest of the real leg) instead
+            # of crashing; the cache artifact saves what was embedded.
+            if _REAL_QUOTA.search(str(exc)):
+                progress("[ci] chunk-size 340 ingest DEFERRED — daily "
+                         "embedding quota (429); A/B skipped, rerun after "
+                         "the midnight-Pacific reset continues from cache.")
+                notify("real chunk-size A/B: DEFERRED (429 quota — cache saved; "
+                       "rerun after reset)")
+            else:
+                raise
+        finally:
+            cfg.CHUNK_SIZE_TOKENS = old_size
+            cfg.CHUNK_OVERLAP_TOKENS = old_overlap
 
     # --- 7. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"

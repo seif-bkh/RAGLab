@@ -102,26 +102,48 @@ def normalize_text(text: str) -> str:
     lines = text.split("\n")
     out_lines: list[str] = []
     paragraph: list[str] = []
+    prev_block = False   # last EMITTED line was a block line (list/table row)
+    prev_blank = False   # the previous INPUT line was blank (real boundary)
+
+    def emit(line: str, is_block: bool, force_sep: bool = False) -> None:
+        nonlocal prev_block
+        if out_lines:
+            # Preserve paragraph boundaries: separate after any paragraph and
+            # wherever the source had a blank line; keep consecutive block
+            # lines glued UNLESS the source separated them (table rows must
+            # stay contiguous to parse as a table). Without this every
+            # paragraph merges into one line and the chunker hard-splits whole
+            # documents at word boundaries — slicing sentences in half.
+            # Separate unless BOTH sides are block lines and the source had
+            # no blank between them (list items / contiguous table rows).
+            need_sep = (force_sep or not prev_block or not is_block)
+            if need_sep and out_lines[-1] != "":
+                out_lines.append("")
+        out_lines.append(line)
+        prev_block = is_block
 
     def flush_paragraph():
+        nonlocal paragraph
         if paragraph:
             # Reflow: collapse runs of internal whitespace, keep one space.
             joined = " ".join(paragraph)
             joined = re.sub(r"[ \t]+", " ", joined).strip()
             if joined:
-                out_lines.append(joined)
+                emit(joined, False)
             paragraph.clear()
 
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
             flush_paragraph()
+            prev_blank = True
             continue
         if _is_block_line(line):
             flush_paragraph()
-            out_lines.append(line)
+            emit(line, True, force_sep=prev_blank)
         else:
             paragraph.append(line)
+        prev_blank = False
 
     flush_paragraph()
 
@@ -205,6 +227,19 @@ def read_docx(path: Path) -> str:
     root = ET.fromstring(xml)
     body = root.find(f"{_DOCX_NS}body")
     out: list[str] = []
+    # Boundary marker between EVERY emitted line except between consecutive
+    # table rows: a .docx has no blank lines of its own, so without this
+    # normalize_text() would reflow the whole document into ONE paragraph and
+    # the chunker would hard-split it at word boundaries — slicing sentences
+    # (and expected-match substrings) in half.
+    prev_table = False
+
+    def add(line: str, is_table: bool) -> None:
+        nonlocal prev_table
+        if out and not (prev_table and is_table):
+            out.append("")
+        out.append(line)
+        prev_table = is_table
 
     def para_text(p) -> str:
         return "".join(t.text or "" for t in p.iter(f"{_DOCX_NS}t"))
@@ -214,7 +249,7 @@ def read_docx(path: Path) -> str:
             if child.tag == f"{_DOCX_NS}p":
                 line = para_text(child).strip()
                 if line:
-                    out.append(line)
+                    add(line, False)
             elif child.tag == f"{_DOCX_NS}tbl":
                 for row in child.iter(f"{_DOCX_NS}tr"):
                     cells = []
@@ -222,7 +257,7 @@ def read_docx(path: Path) -> str:
                         ctexts = [para_text(p) for p in cell.iter(f"{_DOCX_NS}p")]
                         cells.append(" ".join(c for c in ctexts if c).strip())
                     if any(cells):
-                        out.append("| " + " | ".join(cells) + " |")
+                        add("| " + " | ".join(cells) + " |", True)
             else:
                 walk(child)
 

@@ -504,8 +504,8 @@ def _overlap_parts(parts: list[str], overlap: int, sentence_aware: bool):
     return text_tokens, text_count, []
 
 
-def _hard_split(text: str, budget: int) -> list[str]:
-    """Split a single oversized paragraph at word boundaries to fit `budget`."""
+def _word_split(text: str, budget: int) -> list[str]:
+    """Word-boundary split of one text, each piece within `budget`."""
     words = text.split()
     pieces, current = [], []
     for word in words:
@@ -517,6 +517,39 @@ def _hard_split(text: str, budget: int) -> list[str]:
             current.append(word)
     if current:
         pieces.append(" ".join(current))
+    return pieces
+
+
+def _hard_split(text: str, budget: int) -> list[str]:
+    """Split a single oversized paragraph to fit `budget`.
+
+    Prefers SENTENCE boundaries (Latin + Arabic): a cut between sentences can
+    never split an expected-match phrase. Only a sentence that alone exceeds
+    the budget falls back to word-boundary cuts (marked by the caller).
+    """
+    pieces: list[str] = []
+    current: list[str] = []
+    current_tokens = 0
+
+    def flush() -> None:
+        nonlocal current, current_tokens
+        if current:
+            pieces.append(" ".join(current))
+            current = []
+            current_tokens = 0
+
+    for sentence in split_sentences(text):
+        sent_tokens = count_tokens(sentence)
+        if sent_tokens <= budget:
+            if current and current_tokens + sent_tokens > budget:
+                flush()
+            current.append(sentence)
+            current_tokens += sent_tokens
+            continue
+        # One sentence longer than the whole budget: word-level fallback.
+        flush()
+        pieces.extend(_word_split(sentence, budget))
+    flush()
     return pieces
 
 
