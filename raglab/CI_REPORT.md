@@ -58,17 +58,37 @@ hit@1 (at 85–95% vector dominance); λ=0.70 maximizes recall (q10 10→15,
 h5 .929). Choose with `HYBRID_BLEND_LAMBDA`; CI prints both verdicts on every
 run.
 
-## Real docs (docs/, 4 Arabic documents → 213 chunks)
+## Real docs (docs/, 4 Arabic documents → 573 chunks, n=14)
 
-- 14/14 ground-truth substrings verified in the NFKC-normalized chunks
-  (offline); questions: `questions_real.json` (rq01–rq14, rq15/rq16 OOS).
-- CI ingest of the full 213-chunk corpus COMPLETED in run `33936558123`
-  (fictional legs were fully cache-served, freeing the daily budget); the
-  real vector evaluation then hit the daily 429.
-- Real evaluations are now quota-aware: they defer cleanly on 429, save the
-  query cache artifact, and a later run resumes from where they stopped
-  (CI stays green). Real-docs results will appear as `real-docs: vector/rrf/
-  blend …` annotations once the quota allows 16 more query embeddings.
+The user's actual corpus and question set (`questions_real.json`, rq01–rq14
+scored; rq15/rq16 out-of-scope, excluded). REQUIRES: 573 chunks vs the
+earlier local count of 213: the sandbox could not download the tiktoken BPE
+files, so local chunking used the fallback estimator; CI uses the real
+tokenizer and 573 chunks is the authoritative split. 13/14 ground-truth
+chunks are retrieved in the top-20 by the vector baseline on the CI split
+(rq13 is the single hard miss — correct chunk not in top-20 for ANY mode).
+
+Vector baseline: h1 .786 / h3 .857 / h5 .929 — cross-lingual h1 .571,
+verbatim/paraphrase h1 1.000, Arabic questions h1 1.000; separation gap
++0.0147 (positive); OOS max top-1 score .7642.
+Per-question (cross-lingual): rq03 1, rq05 1, rq08 1, rq09 1, rq12 3,
+rq13 None (miss), rq14 5.
+
+RRF: h1 .643 / h3 .786 / h5 .786 (Δ −.143/−.071/−.143 vs vector) — helps
+rq12 3→1 but breaks rq03 1→3, rq08 1→2, rq14 5→13, verbatim 1.0→.8.
+
+Blend (real sweep): λ=.65/.70/.75/.85 → h1 .429/.429/.500/.643 (all
+rq10 rank=1, h3 .714, h5 .786). Best λ=.85 h1 .643 < vector .786 → the
+acceptance verdict on the REAL corpus is **hit@1 recovered: NO** (and
+λ=0.70 h1 .429 → NO). On the Arabic real corpus, hybrid/BM25 strictly
+hurts: the naive Arabic keyword matching (no morphological normalization)
+and the strong vector baseline mean the measured optimum is pure vector
+(λ→1.0). Recommendation: `HYBRID_BLEND_LAMBDA=1.0` (or `--hybrid-blend`
+kept only for the fictional/FR-AR corpus).
+
+NOTE: these results only became possible after the API key was renewed —
+the old key's daily quota never allowed the 573-chunk ingest + evaluations;
+the new key ran the full real-docs pipeline in one job.
 
 ## CI run IDs (branch push, all jobs)
 
@@ -82,5 +102,8 @@ run.
   crash (pre-deferral). FAILED at real-evaluate.
 - `33936713545` — warm-cache translation check fixed. FAILED at
   real-evaluate (same).
-- `33936911402` — real-eval quota deferral (`89f55ce`). PASSED (real-docs
-  eval deferred, resumes after the daily reset).
+- `33936911402` — real-eval quota deferral (`89f55ce`). PASSED (deferred).
+- `33937150152` — **new API key**: real-docs ingest + all three evaluations
+  completed (573 chunks, n=14); PASSED.
+- `33937314918` — merged notices (`7a6bbfb`): real-docs blend/sweep +
+  acceptance verdicts now visible; reproduces the same numbers. PASSED.
