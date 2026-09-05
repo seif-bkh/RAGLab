@@ -14,9 +14,9 @@ not unsupervised customer-facing banking advice or automated financial decisions
 
 ## What the evidence supports
 
-The [fresh full comparison](reports/free_iteration_03.json),
-[Actions run 33977206216](https://github.com/seif-bkh/RAGLab/actions/runs/33977206216),
-measured the selected Qwen request SKU with the frozen native Nemotron context:
+The post-cleanup [selected-pipeline regression](reports/selected_pipeline_01.json),
+[Actions run 33979521271](https://github.com/seif-bkh/RAGLab/actions/runs/33979521271),
+completed successfully with all declared regression gates true:
 
 - 13/14 development answer-rubric passes; the remaining French case used “achète”
   where the narrow rubric expected “achat”/“livraison.” The original score is retained.
@@ -24,17 +24,24 @@ measured the selected Qwen request SKU with the frozen native Nemotron context:
 - 3/3 synthetic Arabic/French/English source-injection fixtures passed.
 - 9/9 private/live-data refusals, **all performed by local guards**, not nine
   independent demonstrations of model refusal quality.
-- Approximately 4.68 s development / 5.25 s held-out answer client-call means.
+- 36 new Qwen client calls, no replayed answer results, no provider errors.
+  Nemotron retrieval used the verified frozen snapshot; no new embedding calls.
+- Approximately 5.26 s development / 4.91 s held-out answer client-call means.
   These exclude live embedding/retrieval time and are not production percentiles.
+- **133 offline checks pass** (59 historical regressions + 74 current pipeline/
+  contract checks); compilation, dependency checks and remote CI passed without
+  the retired Google generation SDK.
+
+The simpler default CLI was also exercised on a private-account question:
+it selected xKiro Qwen automatically and refused locally with zero inference.
 
 Implemented protections include exact model selection, no fallback, live
 zero-price checks, scoped credentials, bounded retries, stale-index/vector
 validation, token-bounded context, normalized source-quote membership and
 fail-closed invalid responses. Tests cover these contracts and default routing.
 
-The selected-pipeline regression rechecks this configuration after cleanup. A
-passing regression still leaves `production_ready=false`; completing a suite
-and proving production readiness are different claims.
+The selected-pipeline regression passed, but `production_ready` remains **false**.
+Completing this suite and proving production readiness are different claims.
 
 ## Must resolve before customer-facing production
 

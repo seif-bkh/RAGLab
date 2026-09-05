@@ -111,8 +111,9 @@ triggered by `benchmarks/free_provider_plan.json` or manual dispatch. Its plan i
 validated to contain only xKiro Qwen, original-query retrieval and grounded-v1.
 It reuses a hash-verified native Nemotron retrieval artifact from the four real
 Arabic PDF/DOCX files: 836 chunks, size 220 / overlap 40, 2048 dimensions. It makes
-no new embedding/translation calls. All selected-model development, holdout and
-injection checks can make fresh client calls; cache usage is disclosed.
+no new embedding/translation calls. The post-cleanup run completed 36 fresh Qwen
+calls and passed the declared gates; no answer cache was replayed. This is a
+regression over the same small fixtures, not fresh independent validation.
 
 With the frozen artifact already downloaded to `results/frozen_native/`, run:
 
