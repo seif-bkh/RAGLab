@@ -253,16 +253,34 @@ BM25+metadata cue lifts rq13→3 but breaks rq08 3→1? no — rq08 3→? (see
 per-question rows above); rrf's h1 drop is concentrated in cross-lingual
 verbatim rows (rq03/rq14 drop from 1).
 
-Pending (deferred on the daily 429, cache saved): the **220-vs-340 token
-chunk-size A/B** — rerun after quota reset completes it on the same 836/340
-chunks; rq13's post-fix rank under the *translated-Arabic* query leg will
-also be confirmed there (offline BM25 upper bound with the Arabic phrase:
-rank 1).
+## Chunk-size A/B: 220 vs 340 tokens (run `33946650497`, same Gemini key, same docs)
 
-## Next step (after quota reset ~07:00 UTC)
+| size (chunks) | vector | rrf | blend @ λ=.70 | best blend |
+|---|---|---|---|---|
+| **220t (836)** | **.786 / 1.000 / 1.000** | .429 / .929 / .929 | .500 / .857 / .929 | **.714** @λ=.85 |
+| 340t (530) | .643 / .857 / .857 | **.643 / .929 / .929** | **.714 / .929 / .929** | .714 @λ=.70 (=default) |
 
-Re-run once: the resumable cache finishes the 340-token A/B ingest, then its
-vector/rrf/blend rows + rq13@v land in the PASS line. No code change needed.
+Reading:
+- Pure **vector prefers 220** (dense chunks sharpen the top-1; 340 loses
+  .143 h1) — the default `CHUNK_SIZE_TOKENS=220` stays.
+- **BM25 prefers 340** (fewer, context-richer chunks → rrf h1 .643 vs .429).
+- **At the SHIPPED default λ=.70, 340 wins decisively** (.714 vs .500 h1) and
+  needs no sweep tuning — if hybrid is the product mode, `CHUNK_SIZE_TOKENS=340`
+  + default blend is the best out-of-the-box config.
+- Overall best remains **220 + pure vector (.786)**; no hybrid on any split
+  recovers the vector h1 (blend best = .714 on both splits).
+- rq13-reachable=True at 340 as well (16/16 offline at both sizes).
+
+Decision needed (user): vector-first lab (220) vs hybrid-first product (340).
+This branch keeps 220 as the default; the config is one env var away.
+
+## Next steps
+
+1. Rerun once more is NOT needed — all legs complete. The 07:12 scheduler
+   rerun (if it fires) will be cheap (everything cache-hit).
+2. P0-2 (docx/PDF heading detection) is the next quality lever: the heading
+   metadata cue is empty for real docs, so rrf's "document cue" only works
+   via the source filename today.
 
 ## Prod-readiness verdict (2026-09-05)
 

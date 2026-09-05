@@ -889,6 +889,14 @@ def run_steps() -> None:
                     runx = get_latest_eval()
                     if runx is not None:
                         o = runx["metrics"]["overall"]
+                        if key == "vector":
+                            # per-question ranks at 340 (rq13/rq14 = the two
+                            # questions that motivated the size A/B)
+                            chunksize_ab["_ranks340"] = " ".join(
+                                f"{qid}@v={q.get('correct_rank')}"
+                                for qid in ("rq13", "rq14")
+                                for q in (runx.get("questions") or [])
+                                if q.get("id") == qid)
                         chunksize_ab[key] = {
                             "h1": o["hit@1"], "h3": o["hit@3"],
                             "h5": o["hit@5"], "n": o["n"],
@@ -1031,6 +1039,8 @@ def run_steps() -> None:
         summary += (" (chunks="
                     + ",".join(str(d["chunks"]) for d in chunksize_ab.values())
                     + f", rq13-reachable={cov340['covered'] == cov340['total']})")
+        if chunksize_ab.get("_ranks340"):
+            summary += f" || 340t {chunksize_ab['_ranks340']}"
     else:
         summary = ""
     state = ""
