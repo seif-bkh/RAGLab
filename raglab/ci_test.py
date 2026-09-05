@@ -545,6 +545,7 @@ def run_steps() -> None:
         diag_embedder = main.make_embedder(skip_sanity=True)
         corpus_langs = ["ar"]
         problem_rows = []
+        unreachable = []
         covered_ok = True
         for case in real_cases:
             sub = case.get("expected_substring")
@@ -554,9 +555,10 @@ def run_steps() -> None:
             holders = [i for i, t in enumerate(norm_all) if nsub in t]
             if not holders:
                 covered_ok = False
-                notify(f"real-diagnostics: {case['id']} UNREACHABLE — expected "
-                       "substring not inside ANY chunk (chunking/extraction "
-                       "issue, not ranking)")
+                unreachable.append(case["id"])
+                progress(f"[ci]   diag {case['id']}: UNREACHABLE — expected "
+                         "substring not inside ANY chunk (chunking/"
+                         "extraction issue, not ranking)")
                 continue
             correct_id = ids_all[holders[0]]
             m = metas_all[holders[0]] or {}
@@ -581,18 +583,26 @@ def run_steps() -> None:
                 problem_rows.append((case["id"], best, variants))
         check("real-docs: every expected substring present in >= 1 chunk",
               covered_ok)
+        # ONE aggregated line: per-case notices get dropped by the GitHub
+        # 10-annotations-per-step cap, which is exactly what hid the
+        # UNREACHABLE id in the previous run.
+        parts = []
+        if unreachable:
+            parts.append("UNREACHABLE (substring not in any chunk): "
+                         + ", ".join(unreachable))
         if problem_rows:
-            detail = " | ".join(
+            parts.append("beyond top-5 globally: " + " | ".join(
                 f"{qid}: best={best}"
                 + (" [" + "; ".join(
-                    f"{v['label'][:12]}={v['text'][:60]!r}"
-                    for v in variants) + "]" if best is None or best > 10 else "")
-                for qid, best, variants in problem_rows[:3])
-            notify(f"real-diagnostics: {len(problem_rows)} question(s) with "
-                   f"correct chunk beyond rank 5 (global k=count): {detail}")
+                    f"{v['label'][:12]}={v['text'][:55]!r}"
+                    for v in variants) + "]" if best is None or best > 10
+                   else "")
+                for qid, best, variants in problem_rows[:3]))
+        if parts:
+            notify("real-diagnostics: " + " || ".join(parts))
         else:
-            notify("real-diagnostics: all questions reachable in top-5 "
-                   "globally (ranking-only misses)")
+            notify("real-diagnostics: all questions covered and reachable "
+                   "in top-5 globally (ranking-only misses)")
 
         # 6b.1 vector evaluation on the REAL question set
         CURRENT_STEP = "real-evaluate"
