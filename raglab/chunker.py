@@ -58,7 +58,7 @@ def count_tokens(text: str) -> int:
 # or their chunks silently carry different (misaligned) text.
 # v2 = paragraph+heading boundaries preserved (loader reflow fix) and
 #      sentence-aligned hard splits; v1 = single-paragraph hard splits.
-CHUNK_FINGERPRINT_VERSION = 2
+CHUNK_FINGERPRINT_VERSION = 3
 
 
 def chunk_fingerprint(chunk_size: int, overlap: int,
@@ -71,7 +71,13 @@ def chunk_fingerprint(chunk_size: int, overlap: int,
     collection makes every hit wrong — the fix is `ingest --reset`)."""
     return (f"chunkv{CHUNK_FINGERPRINT_VERSION}:"
             f"s{chunk_size}:o{overlap}:h{int(bool(split_on_headings))}:"
-            f"sen{int(bool(sentence_aware_overlap))}")
+            f"sen{int(bool(sentence_aware_overlap))}:tok{tokenizer_identity()}")
+
+
+def tokenizer_identity():
+    """The estimator and real BPE produce different chunks; never mix them."""
+    count_tokens("")  # initialize once (uses tiktoken's local cache when warm)
+    return "cl100k_base" if _TOKENIZER is not None else "estimator-char4-v1"
 
 
 # Sentence boundaries for the sentence-aware overlap (covers Latin + Arabic).

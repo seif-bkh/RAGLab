@@ -38,6 +38,8 @@ import sys
 import time
 from pathlib import Path
 
+from artifacts import fingerprint, write_json
+
 # ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
@@ -81,9 +83,7 @@ class EmbeddingCache:
             "note": "key = sha256(model + '\\n' + input_type + '\\n' + text); "
                     "preview shows the text tail",
         }
-        self.path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
-        )
+        write_json(self.path, payload)
 
     def get(self, key: str):
         return self.entries.get(key)
@@ -145,6 +145,23 @@ def cache_key(model: str, text: str, input_type: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
+def embedding_fingerprint(cfg):
+    """Identity of the vector space, separate from the chunker fingerprint."""
+    provider = str(getattr(cfg, "EMBEDDING_PROVIDER", "unknown")).strip().lower()
+    fields = {"provider": provider, "model": cfg.active_embedding_model(), "contract": "retrieval-v2"}
+    prefixes = {"nvidia": "NVIDIA", "gemini": "GEMINI", "jina": "JINA",
+                "huggingface": "HF"}
+    prefix = prefixes.get(provider, provider.upper())
+    for suffix in ("EMBEDDING_DIM", "EMBEDDING_BASE_URL", "OUTPUT_DIMENSIONALITY",
+                   "USE_TASK_PROMPTS", "EMBEDDING_USE_PROMPTS", "EMBEDDING_QUERY_PROMPT",
+                   "EMBEDDING_DOC_PROMPT"):
+        fields[suffix] = getattr(cfg, prefix + "_" + suffix, None)
+    # Omitted and explicit native dimensions are the same hosted vector space.
+    if provider == "nvidia" and fields["model"] == "nvidia/nemotron-3-embed-1b":
+        fields["EMBEDDING_DIM"] = fields["EMBEDDING_DIM"] or 2048
+    return fingerprint(fields)
+
+
 class BaseEmbedder:
     """Common machinery: caching, batching, retrying. Subclasses implement
     _make_client() and _embed_batch() with the official provider SDK."""
@@ -158,8 +175,8 @@ class BaseEmbedder:
         self.max_retries = cfg.EMBEDDING_MAX_RETRIES
         self.retry_base_delay = cfg.EMBEDDING_RETRY_BASE_DELAY
         self.cache = EmbeddingCache(cfg.EMBEDDING_CACHE_PATH)
-        self.cache.model = self.model
         self.cache.note_expected_model(self.model)
+        self.cache.model = self.model
         self._client = None
         self._dimension = None
         self.cache_hits = 0
@@ -185,7 +202,7 @@ class BaseEmbedder:
             code = getattr(exc, "code", None)
         if code is not None:
             try:
-                return int(code) in (408, 429, 500, 502, 503, 504)
+                return int(code) in (0, 408, 429, 500, 502, 503, 504)
             except (TypeError, ValueError):
                 pass  # code may be an enum/string; fall through to text match
         text = f"{type(exc).__name__} {exc}".lower()
@@ -203,20 +220,26 @@ class BaseEmbedder:
         last_error = None
         for attempt in range(1, self.max_retries + 1):
             try:
+                self.api_calls += 1
                 return self._embed_batch(texts, input_type)
             except Exception as exc:  # noqa: BLE001 — providers raise many SDK-specific types
                 if not self._is_retryable(exc):
                     print(f"[embedder] NON-RETRYABLE error ({type(exc).__name__}): {exc}")
                     raise
                 last_error = exc
-                delay = self.retry_base_delay * (2 ** (attempt - 1))
+                delay = getattr(exc, "retry_after", None)
+                if delay is None:
+                    delay = self.retry_base_delay * (2 ** (attempt - 1))
+                if delay > float(getattr(self.cfg, "NVIDIA_MAX_RETRY_DELAY", 30)):
+                    raise  # defer, never retry before a long Retry-After
                 message = f"{type(exc).__name__}: {exc}"
                 if attempt >= self.max_retries:
                     print(f"[embedder] FAILED after {attempt} attempt(s): {message}")
                 else:
                     print(f"[embedder] retry {attempt}/{self.max_retries - 1} "
                           f"after {delay:.1f}s ({message})")
-                time.sleep(delay)
+                if attempt < self.max_retries:
+                    time.sleep(delay)
         raise RuntimeError(
             f"embedding failed after {self.max_retries} attempts: {last_error}"
         )
@@ -249,8 +272,10 @@ class BaseEmbedder:
         todo: list[tuple[int, str, str]] = []
         seen_keys: dict[str, int] = {}
 
+        duplicates = {}
         for i, text in enumerate(texts):
-            key = cache_key(self.model, text, input_type)
+            identity = getattr(self, "cache_identity", self.model)
+            key = cache_key(identity, text, input_type)
             entry = self.cache.get(key)
             if entry is not None:
                 cached = entry["embedding"]
@@ -263,10 +288,14 @@ class BaseEmbedder:
                         f"{text[:120]!r} (cache invalid; delete "
                         f"{self.cache.path.name} and re-ingest with --reset)"
                     )
+                expected_dim = getattr(self, "expected_dimension", None)
+                if expected_dim and len(cached) != expected_dim:
+                    raise RuntimeError(f"embedding cache dimension mismatch: expected {expected_dim}, got {len(cached)}")
                 results[i] = cached
+                self._dimension = len(cached)
                 self.cache_hits += 1
             elif key in seen_keys:
-                results[i] = results[seen_keys[key]]  # duplicate inside this call
+                duplicates[i] = seen_keys[key]  # fill AFTER the unique batch returns
             else:
                 seen_keys[key] = i
                 todo.append((i, text, key))
@@ -275,7 +304,8 @@ class BaseEmbedder:
             batch = todo[start : start + self.batch_size]
             texts_batch = [item[1] for item in batch]
             embs = self._call_with_bisect(texts_batch, input_type)
-            self.api_calls += 1
+            if len(embs) != len(batch):
+                raise RuntimeError(f"Provider returned {len(embs)} vectors for {len(batch)} texts")
             print(f"[embedder] embedded {len(batch)} text(s) "
                   f"({start + 1}-{start + len(batch)} of {len(todo)}) in 1 API call")
 
@@ -288,6 +318,8 @@ class BaseEmbedder:
             # CI to split a large ingest across days on the free tier).
             self.cache.save()
 
+        for index, original in duplicates.items():
+            results[index] = results[original]
         return results
 
     def embed_query(self, text: str) -> list:
@@ -652,8 +684,8 @@ class JinaEmbedder(BaseEmbedder):
         # clobber each other's resumable caches).
         self.cache = EmbeddingCache(
             getattr(cfg, "JINA_EMBEDDING_CACHE_PATH", cfg.EMBEDDING_CACHE_PATH))
-        self.cache.model = self.model
         self.cache.note_expected_model(self.model)
+        self.cache.model = self.model
         self.batch_size = int(getattr(cfg, "JINA_EMBEDDING_BATCH_SIZE",
                                       self.batch_size) or self.batch_size)
 
@@ -775,154 +807,92 @@ class JinaEmbedder(BaseEmbedder):
 
 
 class NvidiaEmbedder(BaseEmbedder):
-    """Hosted multilingual/cross-lingual embeddings via NVIDIA NIM.
+    """NVIDIA NIM query/passage embeddings, exact model and strict validation.
 
-    NeMo Retriever models (nvidia/llama-3.2-nv-embedqa-1b-v2) cover 26
-    languages incl. Arabic and support cross-lingual retrieval: an English or
-    French question can retrieve Arabic documents directly (R@5 on MLQA
-    cross-lingual pairs ~80%, vs ~13% BM25). The response shape is the
-    OpenAI-compatible one Jina returns, so the parsing/validation mirrors it;
-    the differences are the endpoint, the key, the optional Matryoshka
-    `dimensions` truncation and the `input_type` values:
-
-      - documents  -> "input_type": "passage"
-      - questions  -> "input_type": "query"
-
-    Free endpoint (~40 RPM): batching + the provider-scoped resumable cache
-    keep a 836-chunk ingest at a handful of requests.
+    The hosted nemotron-3-embed-1b API returns native 2048-dimensional floats.
+    Explicit truncate=NONE prevents invisible loss of source text. Cache keys
+    include endpoint, dimensions, model and task contract, not just model text.
     """
-
     provider_name = "nvidia"
 
     def __init__(self, cfg):
         super().__init__(cfg)
-        # Provider-scoped cache (NVIDIA space != Gemini/Jina space).
-        self.cache = EmbeddingCache(
-            getattr(cfg, "NVIDIA_EMBEDDING_CACHE_PATH", cfg.EMBEDDING_CACHE_PATH))
-        self.cache.model = self.model
+        self.cache = EmbeddingCache(getattr(cfg, "NVIDIA_EMBEDDING_CACHE_PATH", cfg.EMBEDDING_CACHE_PATH))
         self.cache.note_expected_model(self.model)
-        self.batch_size = int(getattr(cfg, "NVIDIA_EMBEDDING_BATCH_SIZE",
-                                      self.batch_size) or self.batch_size)
+        self.cache.model = self.model
+        self.batch_size = int(getattr(cfg, "NVIDIA_EMBEDDING_BATCH_SIZE", self.batch_size))
         self._dim = int(getattr(cfg, "NVIDIA_EMBEDDING_DIM", 0) or 0)
+        self.expected_dimension = 2048 if self.model == "nvidia/nemotron-3-embed-1b" else (self._dim or None)
+        if self.model == "nvidia/nemotron-3-embed-1b" and self._dim not in {0, 2048}:
+            raise ValueError("Hosted nemotron-3-embed-1b only supports 2048 dimensions; set NVIDIA_EMBEDDING_DIM=0 or 2048")
+        self.cache_identity = embedding_fingerprint(cfg)
+        if self.batch_size <= 0:
+            raise ValueError("NVIDIA_EMBEDDING_BATCH_SIZE must be positive")
 
     def _make_client(self):
-        if self._client is not None:
-            return self._client
-        api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
-        if not api_key:
-            raise SystemExit(
-                "[embedder] NVIDIA_API_KEY is not set. "
-                "Copy .env.example to .env and paste your key "
-                "(https://build.nvidia.com — GET API KEY)."
-            )
-        self._client = {"api_key": api_key, "base_url": self._base_url()}
+        if self._client is None:
+            from nvidia_api import NvidiaClient
+            if not os.environ.get("NVIDIA_API_KEY", "").strip():
+                raise SystemExit("[embedder] NVIDIA_API_KEY is not set. Configure it in .env or GitHub Actions secrets.")
+            self._client = NvidiaClient(
+                timeout=getattr(self.cfg, "NVIDIA_API_TIMEOUT", 120), attempts=1,
+                min_interval=getattr(self.cfg, "NVIDIA_MIN_INTERVAL", 1.6))
         return self._client
 
-    def _base_url(self) -> str:
-        return getattr(self.cfg, "NVIDIA_EMBEDDING_BASE_URL",
-                       "https://integrate.api.nvidia.com/v1/embeddings")
+    def _base_url(self):
+        return getattr(self.cfg, "NVIDIA_EMBEDDING_BASE_URL", "https://integrate.api.nvidia.com/v1/embeddings")
 
-    def _task_for(self, input_type: str) -> str:
-        # NVIDIA NIM embeddings take "passage"/"query" (asymmetric retrieval);
-        # the base "search_document"/"search_query" would be invalid there.
-        return ("query" if input_type == "search_query" else "passage")
+    def _task_for(self, input_type):
+        if input_type not in {"search_document", "search_query"}:
+            raise ValueError(f"Unknown embedding input type: {input_type}")
+        return "query" if input_type == "search_query" else "passage"
 
-    def _embed_batch(self, texts: list[str], input_type: str = "search_document"):
-        client = self._make_client()
-        payload = {
-            "model": self.model,
-            "input": [str(t) for t in texts],
-            "input_type": self._task_for(input_type),
-        }
+    def _embed_batch(self, texts, input_type="search_document"):
+        from nvidia_api import NvidiaAPIError
+        payload = {"model": self.model, "input": list(texts),
+                   "input_type": self._task_for(input_type),
+                   "encoding_format": "float", "truncate": "NONE"}
         if self._dim:
             payload["dimensions"] = self._dim
-        import urllib.error
-        import urllib.request
-
-        req = urllib.request.Request(
-            client["base_url"],
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {client['api_key']}",
-                "Accept": "application/json",
-            },
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                body = resp.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = ""
-            try:
-                detail = exc.read().decode("utf-8")[:300]
-            except Exception:  # noqa: BLE001
-                pass
-            raise NvidiaHTTPError(
-                exc.code,
-                f"NVIDIA API HTTP {exc.code}: {detail or exc.reason}",
-            ) from exc
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
-            raise NvidiaHTTPError(0, f"NVIDIA API connection error: {exc}") from exc
+            data = self._make_client().request(self._base_url(), payload)
+        except NvidiaAPIError as exc:
+            error = NvidiaHTTPError(exc.status_code, str(exc))
+            error.retry_after = exc.retry_after
+            raise error from exc
+        self.last_response_preview = {"api_model": data.get("model"), "object": data.get("object")}
+        if data.get("model") and data["model"] != self.model:
+            raise RuntimeError(f"Embedding model mismatch: requested {self.model}, got {data['model']}")
+        items = data.get("data")
+        if not isinstance(items, list):
+            raise RuntimeError("NVIDIA embedding response has no data list")
+        if len(items) != len(texts):
+            raise RuntimeError(f"NVIDIA API returned {len(items)} embeddings for {len(texts)} inputs")
+        indices = [item.get("index") for item in items if isinstance(item, dict)]
+        if any(type(i) is not int for i in indices) or sorted(indices) != list(range(len(texts))):
+            raise RuntimeError("NVIDIA embedding indices must be unique and cover every input")
+        vectors = []
+        for item in sorted(items, key=lambda item: item["index"]):
+            index = item["index"]
+            vector = item.get("embedding")
+            if not isinstance(vector, list):
+                raise RuntimeError(f"NVIDIA API item {index} has no embedding list")
+            issue = _vector_issue(vector)
+            if issue:
+                raise InvalidVectorError(f"NVIDIA API item {index} embedding contains {issue}; input preview: {texts[index][:120]!r}")
+            if self.expected_dimension and len(vector) != self.expected_dimension:
+                raise RuntimeError(f"NVIDIA embedding dimension: expected {self.expected_dimension}, got {len(vector)}")
+            if vectors and len(vector) != len(vectors[0]):
+                raise RuntimeError("NVIDIA returned inconsistent vector dimensions")
+            vectors.append([float(x) for x in vector])
+        if vectors:
+            self._dimension = len(vectors[0])
+        self.last_response_preview.update(n_items=len(vectors), first_dim=self._dimension)
+        return vectors
 
-        data = json.loads(body)
-        self.last_response = data
-        self.last_response_preview = {
-            "api_model": data.get("model"),
-            "object": data.get("object"),
-            "n_items": len(data.get("data") or []),
-            "first_dim": (len((data.get("data") or [{}])[0].get("embedding")
-                              or []) if data.get("data") else 0),
-        }
-        if data.get("object") == "list" and isinstance(data.get("data"), list):
-            ordered = sorted(data["data"], key=lambda item: item.get("index", 0))
-            embs = []
-            for idx, item in enumerate(ordered):
-                emb = item.get("embedding")
-                if not isinstance(emb, list):
-                    raise RuntimeError(
-                        f"NVIDIA API item {item.get('index')} has no embedding "
-                        f"list (got {type(emb).__name__}); input preview: "
-                        f"{texts[idx][:120]!r}"
-                    )
-                vals = []
-                for v in emb:
-                    try:
-                        fv = float(v)
-                    except (TypeError, ValueError) as exc:
-                        raise RuntimeError(
-                            f"NVIDIA API item {item.get('index')} embedding "
-                            f"value {v!r} not numeric; input preview: "
-                            f"{texts[idx][:120]!r}"
-                        ) from exc
-                    vals.append(fv)
-                issue = _vector_issue(vals)
-                if issue is not None:
-                    raise InvalidVectorError(
-                        f"NVIDIA API item {item.get('index')} embedding "
-                        f"contains {issue}; input preview: "
-                        f"{texts[idx][:120]!r}"
-                    )
-                embs.append(vals)
-            if len(embs) != len(texts):
-                raise RuntimeError(
-                    f"NVIDIA API returned {len(embs)} embeddings for "
-                    f"{len(texts)} inputs"
-                )
-            if embs:
-                self._dimension = len(embs[0])
-            return embs
-        raise RuntimeError(
-            f"NVIDIA API unexpected response: {json.dumps(data)[:300]}"
-        )
-
-    def _provider_notes(self) -> list[str]:
-        return [
-            "input_type mapping: docs->passage | queries->query"
-            + (f" | Matryoshka dim={self._dim}" if self._dim
-               else " | dimension auto-detected (2048 default)"),
-            "NVIDIA NIM free endpoint (rate-limited; resumable cache on)",
-        ]
+    def _provider_notes(self):
+        return ["docs->passage | queries->query | encoding=float | truncate=NONE",
+                "Exact model ID; no automatic fallback; native dimensions validated"]
 
 
 class HuggingFaceEmbedder(BaseEmbedder):

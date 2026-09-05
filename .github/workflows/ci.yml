@@ -36,15 +36,17 @@ jobs:
           cache-dependency-path: raglab/requirements.txt
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-benchmark.txt
         working-directory: raglab
 
       - name: Compile all modules
-        run: python -m py_compile config.py loader.py chunker.py embedder.py store.py evaluate.py answer.py main.py ci_test.py translate.py tests_offline.py
+        run: python -m compileall -q .
         working-directory: raglab
 
       - name: Offline regression tests (no API, stubbed HF provider)
-        run: python tests_offline.py
+        run: |
+          python tests_offline.py
+          python -m unittest -v test_nvidia_pipeline
         working-directory: raglab
 
       - name: Offline inspect (load + chunk only, zero API calls)
@@ -74,7 +76,7 @@ jobs:
           cache-dependency-path: raglab/requirements.txt
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-benchmark.txt
         working-directory: raglab
 
       - name: Check API key secret and write .env (values never logged)

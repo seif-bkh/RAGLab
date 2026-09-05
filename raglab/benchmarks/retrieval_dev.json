@@ -1,0 +1,293 @@
+{
+  "description": "Frozen legacy real-document development questions, with source constraints and approximate answer rubrics. Never sent as model hints.",
+  "cases": [
+    {
+      "id": "rq01",
+      "question": "في أي سنة تأسس بنك البركة تونس؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_substring": "جوان 1983",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "answer_contains_all": [
+        [
+          "1983"
+        ]
+      ]
+    },
+    {
+      "id": "rq02",
+      "question": "كيف يتم بيع السلعة في تمويل المرابحة؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_substring": "بيعها للامر بالشراء بثمن يعادل تكلفة شرائها مع زيادة هامش ربح محدد مسبقا",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "answer_contains_all": [
+        [
+          "تكلفة",
+          "كلفة"
+        ],
+        [
+          "هامش",
+          "ربح"
+        ]
+      ]
+    },
+    {
+      "id": "rq03",
+      "question": "Quelle est l'année de fondation de la Banque Al Baraka Tunisie ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_substring": "جوان 1983",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "answer_contains_all": [
+        [
+          "1983"
+        ]
+      ]
+    },
+    {
+      "id": "rq04",
+      "question": "ما هو تعريف التمويل بصيغة السلم وفق الدليل الداخلي؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_substring": "شراء اجل بثمن عاجل نقدا لمنقولات مادية محددة",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "answer_contains_all": [
+        [
+          "شراء",
+          "تسليم",
+          "تسلم"
+        ],
+        [
+          "عاجل",
+          "مقدما",
+          "مقدم",
+          "نقد"
+        ]
+      ]
+    },
+    {
+      "id": "rq05",
+      "question": "Under Murabaha financing, the bank sells the asset at cost plus what?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_substring": "زيادة هامش ربح محدد مسبقا",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "answer_contains_all": [
+        [
+          "profit",
+          "margin"
+        ],
+        [
+          "predetermined",
+          "predefined",
+          "agreed",
+          "fixed",
+          "pre-agreed"
+        ]
+      ]
+    },
+    {
+      "id": "rq06",
+      "question": "بعد كم يوم عمل يجب تنفيذ عمليات الصرف الفوري (SPOT)؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_substring": "لا تتجاوز مدة تنفيذها يومي عمل",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "answer_contains_all": [
+        [
+          "يومي",
+          "يومين",
+          "اثنين",
+          "2"
+        ]
+      ]
+    },
+    {
+      "id": "rq07",
+      "question": "ما هي أنواع البطاقات البنكية التي يصدرها البنك؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_substring": "بطاقات الحسم الفوري وبطاقات الحسم الاجل",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "answer_contains_all": [
+        [
+          "فوري"
+        ],
+        [
+          "اجل"
+        ]
+      ]
+    },
+    {
+      "id": "rq08",
+      "question": "Quelle est la définition du financement Salam selon le guide interne ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_substring": "شراء اجل بثمن عاجل نقدا لمنقولات مادية محددة",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "answer_contains_all": [
+        [
+          "achat",
+          "livraison"
+        ],
+        [
+          "comptant",
+          "avance",
+          "immédiat",
+          "anticipé"
+        ]
+      ]
+    },
+    {
+      "id": "rq09",
+      "question": "What are the two types of bank cards issued by the bank?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_substring": "بطاقات الحسم الفوري وبطاقات الحسم الاجل",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "answer_contains_all": [
+        [
+          "immediate",
+          "debit"
+        ],
+        [
+          "deferred",
+          "delayed"
+        ]
+      ]
+    },
+    {
+      "id": "rq10",
+      "question": "ماذا فرض الإسلام على الأموال الفائضة؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_substring": "فرض الزكاة",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "answer_contains_all": [
+        [
+          "زكاة",
+          "الزكاة"
+        ]
+      ]
+    },
+    {
+      "id": "rq11",
+      "question": "ما هو الهدف الرئيسي لهذه المادة التدريبية؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_substring": "الهدف الرئيسي من هذه المادة التدريبية",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "answer_contains_all": [
+        [
+          "تاهيل",
+          "شرعي",
+          "توعية"
+        ]
+      ]
+    },
+    {
+      "id": "rq12",
+      "question": "Selon l'introduction à la banque islamique, les espèces sont-elles une marchandise ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_substring": "النقد في الاسلام ليس سلعة",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "answer_contains_all": [
+        [
+          "pas une marchandise",
+          "non",
+          "pas un bien"
+        ],
+        [
+          "échange",
+          "echange"
+        ]
+      ]
+    },
+    {
+      "id": "rq13",
+      "question": "Which operations fall under commercial Islamic financing according to the internal guide?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_substring": "تندرج ضمن عمليات الصيرفة الاسلامية في التمويل التجاري",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "answer_contains_all": [
+        [
+          "murabaha",
+          "mourabaha"
+        ],
+        [
+          "ijara",
+          "ijarah",
+          "lease",
+          "leasing"
+        ],
+        [
+          "istisna"
+        ],
+        [
+          "salam"
+        ]
+      ]
+    },
+    {
+      "id": "rq14",
+      "question": "According to BCT circular 2019-08, Islamic banking operations are commercial financing, participatory financing or what?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_substring": "ودائع استثمارية",
+      "expected_lang": "ar",
+      "split": "development",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "answer_contains_all": [
+        [
+          "investment deposit",
+          "investment account"
+        ]
+      ]
+    },
+    {
+      "id": "rq15",
+      "question": "How many branches does Bank Al Baraka Tunisia have?",
+      "language": "en",
+      "category": "out-of-scope",
+      "split": "development",
+      "should_refuse": true
+    },
+    {
+      "id": "rq16",
+      "question": "ما هو رصيدي في الحساب الجاري؟",
+      "language": "ar",
+      "category": "out-of-scope",
+      "split": "development",
+      "should_refuse": true
+    }
+  ]
+}

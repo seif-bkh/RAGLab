@@ -12,6 +12,11 @@ on:
         options: [probe, benchmark, report]
         default: probe
         required: true
+      stage:
+        description: "Benchmark scope (retrieval first, all also compares grounded answers)"
+        type: choice
+        options: [retrieval, all]
+        default: retrieval
       source-run:
         description: "For report mode: the run ID whose diagnostics should be re-published"
         type: string
@@ -20,6 +25,7 @@ on:
 permissions:
   contents: read
   actions: read
+  checks: write  # publish measured JSON, never credentials
 
 concurrency:
   group: nvidia-${{ github.ref }}
@@ -29,7 +35,7 @@ jobs:
   nvidia:
     name: Exact requested NVIDIA models
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,6 +45,7 @@ jobs:
         id: plan
         env:
           INPUT_MODE: ${{ inputs.mode }}
+          INPUT_STAGE: ${{ inputs.stage }}
           INPUT_SOURCE_RUN: ${{ inputs.source-run }}
         run: |
           python - <<'PY'
@@ -46,10 +53,12 @@ jobs:
           plan = json.load(open('raglab/benchmarks/run_plan.json'))
           mode = os.environ.get('INPUT_MODE') or plan['mode']
           source = os.environ.get('INPUT_SOURCE_RUN') or plan.get('source_run', '')
+          stage = os.environ.get('INPUT_STAGE') or plan.get('stage', 'retrieval')
+          assert stage in {'retrieval', 'all'}
           assert mode in {'probe', 'benchmark', 'report'}
           assert not source or str(source).isdigit()
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-              out.write(f'mode={mode}\nsource_run={source}\n')
+              out.write(f'mode={mode}\nsource_run={source}\nstage={stage}\n')
           PY
       - name: Recover existing diagnostics without any model calls
         if: steps.plan.outputs.mode == 'report'
@@ -58,7 +67,9 @@ jobs:
           SOURCE_RUN: ${{ steps.plan.outputs.source_run }}
         run: |
           gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name raglab-nvidia-results --dir raglab/results/nvidia
-          python raglab/nvidia_probe.py --report-only
+          if [ -f raglab/results/nvidia/probe.json ]; then
+            python raglab/nvidia_probe.py --report-only
+          fi
       - name: Probe exact model IDs (no fallback, no Gemini dependency)
         if: steps.plan.outputs.mode == 'probe'
         working-directory: raglab
@@ -66,6 +77,48 @@ jobs:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           PYTHONUNBUFFERED: "1"
         run: python nvidia_probe.py
+      - name: Install benchmark dependencies
+        if: steps.plan.outputs.mode == 'benchmark'
+        run: python -m pip install -r raglab/requirements-benchmark.txt
+      - name: Offline contracts before spending API quota
+        if: steps.plan.outputs.mode == 'benchmark'
+        working-directory: raglab
+        run: |
+          python -m compileall -q .
+          python tests_offline.py
+          python -m unittest -v test_nvidia_pipeline
+      - uses: actions/cache/restore@v4
+        id: model-cache
+        if: steps.plan.outputs.mode == 'benchmark'
+        with:
+          path: |
+            raglab/benchmark_cache/*cache*.json
+            raglab/benchmark_cache/tokenizer/
+          key: nvidia-native-v2-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: nvidia-native-v2-${{ github.ref_name }}-
+      - name: Run frozen-model comparison (no fallback)
+        if: steps.plan.outputs.mode == 'benchmark'
+        working-directory: raglab
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_API_TIMEOUT: "90"
+          NVIDIA_API_ATTEMPTS: "2"
+          PYTHONUNBUFFERED: "1"
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/raglab/benchmark_cache/tokenizer
+          BENCHMARK_STAGE: ${{ steps.plan.outputs.stage }}
+        run: python nvidia_benchmark.py --stage "$BENCHMARK_STAGE"
+      - uses: actions/cache/save@v4
+        if: always() && steps.plan.outputs.mode == 'benchmark'
+        with:
+          path: |
+            raglab/benchmark_cache/*cache*.json
+            raglab/benchmark_cache/tokenizer/
+          key: nvidia-native-v2-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Publish inspectable metrics through the Checks API
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python raglab/publish_nvidia_report.py
       - name: Upload diagnostics (never keys)
         if: always()
         uses: actions/upload-artifact@v4

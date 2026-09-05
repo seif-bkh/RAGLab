@@ -89,9 +89,39 @@ def chat_payload(model, messages, max_tokens=2048):
     return payload
 
 
+def read_event_stream(response, deadline):
+    """Collect final content from OpenAI-style SSE; discard reasoning deltas."""
+    content, model, usage, finish, complete = [], None, {}, None, False
+    for line in response:
+        if time.monotonic() > deadline:
+            raise TimeoutError("NVIDIA streaming response exceeded its wall-clock budget")
+        line = line.decode("utf-8") if isinstance(line, bytes) else line
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            complete = True
+            break
+        data = json.loads(payload)
+        if data.get("error"):
+            raise NvidiaAPIError("NVIDIA stream error: " + safe_error(data["error"]), 502)
+        model = data.get("model") or model
+        usage = data.get("usage") or usage
+        for choice in data.get("choices", []):
+            delta = choice.get("delta") or {}
+            text = delta.get("content")
+            if isinstance(text, str):
+                content.append(text)
+            finish = choice.get("finish_reason") or finish
+    if not complete or not finish:
+        raise NvidiaAPIError("NVIDIA stream ended without a complete final answer", 502)
+    return {"model": model, "usage": usage,
+            "choices": [{"message": {"content": "".join(content)}, "finish_reason": finish}]}
+
+
 class NvidiaClient:
     def __init__(self, *, base_url=BASE_URL, timeout=120, attempts=3,
-                 min_interval=1.6, max_retry_delay=30, api_key=None):
+                 min_interval=1.6, max_retry_delay=30, api_key=None, stream=False):
         self.base_url = base_url.rstrip("/")
         self.api_key = (api_key or os.environ.get("NVIDIA_API_KEY", "")).strip()
         self.timeout = float(timeout)
@@ -100,6 +130,7 @@ class NvidiaClient:
         self.max_retry_delay = float(max_retry_delay)
         if self.timeout <= 0 or self.attempts < 1 or self.min_interval < 0:
             raise ValueError("NVIDIA timeout/attempts must be positive; pacing nonnegative")
+        self.stream = stream
         self.calls = 0
         self.events = []
 
@@ -122,14 +153,17 @@ class NvidiaClient:
             req = urllib.request.Request(
                 url, data=None if payload is None else json.dumps(payload).encode("utf-8"),
                 headers={"Authorization": f"Bearer {self.api_key}",
-                         "Content-Type": "application/json", "Accept": "application/json"},
+                         "Content-Type": "application/json",
+                         "Accept": "text/event-stream" if (payload or {}).get("stream") else "application/json"},
                 method="GET" if payload is None else "POST")
             self.calls += 1
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     if getattr(resp, "status", 200) == 202:
                         raise NvidiaAPIError("NVIDIA returned pending (202), not a completed result", 202)
-                    data = json.loads(resp.read().decode("utf-8"))
+                    data = (read_event_stream(resp, started + self.timeout * (attempt + 1))
+                            if (payload or {}).get("stream") else
+                            json.loads(resp.read().decode("utf-8")))
                 if not isinstance(data, dict):
                     raise NvidiaAPIError("NVIDIA returned a non-object JSON response", 422)
                 self.events.append({"model": (payload or {}).get("model"),
@@ -144,6 +178,8 @@ class NvidiaClient:
                                        exc.code, retry_after_seconds(exc.headers.get("Retry-After")))
             except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
                 error = NvidiaAPIError(f"NVIDIA connection error: {safe_error(exc)}")
+            except NvidiaAPIError as exc:
+                error = exc
             except json.JSONDecodeError as exc:
                 raise NvidiaAPIError("NVIDIA returned invalid JSON", 422) from exc
             if not error.retryable or attempt + 1 == self.attempts:
@@ -159,7 +195,10 @@ class NvidiaClient:
             time.sleep(delay)
 
     def chat(self, model, messages, *, max_tokens=2048):
-        data = self.request("chat/completions", chat_payload(model, messages, max_tokens))
+        payload = chat_payload(model, messages, max_tokens)
+        if self.stream and model in ANSWER_MODELS:
+            payload["stream"] = True
+        data = self.request("chat/completions", payload)
         served = data.get("model")
         if served and served != model:
             raise NvidiaAPIError(f"Requested {model}, but NVIDIA reported model {served}; refusing substitution", 422)

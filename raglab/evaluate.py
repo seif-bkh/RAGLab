@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from loader import normalize_arabic, normalize_text
+from retrieval import retrieve
+from artifacts import write_json
 from store import (best_variant_merge, blend_hybrid, collection_languages,
                    keyword_search, query_vector, rrf_merge)
 
@@ -83,6 +85,9 @@ def prepare_query_text(text: str) -> str:
 def is_correct_hit(case: dict, hit: dict) -> bool:
     """True if this hit matches the case's expectation (language-aware)."""
     meta = hit.get("metadata") or {}
+    expected_document = case.get("expected_document")
+    if expected_document and (meta.get("document") or meta.get("source") or hit.get("document")) != expected_document:
+        return False
     expected_lang = case.get("expected_lang")
     if expected_lang and meta.get("language") != expected_lang:
         return False
@@ -127,7 +132,7 @@ def find_correct_any_lang(case: dict, hits: list) -> dict | None:
 
 def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
                    top_k: int = 20, translator=None,
-                   blend_lambda: float | None = None) -> dict:
+                   blend_lambda: float | None = None, variant_strategy=None) -> dict:
     """Embed every question, retrieve, decide hit/miss, build the full run dict.
 
     mode selects the per-variant retrieval:
@@ -164,46 +169,11 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
     per_question = []
     for case in cases:
         q_text = prepare_query_text(case["question"])
-        if translation_enabled:
-            variants = translator.build_variants(
-                q_text, case.get("language"), corpus_langs)
-        else:
-            variants = [{
-                "label": f"{case.get('language') or '?'}(original)",
-                "lang": case.get("language"),
-                "translated": False,
-                "text": q_text,
-            }]
-
-        variant_hit_lists = []
-        for variant in variants:
-            q_embedding = embedder.embed_query(variant["text"])
-            vector_hits = query_vector(collection, q_embedding, k=top_k, cfg=cfg)
-            if mode == "vector":
-                variant_hit_lists.append(vector_hits)
-            elif mode == "rrf":
-                kw_hits = keyword_search(collection, variant["text"], k=top_k,
-                            include_metadata=getattr(
-                                cfg, "KEYWORD_SEARCH_INCLUDE_METADATA",
-                                True), cfg=cfg)
-                variant_hit_lists.append(
-                    rrf_merge(vector_hits, kw_hits,
-                              k=cfg.RRF_RANK_CONSTANT)[:top_k])
-            else:  # blend
-                kw_hits = keyword_search(collection, variant["text"], k=top_k,
-                                         include_metadata=getattr(
-                                             cfg,
-                                             "KEYWORD_SEARCH_INCLUDE_METADATA",
-                                             True), cfg=cfg)
-                variant_hit_lists.append(
-                    blend_hybrid(vector_hits, kw_hits, lambd=lambd)[:top_k])
-
-        fused = best_variant_merge(variant_hit_lists, score_key=score_key,
-                                   labels=[v["label"] for v in variants],
-                                   tie_break=getattr(
-                                       cfg, "FUSION_TIE_BREAK",
-                                       "same_lang_margin"))
-        hits = fused[:top_k]
+        hits, variants = retrieve(
+            cfg, embedder, collection, q_text, language=case.get("language"),
+            translator=translator if translation_enabled else None, mode=mode,
+            top_k=top_k, candidate_k=top_k, variant_strategy=variant_strategy,
+            blend_lambda=lambd)
 
         is_oos = case["category"] == "out-of-scope"
         correct_hit = None if is_oos else find_correct_hit(case, hits)
@@ -225,6 +195,7 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
             "query_variants": [{
                 "label": v["label"], "lang": v.get("lang"),
                 "translated": v["translated"], "text": v["text"],
+                "model": v.get("model"), "prompt_version": v.get("prompt_version"),
             } for v in variants],
             "top_variant": hits[0].get("from_variant") if hits else None,
             "hits": [{
@@ -233,6 +204,7 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
                 "heading": (h.get("metadata") or {}).get("heading"),
                 "language": (h.get("metadata") or {}).get("language"),
                 "document": (h.get("metadata") or {}).get("document"),
+                "metadata": h.get("metadata") or {},
                 "variant": h.get("from_variant"),
                 "variant_ranks": h.get("variant_ranks"),
                 "relative_score": h.get("relative_score"),
@@ -275,6 +247,11 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
                                         "same_lang_margin"),
             "query_translation_enabled": translation_enabled,
             "query_translation_model": translator.model if translation_enabled else None,
+            "query_translation_active_model": translator.active_model if translation_enabled else None,
+            "translation_failures": translator.failures if translation_enabled else 0,
+            "translation_dropped": list(translator.dropped) if translation_enabled else [],
+            "query_variant_strategy": variant_strategy or getattr(cfg, "QUERY_VARIANT_STRATEGY", "best"),
+            "translation_prompt": translator.prompt_version if translation_enabled else None,
             # Each variant's scores are normalized by its own best match, then
             # fused — raw cross-variant scores are not comparable (the original
             # query's language always scores higher).
@@ -490,8 +467,8 @@ def print_report(run: dict):
 def save_run(run: dict, results_dir: Path) -> Path:
     """Write the full run to results/eval_<timestamp>.json; returns the path."""
     results_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     out = results_dir / f"eval_{stamp}.json"
-    out.write_text(json.dumps(run, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(out, run)
     print(f"[evaluate] full run saved to {out}")
     return out

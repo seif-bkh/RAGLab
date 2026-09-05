@@ -7,12 +7,15 @@ Subcommands (run from this project folder, inside the virtualenv):
     python main.py query "question" [-k 5] [--lang fr] [--hybrid]
     python main.py evaluate [--hybrid] [--top-k N]
 
-There is intentionally no answer generation: evaluate.py / answer.py keep a
-clearly marked stub. Run `python main.py <subcommand> --help` for details.
+Answer generation is optional: `answer` uses cited source excerpts and safe
+refusal; ordinary query/evaluate commands still measure retrieval only.
 """
 
 import argparse
+import json
 import statistics
+from datetime import datetime, timezone
+from types import SimpleNamespace
 import sys
 from pathlib import Path
 
@@ -26,6 +29,8 @@ from store import (best_variant_merge, blend_hybrid, collection_languages,
                    get_collection, keyword_search, query_vector, rrf_merge,
                    store_chunks)
 from translate import QueryTranslator, detect_language
+from retrieval import retrieve, expand_neighbors
+from artifacts import write_json
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +94,7 @@ def cmd_inspect(args) -> int:
           f"sentence_aware_overlap={cfg.CHUNK_OVERLAP_SENTENCE_AWARE}")
     print(f"[inspect] query translation: enabled="
           f"{cfg.QUERY_TRANSLATION_ENABLED} | model="
-          f"{cfg.QUERY_TRANSLATION_MODEL} | fusion=best_variant_max_score | "
+          f"{cfg.NVIDIA_TRANSLATION_MODEL if cfg.QUERY_TRANSLATION_PROVIDER == 'nvidia' else cfg.QUERY_TRANSLATION_MODEL} | fusion=best_variant_max_score | "
           f"cache={cfg.QUERY_TRANSLATION_CACHE_PATH.name}")
     chunks = chunk_all(docs, cfg)
     print(f"\n[inspect] {len(chunks)} chunk(s) across {len(docs)} document(s)\n")
@@ -143,7 +148,7 @@ def cmd_ingest(args) -> int:
     embedder = make_embedder(skip_sanity=args.skip_sanity_check)
 
     print(f"\n[ingest] embedding {len(chunks)} chunk(s) "
-          f"(batch size {cfg.EMBEDDING_BATCH_SIZE})...")
+          f"(batch size {embedder.batch_size})...")
     embeddings = embedder.embed_texts([c.text for c in chunks])
     assert len(embeddings) == len(chunks)
     print(f"[ingest] embedding done | cache hits={embedder.cache_hits} | "
@@ -161,7 +166,7 @@ def cmd_ingest(args) -> int:
 
     print(f"\n[ingest] final collection count = {collection.count()}")
     print(f"[ingest] model used            = {embedder.model}")
-    print(f"[ingest] cache file            = {cfg.EMBEDDING_CACHE_PATH.name}")
+    print(f"[ingest] cache file            = {embedder.cache.path.name}")
     print("[ingest] next: python main.py query \"...\" or python main.py evaluate")
     return 0
 
@@ -197,56 +202,14 @@ def cmd_query(args) -> int:
           f"blend_lambda={cfg.HYBRID_BLEND_LAMBDA:.2f} | "
           f"translation={'on' if translator else 'off'}")
 
-    # Original query + translations into each corpus language (best-score
-    # fusion across variants), so cross-lingual questions see both language
-    # halves of the corpus.
     qlang = args.query_lang or detect_language(q_text)
-    print(f"[query] detected query language: {qlang}")
-    if translator:
-        variants = translator.build_variants(q_text, qlang,
-                                             collection_languages(collection))
-        for v in variants:
-            tag = "original" if not v["translated"] else "translated"
-            print(f"[query] variant [{v['label']}] ({tag}): {v['text']}")
-    else:
-        variants = [{
-            "label": f"{qlang}(original)", "lang": qlang,
-            "translated": False, "text": q_text,
-        }]
-
-    variant_hit_lists = []
+    hits, variants = retrieve(cfg, embedder, collection, q_text, language=qlang,
+                              translator=translator, mode=mode, top_k=k,
+                              lang_filter=lang, variant_strategy=args.variant_strategy)
     for variant in variants:
-        q_embedding = embedder.embed_query(variant["text"])
-        print(f"[query] embedded variant {variant['label']} "
-              f"dimension={len(q_embedding)}")
-        v_hits = query_vector(collection, q_embedding, k=k, lang=lang,
-                        cfg=cfg)
-        if mode == "rrf":
-            kw_hits = keyword_search(collection, variant["text"], k=k,
-                        include_metadata=getattr(
-                            cfg, "KEYWORD_SEARCH_INCLUDE_METADATA",
-                            True))
-            v_hits = rrf_merge(v_hits, kw_hits, k=cfg.RRF_RANK_CONSTANT)[:k]
-        elif mode == "blend":
-            kw_hits = keyword_search(collection, variant["text"], k=k, cfg=cfg)
-            v_hits = blend_hybrid(v_hits, kw_hits,
-                                  lambd=cfg.HYBRID_BLEND_LAMBDA)[:k]
-        variant_hit_lists.append(v_hits)
-
-    if len(variant_hit_lists) > 1:
-        score_key = {"vector": "similarity", "rrf": "rrf_score",
-                     "blend": "blend_score"}[mode]
-        hits = best_variant_merge(
-            variant_hit_lists, score_key=score_key,
-            labels=[v["label"] for v in variants],
-            tie_break=getattr(cfg, "FUSION_TIE_BREAK",
-                              "same_lang_margin"))[:k]
-        print(f"[query] fused {len(hits)} hit(s) from {len(variants)} "
-              f"variant(s) (best-score fusion, tie_break="
-              f"{cfg.FUSION_TIE_BREAK})")
-    else:
-        hits = variant_hit_lists[0]
-        print(f"[query] retrieved {len(hits)} hit(s)")
+        print(f"[query] variant [{variant['label']}]: {variant['text']}")
+    if translator:
+        print("[query] " + translator.summary())
 
     for hit in hits:
         meta = hit.get("metadata") or {}
@@ -315,6 +278,46 @@ def cmd_evaluate(args) -> int:
     return 0
 
 
+def cmd_answer(args):
+    from answer import AnswerGenerator, needs_private_or_live_data
+    local = SimpleNamespace(**{key: getattr(cfg, key) for key in dir(cfg) if key.isupper()})
+    local.ANSWER_MODEL = args.model
+    generator = AnswerGenerator(local)
+    question = " ".join(args.question).strip()
+    if not question:
+        raise ValueError("Question must not be empty")
+    language = args.query_lang or detect_language(question)
+    hits, variants = [], []
+    if not needs_private_or_live_data(question):
+        collection = get_collection(cfg)
+        if not collection.count():
+            raise ValueError("Collection is empty; run python main.py ingest --reset --data-dir ../docs")
+        embedder = make_embedder(skip_sanity=True)
+        translator = None if args.no_translation else make_translator()
+        hits, variants = retrieve(cfg, embedder, collection, prepare_query_text(question),
+                                  language=language, translator=translator, top_k=args.k,
+                                  variant_strategy=args.variant_strategy)
+        hits = expand_neighbors(collection, hits, args.neighbor_radius)
+    result = generator.answer(question, hits, language)
+    result.update(question=question, query_variants=variants)
+    print(result["answer"])
+    for source in result["sources"]:
+        used = [e["quote"] for c in result["claims"] for e in c["evidence"] if e["source_id"] == source["source_id"]]
+        if used or args.show_context:
+            print(f"\n[{source['source_id']}] {source['document']} — {source['chunk_id']}")
+            print(source["text"] if args.show_context else "\n".join(used))
+    path = Path(args.output) if args.output else cfg.RESULTS_DIR / ("answer_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f") + ".json")
+    write_json(path, result)
+    print(f"\n[answer] status={result['status']} reason={result['reason']} | {path}")
+    return 0 if result["validation_ok"] else 2
+
+
+def cmd_benchmark(args):
+    from nvidia_benchmark import run
+    result = run(stage=args.stage, quality=not args.skip_translation_references)
+    return 0 if result["status"] == "completed" else 2
+
+
 # ---------------------------------------------------------------------------
 # argparse
 # ---------------------------------------------------------------------------
@@ -366,6 +369,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_query.add_argument("--skip-sanity-check", action="store_true", default=False,
                          dest="skip_sanity_check",
                          help="skip the default 3-language sanity check")
+    p_query.add_argument("--variant-strategy", choices=["original", "best", "translated"],
+                         default=cfg.QUERY_VARIANT_STRATEGY)
     p_query.set_defaults(func=cmd_query)
 
     p_eval = sub.add_parser("evaluate", help="run questions.json and report metrics")
@@ -388,6 +393,23 @@ def build_parser() -> argparse.ArgumentParser:
                         help="skip the default 3-language sanity check")
     p_eval.set_defaults(func=cmd_evaluate)
 
+    from nvidia_api import ANSWER_MODELS
+    p_answer = sub.add_parser("answer", help="generate a document-grounded, cited answer or refusal")
+    p_answer.add_argument("question", nargs="+")
+    p_answer.add_argument("--model", choices=ANSWER_MODELS, default=cfg.ANSWER_MODEL)
+    p_answer.add_argument("--query-lang", choices=["en", "fr", "ar"], default=None)
+    p_answer.add_argument("-k", type=int, default=cfg.ANSWER_TOP_K)
+    p_answer.add_argument("--no-translation", action="store_true")
+    p_answer.add_argument("--variant-strategy", choices=["original", "best", "translated"], default=cfg.QUERY_VARIANT_STRATEGY)
+    p_answer.add_argument("--neighbor-radius", type=int, choices=[0, 1, 2], default=cfg.ANSWER_NEIGHBOR_RADIUS)
+    p_answer.add_argument("--show-context", action="store_true")
+    p_answer.add_argument("--output", help="where to save the complete answer/evidence JSON")
+    p_answer.set_defaults(func=cmd_answer)
+    p_bench = sub.add_parser("benchmark", help="exact-model NVIDIA comparison (uses API quota)")
+    p_bench.add_argument("--stage", choices=["retrieval", "all"], default="retrieval")
+    p_bench.add_argument("--skip-translation-references", action="store_true")
+    p_bench.set_defaults(func=cmd_benchmark)
+
     return parser
 
 
@@ -396,6 +418,9 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
+    except (ValueError, RuntimeError) as exc:
+        print(f"[main] ERROR: {exc}", file=sys.stderr)
+        return 2
     except KeyboardInterrupt:
         print("\n[main] interrupted")
         return 130

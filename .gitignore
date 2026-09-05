@@ -13,3 +13,6 @@ raglab/embeddings_cache_*.json
 raglab/answers_cache*.json
 raglab/logs/
 raglab/benchmark_cache/
+
+# Local tokenizer/package cache
+.cache/

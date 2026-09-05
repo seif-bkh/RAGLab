@@ -1,0 +1,3 @@
+-r requirements.txt
+# Reference translation similarity (chrF++); not a semantic quality judge.
+sacrebleu==2.5.1

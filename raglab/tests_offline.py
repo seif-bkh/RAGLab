@@ -151,6 +151,7 @@ import math
 import types
 
 import config as cfg
+cfg.NVIDIA_MIN_INTERVAL = 0  # stubbed HTTP; unit tests must not pace real requests
 from embedder import build_embedder
 
 _hf_calls = []
@@ -411,21 +412,22 @@ def _nvidia_fake_open_factory(status: int | None = None, bad: str | None = None,
                 req.full_url, status, "simulated", {}, None)
         inputs = _nv_calls[-1]["payload"]["input"]
         n = len(inputs)
+        dim = _nv_calls[-1]["payload"].get("dimensions", 2048)
         bad_vec = {
             "nan": [0.25, float("nan")],
             "inf": [0.25, float("inf")],
-            "zero": [0.0] * 6,
+            "zero": [0.0] * dim,
             "missing": None,  # item without an "embedding" key
         }.get(bad)
         if bad == "short":
-            embs = [[0.25] * 6]  # fewer rows than inputs
+            embs = [[0.25] * dim]  # fewer rows than inputs
         else:
             embs = []
             for t in inputs:
                 if bad and (bad_text is None or t == bad_text):
                     embs.append(bad_vec)
                 else:
-                    embs.append([0.25] * 6)
+                    embs.append([0.25] * dim)
         body = {"object": "list", "data": [
             {"object": "embedding", "index": i, "embedding": e}
             for i, e in enumerate(embs)]}
@@ -489,12 +491,12 @@ check("nvidia: passage/query input_type + bearer auth + plain-string input",
       and _nv_calls[0]["ctype"] == "application/json"
       and _nv_calls[0]["url"].endswith("/v1/embeddings"),
       str(_nv_calls[0]["payload"]))
-check("nvidia: Matryoshka dimensions honored + auto-detect without dim",
-      _patch_nvidia(dim=384) and _nv_calls[0]["payload"].get("dimensions") == 384,
+check("nvidia: native dimensions honored + auto-detect without dim",
+      _patch_nvidia(dim=2048) and _nv_calls[0]["payload"].get("dimensions") == 2048,
       str(_nv_calls[0]["payload"].get("dimensions")))
 emb, _, _ = _patch_nvidia()
 check("nvidia: dimension auto-detected + scoped cache file",
-      emb._dimension == 6 and emb.cache.path.name == "nvidia_emb.json"
+      emb._dimension == 2048 and emb.cache.path.name == "nvidia_emb.json"
       and Path(emb.cache.path).exists(),
       f"dim={emb._dimension} cache={emb.cache.path}")
 
@@ -589,6 +591,7 @@ def _nvidia_chat_open_factory(content: str | None = None):
 
 class NvidiaCfg(FakeCfg):
     QUERY_TRANSLATION_PROVIDER = "nvidia"
+    NVIDIA_MIN_INTERVAL = 0
     NVIDIA_TRANSLATION_MODEL = "moonshotai/kimi-k2.6"
     NVIDIA_TRANSLATION_FALLBACK_MODELS = "deepseek-ai/deepseek-v4-pro"
     NVIDIA_TRANSLATION_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -617,10 +620,10 @@ check("nvidia chat: thinking off + temp 0 + bearer + content parsed",
       and _nv_chat_calls[0]["payload"]["messages"][0]["role"] == "user",
       str(_nv_chat_calls[0]["payload"]["model"]))
 
-# Reasoning fences are stripped if a model returns them anyway.
+# Reasoning blocks are removed entirely, not exposed as a translation.
 real_open = urllib.request.urlopen
 urllib.request.urlopen = _nvidia_chat_open_factory(
-    "```thinking\n1. ترجمة\n```")
+    "```thinking\nDiscard this internal block\n```\n1. ترجمة")
 try:
     os.environ["NVIDIA_API_KEY"] = "test-secret"
     tr_nv = QueryTranslator(NvidiaCfg())
@@ -631,7 +634,7 @@ finally:
         os.environ["NVIDIA_API_KEY"] = old_key
     else:
         os.environ.pop("NVIDIA_API_KEY", None)
-check("nvidia chat: reasoning fence stripped", fenced == "1. ترجمة",
+check("nvidia chat: reasoning block removed", fenced == "1. ترجمة",
       repr(fenced))
 
 # No NVIDIA key -> translator unavailable (graceful, never a crash).

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 import chromadb
 
 from chunker import chunk_fingerprint
-from embedder import _vector_issue
+from embedder import _vector_issue, embedding_fingerprint
 
 # ---------------------------------------------------------------------------
 # Collection handling
@@ -64,6 +64,14 @@ def ensure_fresh_chunks(collection, cfg) -> None:
              .get("metadatas") or [])
     if not metas:
         return  # empty collection: the next ingest will tag it
+    meta = metas[0] or {}
+    if hasattr(cfg, "active_embedding_model"):
+        model = meta.get("embedding_model")
+        stored_space = meta.get("embedding_fp")
+        if model and model != cfg.active_embedding_model():
+            raise RuntimeError("[store] embedding model mismatch; rebuild with python main.py ingest --reset")
+        if stored_space and stored_space != embedding_fingerprint(cfg):
+            raise RuntimeError("[store] embedding space/config mismatch; rebuild with python main.py ingest --reset")
     stored = (metas[0] or {}).get("chunk_fp")
     current = chunk_fp(cfg)
     if not stored:
@@ -145,6 +153,18 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
         print("[store] nothing kept after boilerplate filter")
         return 0
 
+    if getattr(cfg, "STORE_REJECT_INVALID_VECTORS", False):
+        # Validate the entire ingest BEFORE the first write, never quietly drop
+        # chunks from a supposedly complete production-candidate collection.
+        dimensions = set()
+        for chunk, vector in kept:
+            issue = _vector_issue(vector)
+            if issue:
+                raise ValueError(f"Invalid embedding for {chunk.source}::{chunk.index}: {issue}")
+            dimensions.add(len(vector))
+        if len(dimensions) != 1:
+            raise ValueError("Mixed embedding dimensions in ingest; no records written")
+
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     total = len(kept)
     dropped_total = 0
@@ -197,6 +217,7 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
                 "section_type": chunk.section_type,
                 "ingested_at": timestamp,
                 "embedding_model": cfg.active_embedding_model(),
+                "embedding_fp": embedding_fingerprint(cfg),
                 "token_count": chunk.token_count,
                 "chunk_fp": chunk_fp(cfg),
             })
@@ -307,7 +328,7 @@ class BM25Index:
 
 
 def keyword_search(collection, query: str, k: int,
-                    include_metadata: bool = True, cfg=None) -> list:
+                    include_metadata: bool = True, cfg=None, lang=None) -> list:
     """BM25 over every stored chunk text; returns top-k keyword hits.
 
     include_metadata (config KEYWORD_SEARCH_INCLUDE_METADATA) appends the
@@ -320,7 +341,10 @@ def keyword_search(collection, query: str, k: int,
     """
     if cfg is not None:
         ensure_fresh_chunks(collection, cfg)
-    all_docs = collection.get(include=["documents", "metadatas"])
+    params = {"include": ["documents", "metadatas"]}
+    if lang:
+        params["where"] = {"language": lang}
+    all_docs = collection.get(**params)
     if not all_docs["ids"]:
         print("[store] keyword search: collection is empty")
         return []

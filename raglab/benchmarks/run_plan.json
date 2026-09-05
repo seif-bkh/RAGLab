@@ -1,1 +1,1 @@
-{"mode": "report", "source_run": "33968780265", "iteration": "recover-probe"}
+{"mode": "benchmark", "stage": "retrieval", "iteration": "01-exact-models-frozen-corpus"}

@@ -31,11 +31,11 @@ CHROMA_COLLECTION_NAME = "raglab_docs"
 # Embedding provider
 # ---------------------------------------------------------------------------
 # Change these two lines to switch providers (see .env.example and README).
-# Default: Google Gemini API with a Google AI Studio key (free tier OK).
+# Default: NVIDIA; the following generic model is used only for legacy providers.
 # `gemini-embedding-2` is the current multilingual model (100+ languages) and
 # works with AI Studio keys. `gemini-embedding-001` (text-only, older) also
 # works; the embedder handles both automatically.
-EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "gemini")
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "nvidia")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
 
 # Jina embeddings — EMBEDDING_PROVIDER = "jina" -------------------------------
@@ -62,44 +62,29 @@ JINA_EMBEDDING_BATCH_SIZE = int(os.getenv("JINA_EMBEDDING_BATCH_SIZE", "64"))
 JINA_EMBEDDING_CACHE_PATH = PROJECT_DIR / os.getenv(
     "JINA_EMBEDDING_CACHE_FILE", "embeddings_cache_jina.json")
 
-# NVIDIA NIM embeddings + LLM — EMBEDDING_PROVIDER = "nvidia" -----------------
-# Free hosted endpoints at https://integrate.api.nvidia.com/v1 (OpenAI-
-# compatible; key from NVIDIA_API_KEY in .env, NEVER in code). Two roles:
-#   EMBEDDER   NVIDIA NeMo Retriever family (multilingual/cross-lingual: an
-#              English query can hit Arabic docs without a translation layer),
-#              asymmetric input_type=passage|query. NOTE: the older
-#              nvidia/llama-3.2-nv-embedqa-1b-v2 is END OF LIFE on the hosted
-#              API (HTTP 410); the current family is llama-nemotron-embed.
-#              CI discovers the live /v1/models catalog and overrides this
-#              default when the exact id is absent.
-#   TRANSLATOR QUERY_TRANSLATION_PROVIDER=nvidia + NVIDIA_TRANSLATION_MODEL
-#              (moonshotai/kimi-k2.6 or deepseek-ai/deepseek-v4-pro; kimi-k3
-#              is not currently in the NIM catalog) — used for query
-#              translation only; answer generation stays a stub by design.
-#              Free NIM endpoints are rate-limited (~40 RPM): keep batches
-#              small, translations are cached.
+# NVIDIA NIM: exact requested model IDs. No catalog-driven substitutions.
+# Hosted Nemotron-3-Embed-1B accepts passage/query and native 2048 dimensions.
+# Reduced dimensions from the model card are NOT supported by this hosted API.
 NVIDIA_EMBEDDING_MODEL = os.getenv("NVIDIA_EMBEDDING_MODEL",
-                                   "nvidia/llama-nemotron-embed-1b-v2")
-# Matryoshka dimension: 0 = server default, or a documented truncation size
-# (e.g. 512/768/1024) to shrink vectors; the family supports embedding_type
-# int8 via the API but we keep float for cosine comparability.
+                                  "nvidia/nemotron-3-embed-1b")
 NVIDIA_EMBEDDING_DIM = int(os.getenv("NVIDIA_EMBEDDING_DIM", "0") or 0)
 NVIDIA_EMBEDDING_BASE_URL = os.getenv(
-    "NVIDIA_EMBEDDING_BASE_URL",
-    "https://integrate.api.nvidia.com/v1/embeddings")
-NVIDIA_EMBEDDING_BATCH_SIZE = int(os.getenv("NVIDIA_EMBEDDING_BATCH_SIZE",
-                                            "32"))
+    "NVIDIA_EMBEDDING_BASE_URL", "https://integrate.api.nvidia.com/v1/embeddings")
+NVIDIA_EMBEDDING_BATCH_SIZE = int(os.getenv("NVIDIA_EMBEDDING_BATCH_SIZE", "32"))
 NVIDIA_EMBEDDING_CACHE_PATH = PROJECT_DIR / os.getenv(
     "NVIDIA_EMBEDDING_CACHE_FILE", "embeddings_cache_nvidia.json")
-# Query-translation LLM (NVIDIA NIM free endpoints).
 NVIDIA_TRANSLATION_MODEL = os.getenv("NVIDIA_TRANSLATION_MODEL",
-                                     "moonshotai/kimi-k2.6")
-NVIDIA_TRANSLATION_FALLBACK_MODELS = os.getenv(
-    "NVIDIA_TRANSLATION_FALLBACK_MODELS",
-    "deepseek-ai/deepseek-v4-pro,deepseek-ai/deepseek-v4-flash")
+                                    "deepseek-ai/deepseek-v4-pro-0813")
+# Empty by default. Benchmarks always disable fallback: an unavailable model
+# is an incomplete experiment, never another model's score under its name.
+NVIDIA_TRANSLATION_FALLBACK_MODELS = os.getenv("NVIDIA_TRANSLATION_FALLBACK_MODELS", "")
 NVIDIA_TRANSLATION_BASE_URL = os.getenv(
-    "NVIDIA_TRANSLATION_BASE_URL",
-    "https://integrate.api.nvidia.com/v1/chat/completions")
+    "NVIDIA_TRANSLATION_BASE_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
+NVIDIA_API_TIMEOUT = float(os.getenv("NVIDIA_API_TIMEOUT", "120"))
+NVIDIA_API_ATTEMPTS = int(os.getenv("NVIDIA_API_ATTEMPTS", "2"))
+NVIDIA_CHAT_STREAM = os.getenv("NVIDIA_CHAT_STREAM", "1") == "1"
+NVIDIA_MIN_INTERVAL = float(os.getenv("NVIDIA_MIN_INTERVAL", "1.6"))
+NVIDIA_MAX_RETRY_DELAY = float(os.getenv("NVIDIA_MAX_RETRY_DELAY", "30"))
 
 # Local multilingual embeddings — EMBEDDING_PROVIDER = "huggingface" ----------
 # Fully offline: no API key, no daily quota, no cost. The model runs on YOUR
@@ -232,37 +217,28 @@ KEYWORD_SEARCH_INCLUDE_METADATA = os.getenv(
 FUSION_TIE_BREAK = os.getenv("FUSION_TIE_BREAK", "same_lang_margin").strip()
 
 # ---------------------------------------------------------------------------
-# Query translation (cross-lingual retrieval) — EXPERIMENTAL
+# Query translation and optional grounded generation
 # ---------------------------------------------------------------------------
-# The remaining retrieval failures are language routing: an Arabic question
-# clusters on Arabic chunks even though the fact also exists in the French
-# document. When enabled, every query is translated into each corpus language
-# (translate.py) and each chunk is ranked by its best LANGUAGE-NORMALIZED score
-# across variants (store.best_variant_merge: each variant's scores are divided
-# by its own best match, because raw scores are not comparable across
-# languages). Translation uses the SAME Google AI Studio key
-# and google-genai SDK as the embedder — no new dependency, no new secret —
-# and is retrieval-side only (answer.py remains a stub).
-#
-# Costs: 1-2 batched translation calls per run + 1 extra embedding per
-# translated variant per question. Translations are cached in
-# QUERY_TRANSLATION_CACHE_PATH. On any failure the lab degrades to the
-# original query and records it — translation is an enhancement, never a
-# blocker. Set False (or `--no-translation` on query/evaluate) for baseline
-# comparisons.
 QUERY_TRANSLATION_ENABLED = os.getenv(
-    "QUERY_TRANSLATION_ENABLED", "1"
-).strip().lower() not in {"0", "false", "no", "off"}
-# which backend translates queries: "gemini" (default) or "nvidia" (NIM
-# free LLM endpoints: moonshotai/kimi-k3 or deepseek-ai/deepseek-v4-pro).
-# Both only translate queries — answer generation stays a stub by design.
-QUERY_TRANSLATION_PROVIDER = os.getenv("QUERY_TRANSLATION_PROVIDER",
-                                       "gemini").strip().lower()
-QUERY_TRANSLATION_MODEL = os.getenv(
-    "QUERY_TRANSLATION_MODEL", "gemini-3.5-flash-lite"
-)  # GA flash model (free tier friendly; 2.5-flash IDs are retired for new projects)
-QUERY_TRANSLATION_FALLBACK_MODELS = os.getenv(
-    "QUERY_TRANSLATION_FALLBACK_MODELS",
-    "gemini-3.6-flash",
-)
+    "QUERY_TRANSLATION_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+QUERY_TRANSLATION_PROVIDER = os.getenv("QUERY_TRANSLATION_PROVIDER", "nvidia").strip().lower()
+# Legacy Gemini provider remains available explicitly.
+QUERY_TRANSLATION_MODEL = os.getenv("QUERY_TRANSLATION_MODEL", "gemini-3.5-flash-lite")
+QUERY_TRANSLATION_FALLBACK_MODELS = os.getenv("QUERY_TRANSLATION_FALLBACK_MODELS", "gemini-3.6-flash")
 QUERY_TRANSLATION_CACHE_PATH = PROJECT_DIR / "translations_cache.json"
+QUERY_TRANSLATION_PROMPT = os.getenv("QUERY_TRANSLATION_PROMPT", "basic-v1")
+QUERY_TRANSLATION_STRICT = os.getenv("QUERY_TRANSLATION_STRICT", "0") == "1"
+QUERY_TRANSLATION_BATCH_SIZE = 8
+# best = original + translated variants with the legacy normalized score merge.
+# translated = corpus-language query only; original = no translation.
+QUERY_VARIANT_STRATEGY = os.getenv("QUERY_VARIANT_STRATEGY", "best")
+RETRIEVAL_CANDIDATE_K = 20
+
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", "deepseek-ai/deepseek-v4-pro-0813")
+ANSWER_PROMPT_VERSION = os.getenv("ANSWER_PROMPT_VERSION", "grounded-v1")
+ANSWER_MAX_TOKENS = int(os.getenv("ANSWER_MAX_TOKENS", "4096"))
+ANSWER_CONTEXT_TOKENS = int(os.getenv("ANSWER_CONTEXT_TOKENS", "3000"))
+ANSWER_TOP_K = int(os.getenv("ANSWER_TOP_K", "5"))
+ANSWER_NEIGHBOR_RADIUS = int(os.getenv("ANSWER_NEIGHBOR_RADIUS", "0"))
+ANSWER_CACHE_PATH = PROJECT_DIR / "answers_cache.json"
+STORE_REJECT_INVALID_VECTORS = True
