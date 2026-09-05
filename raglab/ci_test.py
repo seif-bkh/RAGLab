@@ -598,6 +598,17 @@ def run_steps() -> None:
         if unreachable:
             parts.append("UNREACHABLE (substring not in any chunk): "
                          + ", ".join(unreachable))
+            # For each unreachable id, the chunks holding prefix vs suffix
+            # (visible in progress; ids summary here — the phrase is split by
+            # a chunk boundary exactly where prefix/suffix separate).
+            for case in real_cases:
+                if case["id"] not in unreachable:
+                    continue
+                nsub = normalize_for_match(case.get("expected_substring") or "")
+                pre, suf = nsub[:25], nsub[-25:]
+                pre_h = [ids_all[i] for i, t in enumerate(norm_all) if pre in t]
+                suf_h = [ids_all[i] for i, t in enumerate(norm_all) if suf in t]
+                parts.append(f"{case['id']} prefix→{pre_h[:2]} suffix→{suf_h[:2]}")
         if problem_rows:
             parts.append("beyond top-5 globally: " + " | ".join(
                 f"{qid}: best={best}"
@@ -697,6 +708,74 @@ def run_steps() -> None:
                         run_real, run_real_h, run_real_b, "rq10",
                         REAL_SWEEP_LAMBDAS)
 
+    # --- 6b.4 REAL chunk-size A/B (220 vs 340 tokens) -------------------------
+    # rq13's expected substring was NOT inside any 220-token chunk (phrase
+    # split by a boundary). Bigger chunks should keep the sentence whole;
+    # query embeddings are cached, so this costs only the new doc
+    # embeddings. Summary is merged into the final PASS line (annotation cap).
+    CURRENT_STEP = "real-chunksize"
+    progress("\n[ci] STEP 11b — real-docs chunk-size A/B (220 vs 340 tokens)")
+    chunksize_ab = {}
+    # run only when the real leg actually completed
+    if real_ready:
+            old_size = cfg.CHUNK_SIZE_TOKENS
+            old_overlap = cfg.CHUNK_OVERLAP_TOKENS
+            cfg.CHUNK_SIZE_TOKENS = 340
+            cfg.CHUNK_OVERLAP_TOKENS = 60
+            try:
+                rc = main.main(["ingest", "--reset", "--data-dir",
+                                real_docs_dir, "--skip-sanity-check"])
+                check("chunk-size 340 ingest exits 0", rc == 0, f"rc={rc}")
+                col340 = get_collection(cfg, reset=False)
+                cnt340 = col340.count()
+                progress(f"[ci]   chunk-size 340: {cnt340} chunks")
+                # coverage at 340 (local scan, no API): how many of the 14
+                # expected substrings live inside >= 1 chunk now?
+                cov340 = {"covered": 0, "total": 0, "miss": []}
+                if cnt340 > 0 and real_ready:
+                    all340 = col340.get(include=["documents"])["documents"] or []
+                    norm340 = [normalize_for_match(t) for t in all340]
+                    for case in real_cases:
+                        nsub = normalize_for_match(
+                            case.get("expected_substring") or "")
+                        if not nsub:
+                            continue
+                        cov340["total"] += 1
+                        if any(nsub in t for t in norm340):
+                            cov340["covered"] += 1
+                        else:
+                            cov340["miss"].append(case["id"])
+                progress(f"[ci]   chunk-size 340 coverage: "
+                         f"{cov340['covered']}/{cov340['total']} "
+                         + (f"miss={','.join(cov340['miss'])}"
+                            if cov340["miss"] else "all covered"))
+                if cnt340 > 0:
+                    for mode, margs, key in (("vector", [], "vector"),
+                                             ("rrf", ["--hybrid"], "rrf"),
+                                             ("blend0.7",
+                                              ["--hybrid-blend"], "blend07")):
+                        rc = _real_eval(["evaluate", *margs, "--questions",
+                                         "questions_real.json",
+                                         "--skip-sanity-check"],
+                                        f"real-chunk340-{mode}")
+                        if rc is None:
+                            progress(f"[ci]   chunk340 {mode}: deferred")
+                            break
+                        runx = get_latest_eval()
+                        if runx is not None:
+                            o = runx["metrics"]["overall"]
+                            chunksize_ab[key] = {
+                                "h1": o["hit@1"], "h3": o["hit@3"],
+                                "h5": o["hit@5"], "n": o["n"],
+                                "chunks": cnt340,
+                            }
+                            progress(f"[ci]   chunk340 {mode}: "
+                                     f"h1={o['hit@1']:.3f} h3={o['hit@3']:.3f} "
+                                     f"h5={o['hit@5']:.3f}")
+            finally:
+                cfg.CHUNK_SIZE_TOKENS = old_size
+                cfg.CHUNK_OVERLAP_TOKENS = old_overlap
+
     # --- 7. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"
     progress("\n[ci] STEP 12 — answer.py stub")
@@ -718,8 +797,25 @@ def run_steps() -> None:
                        + [f"  check failed: {f}" for f in failures]
                        + ["  details: artifact raglab-eval-results / ci_test_error.txt"])
         sys.exit(1)
+    # final PASS line merges the chunk-size A/B so it survives the note cap
+    if chunksize_ab:
+        v220 = hit3(run_real["metrics"]["overall"]) if run_real else "-"
+        r220 = hit3(run_real_h["metrics"]["overall"]) if run_real_h else "-"
+        b220 = (hit3(run_real_b["metrics"]["overall"])
+                if run_real_b else "-")
+        summary = (" || real chunk-size A/B (h1/h3/h5): 220t "
+                   f"vector={v220} rrf={r220} blend(.7)={b220}")
+        summary += " || 340t " + " ".join(
+            f"{k}={d['h1']:.3f}/{d['h3']:.3f}/{d['h5']:.3f}"
+            for k, d in sorted(chunksize_ab.items()))
+        summary += (" (chunks="
+                    + ",".join(str(d["chunks"]) for d in chunksize_ab.values())
+                    + f", rq13-reachable={cov340['covered'] == cov340['total']})")
+    else:
+        summary = ""
     notify("RAGLab CI PASSED: full pipeline mechanics + evaluation OK "
-           "(metrics above, results JSON in the raglab-eval-results artifact)")
+           "(metrics above, results JSON in the raglab-eval-results artifact)"
+           + summary)
     progress("[ci] CI PIPELINE PASSED — all mechanics verified; metrics above are the report.")
     print("=" * 78)
     sys.exit(0)
