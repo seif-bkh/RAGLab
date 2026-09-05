@@ -188,7 +188,7 @@ class NvidiaClient:
                 raise error
             delay = error.retry_after
             if delay is None:
-                base = 15 if error.status_code == 429 else 1
+                base = 60 if error.status_code == 429 else 1
                 delay = min(self.max_retry_delay, base * 2 ** attempt + random.uniform(0, 0.25))
             if delay > self.max_retry_delay:
                 # Don't retry BEFORE a long Retry-After; defer to a later run.

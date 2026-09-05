@@ -17,6 +17,11 @@ on:
         type: choice
         options: [retrieval, all]
         default: retrieval
+      answer-profiles:
+        description: "Grounded-answer profiles (all includes expanded adjacent context)"
+        type: choice
+        options: [all, grounded-v1]
+        default: all
       source-run:
         description: "For report mode: the run ID whose diagnostics should be re-published"
         type: string
@@ -35,7 +40,7 @@ jobs:
   nvidia:
     name: Exact requested NVIDIA models
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90  # serial pacing; full two-profile scope can exceed 45 minutes
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -46,6 +51,7 @@ jobs:
         env:
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_STAGE: ${{ inputs.stage }}
+          INPUT_ANSWER_PROFILES: ${{ inputs.answer-profiles }}
           INPUT_SOURCE_RUN: ${{ inputs.source-run }}
         run: |
           python - <<'PY'
@@ -54,11 +60,13 @@ jobs:
           mode = os.environ.get('INPUT_MODE') or plan['mode']
           source = os.environ.get('INPUT_SOURCE_RUN') or plan.get('source_run', '')
           stage = os.environ.get('INPUT_STAGE') or plan.get('stage', 'retrieval')
+          profiles = os.environ.get('INPUT_ANSWER_PROFILES') or plan.get('answer_profiles', 'all')
+          assert profiles in {'all', 'grounded-v1'}
           assert stage in {'retrieval', 'all'}
           assert mode in {'probe', 'benchmark', 'report'}
           assert not source or str(source).isdigit()
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-              out.write(f'mode={mode}\nsource_run={source}\nstage={stage}\n')
+              out.write(f'mode={mode}\nsource_run={source}\nstage={stage}\nanswer_profiles={profiles}\n')
           PY
       - name: Recover existing diagnostics without any model calls
         if: steps.plan.outputs.mode == 'report'
@@ -106,7 +114,8 @@ jobs:
           PYTHONUNBUFFERED: "1"
           TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/raglab/benchmark_cache/tokenizer
           BENCHMARK_STAGE: ${{ steps.plan.outputs.stage }}
-        run: python nvidia_benchmark.py --stage "$BENCHMARK_STAGE"
+          BENCHMARK_ANSWER_PROFILES: ${{ steps.plan.outputs.answer_profiles }}
+        run: python nvidia_benchmark.py --stage "$BENCHMARK_STAGE" --answer-profiles "$BENCHMARK_ANSWER_PROFILES"
       - uses: actions/cache/save@v4
         if: always() && steps.plan.outputs.mode == 'benchmark'
         with:

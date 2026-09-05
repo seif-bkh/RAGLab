@@ -1,1 +1,1 @@
-{"mode": "report", "stage": "all", "source_run": "33970405295", "iteration": "02-recover-byte-bounded-measurements"}
+{"mode": "benchmark", "stage": "all", "answer_profiles": "grounded-v1", "iteration": "03-serial-core-answers-and-source-valid-constraints"}

@@ -141,8 +141,19 @@ def prewarm(translator, cases, embedder):
     embedder.embed_texts(texts, input_type="search_query")
 
 
+def validate_translation_references(cases):
+    """Literal preservation cannot require an identifier absent from the input."""
+    if not cases or len({c['id'] for c in cases}) != len(cases):
+        raise ValueError('Translation references must be nonempty and have unique IDs')
+    for case in cases:
+        for term in case.get('protected_terms', []):
+            if term.casefold() not in case['text'].casefold():
+                raise ValueError(f"{case['id']}: protected term {term!r} is absent from source text")
+
+
 def translation_quality(translator, cases):
     from sacrebleu.metrics import CHRF
+    validate_translation_references(cases)
     rows = []
     for source, target in sorted({(c["source_lang"], c["target_lang"]) for c in cases}):
         subset = [c for c in cases if c["source_lang"] == source and c["target_lang"] == target]
@@ -159,6 +170,9 @@ def translation_quality(translator, cases):
             if case.get("required_any") and not any(normalize_for_match(t) in normalize_for_match(output)
                                                      for t in case["required_any"]):
                 issues.append("negation_not_found")
+            for entity in case.get('required_entities', []):
+                if not any(normalize_for_match(t) in normalize_for_match(output) for t in entity['any']):
+                    issues.append('missing_entity:' + entity['name'])
             rows.append({**case, "translation": output, "issues": issues})
     chrf = CHRF(word_order=2)
     score = chrf.corpus_score([r["translation"] for r in rows], [[r["reference"] for r in rows]])
@@ -306,12 +320,25 @@ def markdown(report):
     return "\n".join(lines) + "\n"
 
 
-def run(stage="retrieval", quality=True):
+def answer_config(model, version):
+    # Trial endpoints returned 429 under the two-worker/15-second experiment.
+    # Resume cached successes and issue new calls serially, with bounded retries.
+    return make_config(ANSWER_MODEL=model, ANSWER_PROMPT_VERSION=version,
+                       ANSWER_NEIGHBOR_RADIUS=1 if version == 'grounded-v2' else 0,
+                       ANSWER_WORKERS=1, NVIDIA_API_TIMEOUT=180, NVIDIA_API_ATTEMPTS=2,
+                       NVIDIA_MIN_INTERVAL=30, NVIDIA_MAX_RETRY_DELAY=90)
+
+
+def run(stage="retrieval", quality=True, answer_profiles="all"):
+    if answer_profiles not in {'all', 'grounded-v1'}:
+        raise ValueError('answer_profiles must be all or grounded-v1')
+    versions = ('grounded-v1', 'grounded-v2') if answer_profiles == 'all' else ('grounded-v1',)
     OUTPUT.mkdir(parents=True, exist_ok=True)
     CACHE.mkdir(parents=True, exist_ok=True)
     cfg = make_config()
     report = {"generated_at": datetime.now(timezone.utc).isoformat(), "stage": stage,
-              "status": "running", "embedding_model": EMBED_MODEL, "exact_models": list(TRANSLATION_MODELS), "protocol_version": "nvidia-v2-entity-guard-riva-pivot",
+              "status": "running", "embedding_model": EMBED_MODEL, "exact_models": list(TRANSLATION_MODELS),
+              "protocol_version": "nvidia-v3-source-valid-references-serial-answers", "answer_profiles": list(versions),
               "retrieval": [], "translation_quality": {}, "generation": [], "errors": [], "gates": {"thresholds": GATES},
               "environment": {"python": platform.python_version(), "dependencies": {
                   name: importlib.metadata.version(name) for name in ["chromadb", "tiktoken", "pypdf", "sacrebleu"]}}}
@@ -330,9 +357,10 @@ def run(stage="retrieval", quality=True):
             raise RuntimeError("Benchmark requires the real cl100k_base tokenizer, not the fallback estimator. Warm TIKTOKEN_CACHE_DIR with tiktoken.get_encoding('cl100k_base').")
         dev = load_question_set(BENCHMARKS / "retrieval_dev.json")
         holdout = load_question_set(BENCHMARKS / "retrieval_holdout.json")
-        refs = json.loads((BENCHMARKS / "translations.json").read_text())["cases"]
+        refs = json.loads((BENCHMARKS / "translations_v2.json").read_text())["cases"]
+        validate_translation_references(refs)  # before any billable model calls
         report["datasets"] = {name: fingerprint(json.loads((BENCHMARKS / name).read_text())) for name in
-                              ["retrieval_dev.json", "retrieval_holdout.json", "translations.json"]}
+                              ["retrieval_dev.json", "retrieval_holdout.json", "translations_v2.json"]}
         docs = load_all(ROOT.parent / "docs")
         if len(docs) != 4:
             raise RuntimeError(f"Expected all four real documents; loaded {len(docs)}")
@@ -440,10 +468,8 @@ def run(stage="retrieval", quality=True):
             for model in ANSWER_MODELS:
                 if model in unavailable:
                     continue
-                for version in ("grounded-v1", "grounded-v2"):
-                    acfg = make_config(ANSWER_MODEL=model, ANSWER_PROMPT_VERSION=version,
-                                       ANSWER_NEIGHBOR_RADIUS=1 if version == "grounded-v2" else 0,
-                                       NVIDIA_API_TIMEOUT=180, NVIDIA_API_ATTEMPTS=1, NVIDIA_MIN_INTERVAL=15)
+                for version in versions:
+                    acfg = answer_config(model, version)
                     label = "dev_" + model.split("/")[-1] + "_" + version
                     generation = generate_arm(acfg, collection, dev, runs[best["label"]], label)
                     report["generation"].append(generation)
@@ -458,18 +484,25 @@ def run(stage="retrieval", quality=True):
                                                         r["metrics"]["answer_rubric_pass"] or 0,
                                                         r["metrics"]["validation_rate_all"] or 0))
                 report["selected_answer"] = {k: winner[k] for k in ["model", "prompt", "neighbor_radius"]}
-                acfg = make_config(ANSWER_MODEL=winner["model"], ANSWER_PROMPT_VERSION=winner["prompt"],
-                                   ANSWER_NEIGHBOR_RADIUS=winner["neighbor_radius"],
-                                   NVIDIA_API_TIMEOUT=180, NVIDIA_API_ATTEMPTS=1, NVIDIA_MIN_INTERVAL=15)
+                acfg = answer_config(winner['model'], winner['prompt'])
                 if best["model"] in holdout_runs:
                     result = generate_arm(acfg, collection, holdout, holdout_runs[best["model"]], "holdout_selected")
                     report["generation"].append(result)
+                    if result['status'] != 'completed':
+                        report['errors'].append({'stage': 'holdout_generation', 'model': winner['model'],
+                                                 'error': 'Provider circuit opened; held-out answers incomplete'})
                     m = result["metrics"]
                     report["gates"]["holdout_answers"] = bool(result["status"] == "completed" and
                         (m["answer_rubric_pass"] or 0) >= GATES["answer_rubric"] and
                         m["correct_refusal_rate"] == 1 and m["citation_validity"] == 1 and m["provider_success_rate"] == 1 and m["validation_rate_all"] == 1)
                 report["adversarial_context"] = adversarial_context_checks(acfg, runs[best["label"]])
                 report["gates"]["adversarial_context"] = all(r["safe"] for r in report["adversarial_context"])
+                if any(r['status'] == 'error' for r in report['adversarial_context']):
+                    report['errors'].append({'stage': 'adversarial_context',
+                                             'error': 'Provider failures; security evaluation incomplete'})
+            report['gates']['all_requested_answer_models_measured'] = all(
+                any(r['model'] == model and r['label'].startswith('dev_') and r['status'] == 'completed'
+                    for r in report['generation']) for model in ANSWER_MODELS)
         report["status"] = "completed" if not report["errors"] else "incomplete"
     except Exception as exc:
         report["status"] = "blocked"
@@ -484,6 +517,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=["retrieval", "all"], default="retrieval")
     parser.add_argument("--skip-translation-references", action="store_true")
+    parser.add_argument('--answer-profiles', choices=['all', 'grounded-v1'], default='all',
+                        help='Basic cited-answer comparison only, or also the expanded-context profile')
     args = parser.parse_args()
-    result = run(args.stage, not args.skip_translation_references)
+    result = run(args.stage, not args.skip_translation_references, args.answer_profiles)
     raise SystemExit(0 if result["status"] == "completed" else 2)

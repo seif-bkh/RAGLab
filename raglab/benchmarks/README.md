@@ -9,11 +9,17 @@
   Six new fact groups, each in Arabic/French/English (18 answerable questions),
   plus 9 out-of-scope/security questions. Validation only. Language variants are
   correlated: this is **six independent held-out facts, not 18**.
-- `translations.json`: 18 authored references covering all six directed language
+- `translations_v2.json`: 18 authored references covering all six directed language
   pairs, legal identifiers, numbers, negation, products and banking terminology.
-  These are not professionally certified translations. A BCT entity check was
-  added after the initial single-sentence endpoint probe revealed Riva's incorrect
-  expansion of BCT, before running the retrieval comparison.
+  These are not professionally certified translations. The original
+  `translations.json` remains frozen: an audit of iteration 02 found that its
+  `t1_ar_en`/`t1_ar_fr` demanded literal BCT even though the Arabic source says
+  only “the central bank.” Version 2 removes those two invalid literal-copy
+  demands and requires the central-bank entity instead. **Source inputs and
+  reference strings are unchanged.** `reports/translation_constraint_audit.json`
+  regrades the same outputs without new model calls. Other literal-copy failures
+  remain failures, even when an expansion/transliteration is semantically plausible.
+  No retrieval labels or answer rubrics were changed.
 - `run_plan.json`: explicit live-run trigger and iteration identifier. Changing
   ordinary source files does not automatically consume NVIDIA quota.
 
@@ -50,7 +56,14 @@ rates are not identical to this stricter benchmark's definition.
    arm changes both prompt and context; it is a **combined strategy comparison**,
    not evidence that either change alone caused an improvement. Select on
    development refusal rate, answer-rubric rate, and validation rate. Only then
-   evaluate the chosen answerer on holdout.
+   evaluate the chosen answerer on holdout. `--answer-profiles grounded-v1`
+   explicitly limits the comparison to the basic profile for **both** answerers.
+   It does not imply that expanded-context profiles were completed. Iteration 03
+   uses this bounded scope to finish the core comparison after trial-endpoint
+   rate limits interrupted iteration 02. Successful exact-request caches are
+   reused; new answer calls are serial, paced at least 30 seconds apart, with
+   two bounded attempts and a 60-second default 429 backoff (Retry-After honored).
+   This is protocol `nvidia-v3-source-valid-references-serial-answers`.
 
 An unavailable translator/model is **incomplete**, not a baseline score labeled
 with that model's name. No automatic model fallback is allowed. Bounded retries,

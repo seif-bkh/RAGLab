@@ -188,7 +188,9 @@ class AnswerGenerator:
                 response = self.client.chat(self.model, messages, max_tokens=max_tokens)
         except Exception as exc:
             return {**base, "status": "error", "reason": "provider_error", "provider_ok": False,
-                    "validation_ok": False, "answer": ERRORS[language], "error": safe_error(exc)}
+                    "validation_ok": False, "answer": ERRORS[language], "error": safe_error(exc),
+                    "http_status": getattr(exc, 'status_code', None),
+                    "retry_after_s": getattr(exc, 'retry_after', None)}
         try:
             claims = validate_answer(response["text"], sources)
         except (ValueError, KeyError, TypeError) as exc:

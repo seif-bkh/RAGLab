@@ -394,6 +394,39 @@ class Grounding(unittest.TestCase):
 
 
 class MeasurementReports(unittest.TestCase):
+    def test_source_invalid_literal_constraints_are_rejected(self):
+        from nvidia_benchmark import BENCHMARKS, validate_translation_references
+        old = json.loads((BENCHMARKS / 'translations.json').read_text())['cases']
+        new = json.loads((BENCHMARKS / 'translations_v2.json').read_text())['cases']
+        with self.assertRaisesRegex(ValueError, 'absent from source'):
+            validate_translation_references(old)
+        validate_translation_references(new)
+        self.assertEqual([(c['id'], c['text'], c['reference']) for c in old],
+                         [(c['id'], c['text'], c['reference']) for c in new])
+        self.assertEqual([c['id'] for c, before in zip(new, old) if c != before],
+                         ['t1_ar_en', 't1_ar_fr'])
+
+    def test_central_bank_entity_still_required_without_inventing_an_acronym(self):
+        from nvidia_benchmark import BENCHMARKS, translation_quality
+        case = next(c for c in json.loads((BENCHMARKS / 'translations_v2.json').read_text())['cases']
+                    if c['id'] == 't1_ar_en')
+        fake = SimpleNamespace(translate_many=lambda texts, target, source:
+                               ['According to Central Bank circular 2019-08, what are investment deposits?'])
+        self.assertEqual(translation_quality(fake, [case])['constraint_pass_rate'], 1)
+        fake.translate_many = lambda texts, target, source: ['According to circular 2019-08, what are investment deposits?']
+        failed = translation_quality(fake, [case])
+        self.assertIn('missing_entity:central_bank', failed['rows'][0]['issues'])
+
+    def test_serial_resume_settings_and_explicit_profile_scope(self):
+        from nvidia_benchmark import answer_config
+        from main import build_parser
+        cfg = answer_config(KIMI_MODEL, 'grounded-v1')
+        self.assertEqual((cfg.ANSWER_WORKERS, cfg.NVIDIA_API_ATTEMPTS, cfg.ANSWER_NEIGHBOR_RADIUS), (1, 2, 0))
+        self.assertGreaterEqual(cfg.NVIDIA_MIN_INTERVAL, 30)
+        self.assertEqual(answer_config(DEEPSEEK_MODEL, 'grounded-v2').ANSWER_NEIGHBOR_RADIUS, 1)
+        args = build_parser().parse_args(['benchmark', '--stage', 'all', '--answer-profiles', 'grounded-v1'])
+        self.assertEqual(args.answer_profiles, 'grounded-v1')
+
     def test_verbose_retrieval_provenance_is_preserved_outside_summary(self):
         from publish_nvidia_report import report_parts
         row = {'split': 'dev', 'label': 'riva', 'metrics': {'hit@1': 1},

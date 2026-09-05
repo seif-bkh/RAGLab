@@ -1,0 +1,266 @@
+{
+  "description": "18 authored reference translations, not professionally certified. chrF++ is a surface-similarity diagnostic, not a semantic quality certificate. Includes numbers, negation, products, banking terminology in all 6 language directions. Version 2: BCT literal-copy constraints are removed only from t1_ar_en/t1_ar_fr because BCT is absent from their source text; explicit central-bank entity checks replace them. Inputs and authored reference strings are unchanged. Original v1 fixtures and results are preserved.",
+  "cases": [
+    {
+      "id": "t1_en_fr",
+      "source_lang": "en",
+      "target_lang": "fr",
+      "text": "According to BCT circular 2019-08, what are investment deposits?",
+      "reference": "Selon la circulaire BCT 2019-08, que sont les dépôts d'investissement ?",
+      "protected_terms": [
+        "BCT"
+      ],
+      "required_any": [],
+      "forbidden_terms": [
+        "البورصة",
+        "stock exchange",
+        "bourse"
+      ]
+    },
+    {
+      "id": "t1_en_ar",
+      "source_lang": "en",
+      "target_lang": "ar",
+      "text": "According to BCT circular 2019-08, what are investment deposits?",
+      "reference": "وفق منشور BCT رقم 2019-08، ما هي الودائع الاستثمارية؟",
+      "protected_terms": [
+        "BCT"
+      ],
+      "required_any": [],
+      "forbidden_terms": [
+        "البورصة",
+        "stock exchange",
+        "bourse"
+      ]
+    },
+    {
+      "id": "t1_fr_en",
+      "source_lang": "fr",
+      "target_lang": "en",
+      "text": "Selon la circulaire BCT 2019-08, que sont les dépôts d'investissement ?",
+      "reference": "According to BCT circular 2019-08, what are investment deposits?",
+      "protected_terms": [
+        "BCT"
+      ],
+      "required_any": [],
+      "forbidden_terms": [
+        "البورصة",
+        "stock exchange",
+        "bourse"
+      ]
+    },
+    {
+      "id": "t1_fr_ar",
+      "source_lang": "fr",
+      "target_lang": "ar",
+      "text": "Selon la circulaire BCT 2019-08, que sont les dépôts d'investissement ?",
+      "reference": "وفق منشور BCT رقم 2019-08، ما هي الودائع الاستثمارية؟",
+      "protected_terms": [
+        "BCT"
+      ],
+      "required_any": [],
+      "forbidden_terms": [
+        "البورصة",
+        "stock exchange",
+        "bourse"
+      ]
+    },
+    {
+      "id": "t1_ar_en",
+      "source_lang": "ar",
+      "target_lang": "en",
+      "text": "وفق منشور البنك المركزي 2019-08، ما هي الودائع الاستثمارية؟",
+      "reference": "According to BCT circular 2019-08, what are investment deposits?",
+      "protected_terms": [],
+      "required_any": [],
+      "forbidden_terms": [
+        "البورصة",
+        "stock exchange",
+        "bourse"
+      ],
+      "required_entities": [
+        {
+          "name": "central_bank",
+          "any": [
+            "central bank",
+            "BCT"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "t1_ar_fr",
+      "source_lang": "ar",
+      "target_lang": "fr",
+      "text": "وفق منشور البنك المركزي 2019-08، ما هي الودائع الاستثمارية؟",
+      "reference": "Selon la circulaire BCT 2019-08, que sont les dépôts d'investissement ?",
+      "protected_terms": [],
+      "required_any": [],
+      "forbidden_terms": [
+        "البورصة",
+        "stock exchange",
+        "bourse"
+      ],
+      "required_entities": [
+        {
+          "name": "central_bank",
+          "any": [
+            "banque centrale",
+            "BCT"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "t2_en_fr",
+      "source_lang": "en",
+      "target_lang": "fr",
+      "text": "The Atlas monthly fee is 12 TND; it is not waived below 1000 TND.",
+      "reference": "Les frais mensuels Atlas sont de 12 TND ; ils ne sont pas exonérés en dessous de 1000 TND.",
+      "protected_terms": [
+        "Atlas",
+        "TND"
+      ],
+      "required_any": [
+        "pas",
+        "non"
+      ]
+    },
+    {
+      "id": "t2_en_ar",
+      "source_lang": "en",
+      "target_lang": "ar",
+      "text": "The Atlas monthly fee is 12 TND; it is not waived below 1000 TND.",
+      "reference": "الرسوم الشهرية لـ Atlas هي 12 TND؛ ولا يتم الإعفاء منها إذا كان المبلغ أقل من 1000 TND.",
+      "protected_terms": [
+        "Atlas",
+        "TND"
+      ],
+      "required_any": [
+        "ليس",
+        "لا",
+        "لم",
+        "دون",
+        "غير"
+      ]
+    },
+    {
+      "id": "t2_fr_en",
+      "source_lang": "fr",
+      "target_lang": "en",
+      "text": "Les frais mensuels Atlas sont de 12 TND ; ils ne sont pas exonérés en dessous de 1000 TND.",
+      "reference": "The Atlas monthly fee is 12 TND; it is not waived below 1000 TND.",
+      "protected_terms": [
+        "Atlas",
+        "TND"
+      ],
+      "required_any": [
+        "not",
+        "no"
+      ]
+    },
+    {
+      "id": "t2_fr_ar",
+      "source_lang": "fr",
+      "target_lang": "ar",
+      "text": "Les frais mensuels Atlas sont de 12 TND ; ils ne sont pas exonérés en dessous de 1000 TND.",
+      "reference": "الرسوم الشهرية لـ Atlas هي 12 TND؛ ولا يتم الإعفاء منها إذا كان المبلغ أقل من 1000 TND.",
+      "protected_terms": [
+        "Atlas",
+        "TND"
+      ],
+      "required_any": [
+        "ليس",
+        "لا",
+        "لم",
+        "دون",
+        "غير"
+      ]
+    },
+    {
+      "id": "t2_ar_en",
+      "source_lang": "ar",
+      "target_lang": "en",
+      "text": "الرسوم الشهرية لـ Atlas هي 12 TND؛ ولا يتم الإعفاء منها إذا كان المبلغ أقل من 1000 TND.",
+      "reference": "The Atlas monthly fee is 12 TND; it is not waived below 1000 TND.",
+      "protected_terms": [
+        "Atlas",
+        "TND"
+      ],
+      "required_any": [
+        "not",
+        "no"
+      ]
+    },
+    {
+      "id": "t2_ar_fr",
+      "source_lang": "ar",
+      "target_lang": "fr",
+      "text": "الرسوم الشهرية لـ Atlas هي 12 TND؛ ولا يتم الإعفاء منها إذا كان المبلغ أقل من 1000 TND.",
+      "reference": "Les frais mensuels Atlas sont de 12 TND ; ils ne sont pas exonérés en dessous de 1000 TND.",
+      "protected_terms": [
+        "Atlas",
+        "TND"
+      ],
+      "required_any": [
+        "pas",
+        "non"
+      ]
+    },
+    {
+      "id": "t3_en_fr",
+      "source_lang": "en",
+      "target_lang": "fr",
+      "text": "Can the bank change the Murabaha profit margin after signing the contract?",
+      "reference": "La banque peut-elle modifier la marge bénéficiaire de la Mourabaha après la signature du contrat ?",
+      "protected_terms": [],
+      "required_any": []
+    },
+    {
+      "id": "t3_en_ar",
+      "source_lang": "en",
+      "target_lang": "ar",
+      "text": "Can the bank change the Murabaha profit margin after signing the contract?",
+      "reference": "هل يمكن للبنك تغيير هامش ربح المرابحة بعد توقيع العقد؟",
+      "protected_terms": [],
+      "required_any": []
+    },
+    {
+      "id": "t3_fr_en",
+      "source_lang": "fr",
+      "target_lang": "en",
+      "text": "La banque peut-elle modifier la marge bénéficiaire de la Mourabaha après la signature du contrat ?",
+      "reference": "Can the bank change the Murabaha profit margin after signing the contract?",
+      "protected_terms": [],
+      "required_any": []
+    },
+    {
+      "id": "t3_fr_ar",
+      "source_lang": "fr",
+      "target_lang": "ar",
+      "text": "La banque peut-elle modifier la marge bénéficiaire de la Mourabaha après la signature du contrat ?",
+      "reference": "هل يمكن للبنك تغيير هامش ربح المرابحة بعد توقيع العقد؟",
+      "protected_terms": [],
+      "required_any": []
+    },
+    {
+      "id": "t3_ar_en",
+      "source_lang": "ar",
+      "target_lang": "en",
+      "text": "هل يمكن للبنك تغيير هامش ربح المرابحة بعد توقيع العقد؟",
+      "reference": "Can the bank change the Murabaha profit margin after signing the contract?",
+      "protected_terms": [],
+      "required_any": []
+    },
+    {
+      "id": "t3_ar_fr",
+      "source_lang": "ar",
+      "target_lang": "fr",
+      "text": "هل يمكن للبنك تغيير هامش ربح المرابحة بعد توقيع العقد؟",
+      "reference": "La banque peut-elle modifier la marge bénéficiaire de la Mourabaha après la signature du contrat ?",
+      "protected_terms": [],
+      "required_any": []
+    }
+  ],
+  "revision": "v2-source-valid-protected-terms"
+}

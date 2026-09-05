@@ -161,8 +161,12 @@ larger adversarial test set remain necessary.
 # limited retrieval tuning on development, then validation on frozen holdout.
 python main.py benchmark --stage retrieval
 
-# Also compare grounded-v1 vs grounded-v2 (+ adjacent context), using the
-# requested Kimi/DeepSeek answer models when their endpoints are usable.
+# Complete the basic cited-answer comparison for both requested answer models.
+# Successful exact-request caches are reused; this is the bounded resume scope.
+python main.py benchmark --stage all --answer-profiles grounded-v1
+
+# Also compare grounded-v1 vs grounded-v2 (+ adjacent context).
+# This is a larger experiment, not implied by a basic-profile-only result.
 python main.py benchmark --stage all
 ```
 

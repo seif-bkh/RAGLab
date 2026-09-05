@@ -314,7 +314,8 @@ def cmd_answer(args):
 
 def cmd_benchmark(args):
     from nvidia_benchmark import run
-    result = run(stage=args.stage, quality=not args.skip_translation_references)
+    result = run(stage=args.stage, quality=not args.skip_translation_references,
+                 answer_profiles=args.answer_profiles)
     return 0 if result["status"] == "completed" else 2
 
 
@@ -408,6 +409,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_bench = sub.add_parser("benchmark", help="exact-model NVIDIA comparison (uses API quota)")
     p_bench.add_argument("--stage", choices=["retrieval", "all"], default="retrieval")
     p_bench.add_argument("--skip-translation-references", action="store_true")
+    p_bench.add_argument('--answer-profiles', choices=['all', 'grounded-v1'], default='all',
+                         help='include both answer profiles, or resume the basic comparison only')
     p_bench.set_defaults(func=cmd_benchmark)
 
     return parser
