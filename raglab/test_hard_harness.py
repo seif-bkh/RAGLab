@@ -190,6 +190,17 @@ class GoogleFallbackPolicy(unittest.TestCase):
 
 
 class DatasetIntegrity(unittest.TestCase):
+    def test_focused_primary_repair_keeps_stable_evidence_aliases(self):
+        from hard_harness.authoring import author_messages
+        units={uid:{'id':uid,'document':'test.docx','page':None,'quality':'test','text':'Original source evidence statement with enough detail.'}
+               for uid in ('a','b','c')}
+        spec={'id':'hh0001','category':'supported','source_unit_ids':['a','b','c'],'primary_unit_id':'b'}
+        messages=author_messages([spec],units,'hh0001: reference must address its assigned primary source unit')
+        payload=json.loads(messages[1]['content'])
+        self.assertEqual([s['id'] for s in payload['sources']],['U2'])
+        self.assertEqual(payload['assignments'][0]['primary_unit_id'],'U2')
+        self.assertEqual(payload['assignments'][0]['source_unit_ids'],['U2'])
+
     def test_author_spans_are_exact_original_slices(self):
         from hard_harness.authoring import evidence_spans
         text = ('نص مصدر يوضح الشروط والاستثناءات والأحكام. ' * 25) + ' نهاية'

@@ -186,9 +186,13 @@ def validate_family(family, spec, units):
 def author_messages(specs, units, prior_error='', previous_draft=None):
     source_ids = sorted({uid for spec in specs for uid in spec['source_unit_ids']})
     aliases = {uid:f'U{i+1}' for i,uid in enumerate(source_ids)}
+    if len(specs)==1 and 'reference must address its assigned primary source unit' in prior_error:
+        # Preserve the original alias numbering while hiding the distracting
+        # neighbor; the response resolver uses that same stable numbering.
+        source_ids = [specs[0]['primary_unit_id']]
     sources = [{**{k:units[uid][k] for k in ('document','page','quality')}, 'id':aliases[uid], 'origin_unit_id':uid,
                 'evidence_spans':evidence_spans(units[uid]['text'])} for uid in source_ids]
-    assignments = [{**spec, 'source_unit_ids':[aliases[uid] for uid in spec['source_unit_ids']],
+    assignments = [{**spec, 'source_unit_ids':[aliases[uid] for uid in spec['source_unit_ids'] if uid in source_ids],
                     **({'primary_unit_id':aliases[spec['primary_unit_id']]} if spec.get('primary_unit_id') else {})}
                    for spec in specs]
     system = ('You author a HARD multilingual, document-grounded banking QA test, NOT candidate answers. '
