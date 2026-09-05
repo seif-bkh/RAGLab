@@ -329,8 +329,13 @@ def run_steps() -> None:
                          if c.get("language") != target]
                 if texts:
                     translator.translate_many(texts, target)
-            ok_trans = (translator.api_calls >= 1
-                        and translator.failures == 0)
+            # With the translation-cache artifact restored, a warm run makes
+            # zero API calls (all cache hits) — that is success, not a
+            # skipped check: require no failures AND at least one served
+            # translation (fresh call or cache hit).
+            ok_trans = (translator.failures == 0
+                        and (translator.api_calls >= 1
+                             or translator.cache_hits >= 1))
             check("translation API calls succeeded", ok_trans,
                   f"calls={translator.api_calls} failures={translator.failures} "
                   f"cache_hits={translator.cache_hits} "
