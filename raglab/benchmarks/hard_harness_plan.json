@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "03-reviewed-source-anchors-and-content-audit",
+  "revision": "04-verified-reference-source-release",
   "phase": "sources",
   "languages": [
     "ar",

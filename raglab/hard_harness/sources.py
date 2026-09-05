@@ -73,17 +73,14 @@ def prepare_sources():
             if path.suffix.lower() == '.docx':
                 units.extend(units_from_text(document['name'], document['text']))
                 continue
-            if ocr is None:
-                ocr = CheckpointClient('source_ocr', call_limit=100)
-                reviewer = CheckpointClient('source_audit', call_limit=100)
-                if not ocr.client.model_metadata.get('capabilities', {}).get('vision'):
-                    raise ValueError('Selected model is not currently advertised as vision-capable; do not invent PDF references')
             pdf = pymupdf.open(path)
             for page_index, page in enumerate(pdf):
                 page_number = page_index + 1
                 try:
                     record_path = WORK / 'gold_pages' / f'{document["name"]}.p{page_number:03d}.json'
-                    existing = read_json(record_path) if record_path.exists() else None
+                    published_path = out / 'pages' / record_path.name
+                    cached_path = record_path if record_path.exists() else published_path
+                    existing = read_json(cached_path) if cached_path.exists() else None
                     visual = visual_reviews.get((document['name'], page_number))
                     if visual and visual['file_sha256'] == file_hash:
                         record = {'version': SOURCE_VERSION, **visual, 'approved': True, 'uncertain': [],
@@ -93,6 +90,11 @@ def prepare_sources():
                     elif existing and existing.get('file_sha256') == file_hash and existing.get('approved') and not existing.get('uncertain'):
                         record = existing
                     else:
+                        if ocr is None:
+                            ocr = CheckpointClient('source_ocr', call_limit=100)
+                            reviewer = CheckpointClient('source_audit', call_limit=100)
+                            if not ocr.client.model_metadata.get('capabilities', {}).get('vision'):
+                                raise ValueError('Selected model is not currently advertised as vision-capable; do not invent PDF references')
                         image = page.get_pixmap(matrix=pymupdf.Matrix(2, 2)).tobytes('jpeg', jpg_quality=88)
                         prompt = ('Transcribe this Arabic source page faithfully as readable logical-order text. '
                                   'For two columns, read the RIGHT column from top to bottom, then the LEFT. '
