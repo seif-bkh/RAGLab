@@ -32,6 +32,13 @@ from evaluate import (load_question_set, normalize_for_match,
 from store import get_collection, query_vector
 
 failures: list[str] = []
+# Legs deferred by the daily 429 quota (no notice of their own: GitHub keeps
+# only ~10 notices per run). Merged into the final PASS line so state is
+# always visible even when the cap drops the per-step notices.
+DEFERRED_NOTES: list[str] = []
+# Small pipeline facts (chunk counts, translation cache) folded into the final
+# summary line instead of consuming one of the ~10 per-run notices.
+PIPELINE_NOTES: list[str] = []
 CURRENT_STEP = "startup"
 
 cfg.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -176,12 +183,15 @@ def eval_blend_at(lam: float, extra_args: tuple = ()) -> dict | None:
 
 def blend_sweep(extra_args: tuple, label: str, baseline: dict | None,
                 rrf_run: dict | None, default_run: dict | None,
-                anchor_q: str, lambdas: tuple) -> None:
+                anchor_q: str, lambdas: tuple,
+                emit: bool = True) -> str | None:
     """Evaluate several lambdas, report one compact line + the acceptance verdict.
 
     Acceptance (user's): the blend should recover the vector hit@1 while
     keeping the RRF recall gain on the anchor question (q10 on the fictional
     set). Mechanics are asserted; quality is a reported finding.
+    With emit=False the line is returned (not annotated) so the caller can
+    merge it into another notice — GitHub keeps only ~10 notices per run.
     """
     global CURRENT_STEP
     CURRENT_STEP = f"{label}-blend-sweep"
@@ -234,7 +244,9 @@ def blend_sweep(extra_args: tuple, label: str, baseline: dict | None,
                  f"h1={od['hit@1']:.3f}/h3={od['hit@3']:.3f}/h5={od['hit@5']:.3f}"
                  f" (vector h1={b['hit@1']:.3f}) "
                  f"hit@1 recovered: {'YES' if rec70 else 'NO'}")
-    notify(line)
+    if emit:
+        notify(line)
+    return line
 
 
 def check(label: str, ok: bool, detail: str = "") -> bool:
@@ -261,6 +273,8 @@ def _real_eval(args: list, stage: str) -> int | None:
     Every query embedding is cache-saved as it completes, so a rerun (after
     the cache artifact is restored) continues exactly where the quota stopped
     the run — no progress is lost and the pipeline stays green.
+    NO notice here: the caller emits deferral text inside its own notice
+    (GitHub keeps only ~10 notices per run, so we budget them strictly).
     """
     global CURRENT_STEP
     CURRENT_STEP = stage
@@ -271,8 +285,7 @@ def _real_eval(args: list, stage: str) -> int | None:
             progress(f"[ci] real-docs {stage} DEFERRED — daily embedding quota "
                      "exhausted (429 RESOURCE_EXHAUSTED); query cache saved; "
                      "rerun continues from where it stopped.")
-            notify(f"real-docs: {stage} DEFERRED (daily embedding quota 429 — "
-                   "cache artifact saved; rerun continues from where it stopped)")
+            DEFERRED_NOTES.append(stage)
             (cfg.RESULTS_DIR / "real_docs_status.json").write_text(
                 json.dumps({"status": f"deferred-quota-{stage}",
                             "detail": str(exc)[:300]},
@@ -291,11 +304,12 @@ def run_steps() -> None:
     check("inspect exits 0", rc == 0, f"rc={rc}")
 
     # --- 1b. Real-docs OFFLINE chunking coverage (no API, deterministic) -----
-    # With paragraph-boundary preservation, every expected substring must live
-    # inside >= 1 chunk BEFORE any embedding happens. This is the hard gate:
-    # if it fails the chunker must be fixed — no retriever can ever return a
-    # phrase that no chunk contains. Runs even when the daily quota is gone,
-    # so the chunker fix can be verified for free today.
+    # Expected substrings come from the same questions_real.json; with
+    # non-breaking paragraph chunking, every one must live inside >= 1 chunk
+    # BEFORE any embedding happens. This is the hard gate: if it fails the
+    # chunker must be fixed — no retriever can ever return a phrase that no
+    # chunk contains. Runs even when the daily quota is gone, so chunker
+    # fixes are verifiable for free today (metric A/Bs still need the API).
     CURRENT_STEP = "real-chunks-offline"
     progress("\n[ci] STEP 1b — real-docs offline chunking coverage (no API)")
     real_docs_dir = str((cfg.PROJECT_DIR.parent / "docs").resolve())
@@ -342,7 +356,6 @@ def run_steps() -> None:
           f"got={embedder._dimension} config={expected_dim}")
     # One compact notice (GitHub shows at most 10 annotations per step).
     sanity = " | ".join(getattr(embedder, "sanity_lines", ["dimension: ?"]))
-    notify(f"sanity: {sanity}")
     # Un-cached key probe: the 3-language phrases above are CACHE HITS after
     # the first run, so they never touch the API and a swapped/broken key
     # would pass silently. A unique text forces one real call and tells us
@@ -350,13 +363,14 @@ def run_steps() -> None:
     probe_text = f"raglab-key-probe-{datetime.now(timezone.utc).isoformat()}"
     try:
         _probe = embedder.embed_texts([probe_text], input_type="search_document")
-        notify(f"gemini key probe: OK (dims={len(_probe[0])}, live API call)")
+        probe_note = f"probe=OK(dims={len(_probe[0])}, live API call)"
     except RuntimeError as _pexc:
         if _REAL_QUOTA.search(str(_pexc)):
-            notify("gemini key probe: 429 quota — key is accepted but the "
-                   "daily limit is exhausted (reset ~07:00 UTC)")
+            probe_note = "probe=429 quota (key accepted, daily limit exhausted)" \
+                         " — real leg will defer"
         else:
             raise
+    notify(f"setup: {probe_note} | {sanity}")
 
     # --- 3. Ingest (real embeddings, --reset) ---------------------------------
     CURRENT_STEP = "ingest"
@@ -390,11 +404,16 @@ def run_steps() -> None:
         if exclude:
             check("boilerplate chunks excluded from the index",
                   types_seen == {"content"}, f"stored types={sorted(types_seen)}")
-        notify(f"chunking: stored={count} chunks, section_types={sorted(types_seen)}, "
-               f"exclude_boilerplate={exclude} "
-
-           f"(size={cfg.CHUNK_SIZE_TOKENS} overlap={cfg.CHUNK_OVERLAP_TOKENS} "
-           f"sentence_overlap={getattr(cfg, 'CHUNK_OVERLAP_SENTENCE_AWARE', True)})")
+        # no standalone notice: chunking info goes into the final summary
+        # line (GitHub keeps only ~10 notices per run)
+        progress(f"chunking: stored={count} chunks, "
+                 f"section_types={sorted(types_seen)}, "
+                 f"exclude_boilerplate={exclude} "
+                 f"(size={cfg.CHUNK_SIZE_TOKENS} "
+                 f"overlap={cfg.CHUNK_OVERLAP_TOKENS} "
+                 f"sentence_overlap={getattr(cfg, 'CHUNK_OVERLAP_SENTENCE_AWARE', True)})")
+        PIPELINE_NOTES.append(f"chunking={count}@{cfg.CHUNK_SIZE_TOKENS}t"
+                              f" overlap={cfg.CHUNK_OVERLAP_TOKENS}")
 
     # --- 4. Query: vector-only + hybrid with language filter -------------------
     CURRENT_STEP = "query"
@@ -445,11 +464,14 @@ def run_steps() -> None:
                     example = f" | e.g. {sample['id']} ar->fr: {tr!r}"
             active = ("" if translator.active_model == translator.model
                       else f"->{translator.active_model}")
-            notify(f"query-translation: enabled=True model="
-                   f"{translator.model}{active} "
-                   f"api_calls={translator.api_calls} "
-                   f"cache_hits={translator.cache_hits} "
-                   f"failures={translator.failures}{example}")
+            progress(f"query-translation: enabled=True model="
+                     f"{translator.model}{active} "
+                     f"api_calls={translator.api_calls} "
+                     f"cache_hits={translator.cache_hits} "
+                     f"failures={translator.failures}{example}")
+            PIPELINE_NOTES.append(
+                f"translation={translator.model} hits="
+                f"{translator.cache_hits}/{translator.api_calls}")
 
     if not REAL_ONLY:
         rc = main.main(["query",
@@ -511,7 +533,7 @@ def run_steps() -> None:
                 t[1]["blend"]["metrics"]["overall"]["hit@3"],
                 t[1]["blend"]["metrics"]["overall"]["hit@5"]))
             cfg.FUSION_TIE_BREAK = best_tie
-            notify("fictional tie-break A/B (h1/h3/h5, q10): " + " | ".join(
+            tb_line = ("tie-break A/B (h1/h3/h5, q10): " + " | ".join(
                 f"{tie} v={hit3(r['vector']['metrics']['overall'])}"
                 f"@q10={qrank(r['vector'], 'q10')} "
                 f"r={hit3(r['rrf']['metrics']['overall'])}"
@@ -526,8 +548,12 @@ def run_steps() -> None:
                   f"rrf="
                 + f"{best['rrf']['metrics']['overall']['hit@1']:.3f})")
             # Lambda sweep under the winning tie-break + acceptance verdict.
-            blend_sweep((), "fictional", best["vector"], best["rrf"],
-                        best["blend"], "q10", SWEEP_LAMBDAS)
+            # One merged notice: GitHub keeps only ~10 notices per run.
+            sweep_line = blend_sweep((), "fictional", best["vector"],
+                                     best["rrf"], best["blend"], "q10",
+                                     SWEEP_LAMBDAS, emit=False)
+            if sweep_line:
+                notify("fictional " + tb_line + " || " + sweep_line)
 
     # --- 6b. REAL documents (docs/): ingest + vector/hybrid evaluation --------
     # The user's real corpus: BCT circular 2019-08, internal Islamic-banking
@@ -564,8 +590,7 @@ def run_steps() -> None:
             progress("[ci] real-docs ingest DEFERRED — daily embedding quota "
                      "exhausted (429 RESOURCE_EXHAUSTED). Batch cache saved; "
                      "rerun after the reset continues the ingest from there.")
-            notify("real-docs: DEFERRED (daily embedding quota 429 — cache "
-                   "artifact saved; rerun after reset continues the ingest)")
+            DEFERRED_NOTES.append("real-ingest")
             (cfg.RESULTS_DIR / "real_docs_status.json").write_text(
                 json.dumps({"status": "deferred-quota",
                             "detail": str(exc)[:500]},
@@ -679,10 +704,15 @@ def run_steps() -> None:
         rc = _real_eval(["evaluate", "--questions", "questions_real.json",
                          "--skip-sanity-check"], "real-evaluate")
         if rc is None:
-            return
-        check("real-docs vector evaluate exits 0", rc == 0, f"rc={rc}")
-        run_real = get_latest_eval()
-        check("real-docs vector results JSON written", run_real is not None)
+            run_real = None  # deferred: do NOT reuse the previous eval
+            progress("[ci]   vector leg deferred — continuing to rrf/blend/jina")
+        else:
+            check("real-docs vector evaluate exits 0", rc == 0, f"rc={rc}")
+            run_real = get_latest_eval()
+            check("real-docs vector results JSON written",
+                  run_real is not None)
+        # never abort here: even with a deferred vector leg, the jina A/B and
+        # chunk-size A/B still run (the summary carries the deferral state)
         if run_real:
             shutil.copy(
                 sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
@@ -702,6 +732,45 @@ def run_steps() -> None:
                          f"hit@5={d['hit@5']:.3f}")
             notify(f"real-docs: vector | stored={count_real} chunks "
                    f"langs={sorted(langs_real)} | {eval_summary(run_real)}")
+            # Diagnose misses: which chunk holds each expected substring, at
+            # which recorded top-20 rank, and which query variants were used
+            # (a bad translation shows up here, not just as a missing rank).
+            progress("\n[ci] REAL-DOCS diagnostics (reachability + variants)")
+            for q in (run_real.get("questions") or []):
+                if not q.get("correct_rank"):
+                    nsub = normalize_for_match(str(
+                        q.get("expected", {}).get("expected_substring") or ""))
+                    hits_idx = [i for i, t in enumerate(norm_all)
+                                if nsub and nsub in t]
+                    var_txt = " | ".join(
+                        f"{v['label']}={v['text'][:70]!r}"
+                        for v in q.get("query_variants", []))
+                    hit_ids = [ids_all[i] for i in hits_idx[:2]]
+                    grank = None
+                    if hits_idx:
+                        in_top = [h for h in (q.get("hits") or [])
+                                  if h["id"] in hit_ids]
+                        if in_top:
+                            grank = min(h["rank"] for h in in_top)
+                    if grank is not None:
+                        progress(f"[ci]   {q['id']}: correct chunk rank={grank}"
+                                 f" (in {len(hits_idx)} chunk(s), "
+                                 f"{hit_ids[:1]}) | variants: {var_txt}")
+                    elif hits_idx:
+                        progress(f"[ci]   {q['id']}: correct chunk NOT in "
+                                 f"top-20 (holds {len(hits_idx)} chunk(s) "
+                                 f"{hit_ids}) | variants: {var_txt}")
+                    else:
+                        progress(f"[ci]   {q['id']}: expected substring in "
+                                 f"NO chunk (coverage bug) | {var_txt}")
+                    # top-3 competitors (ids + snippet) for every miss — the
+                    # fix depends on WHAT beat the correct chunk.
+                    top3 = " || ".join(
+                        f"#{h['rank']}{h['id'].split('::')[0][:22]}"
+                        f"::ch{h['id'].split('::')[-1][-4:]}:"
+                        f"{h['text'][:52].replace(chr(10), ' ')}"
+                        for h in (q.get("hits") or [])[:3])
+                    progress(f"[ci]      top-3: {top3}")
 
         # 6b.2 hybrid evaluation on the REAL question set
         CURRENT_STEP = "real-hybrid-evaluate"
@@ -710,10 +779,13 @@ def run_steps() -> None:
                          "questions_real.json", "--skip-sanity-check"],
                         "real-hybrid-evaluate")
         if rc is None:
-            return
-        check("real-docs hybrid evaluate exits 0", rc == 0, f"rc={rc}")
-        run_real_h = get_latest_eval()
-        check("real-docs hybrid results JSON written", run_real_h is not None)
+            run_real_h = None
+            progress("[ci]   rrf leg deferred — continuing to blend/jina")
+        else:
+            check("real-docs hybrid evaluate exits 0", rc == 0, f"rc={rc}")
+            run_real_h = get_latest_eval()
+            check("real-docs hybrid results JSON written",
+                  run_real_h is not None)
         if run_real_h:
             shutil.copy(
                 sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
@@ -733,10 +805,13 @@ def run_steps() -> None:
                          "questions_real.json", "--skip-sanity-check"],
                         "real-blend-evaluate")
         if rc is None:
-            return
-        check("real-docs blend evaluate exits 0", rc == 0, f"rc={rc}")
-        run_real_b = get_latest_eval()
-        check("real-docs blend results JSON written", run_real_b is not None)
+            run_real_b = None
+            progress("[ci]   blend leg deferred — continuing to chunk/jina A/B")
+        else:
+            check("real-docs blend evaluate exits 0", rc == 0, f"rc={rc}")
+            run_real_b = get_latest_eval()
+            check("real-docs blend results JSON written",
+                  run_real_b is not None)
         if run_real_b:
             check("real-docs blend run records retrieval_mode=blend",
                   run_real_b["config"].get("retrieval_mode") == "blend")
@@ -758,10 +833,11 @@ def run_steps() -> None:
                         REAL_SWEEP_LAMBDAS)
 
     # --- 6b.4 REAL chunk-size A/B (220 vs 340 tokens) -------------------------
-    # rq13's expected substring was NOT inside any 220-token chunk (phrase
-    # split by a boundary). Bigger chunks should keep the sentence whole;
-    # query embeddings are cached, so this costs only the new doc
-    # embeddings. Summary is merged into the final PASS line (annotation cap).
+    # With paragraph-boundary chunking every expected substring is now inside
+    # at least ONE chunk (offline gate, step 1b). Remaining question: is 340
+    # tokens better than 220 for RETRIEVAL (denser context, fewer hard-split
+    # fragments in the long-law PDFs)? Query embeddings are cached, so this
+    # costs only the new doc embeddings. Summary merges into the final line.
     CURRENT_STEP = "real-chunksize"
     progress("\n[ci] STEP 11b — real-docs chunk-size A/B (220 vs 340 tokens)")
     chunksize_ab = {}
@@ -858,8 +934,9 @@ def run_steps() -> None:
             jemb = main.make_embedder(skip_sanity=False)
             jdims = jemb._dimension
             jsan = " | ".join(getattr(jemb, "sanity_lines", ["dimension: ?"]))
-            notify(f"real-docs jina: embedder dims={jdims} | "
-                   f"api={getattr(jemb, 'last_response_preview', None)} | {jsan}")
+            progress(f"[ci]   jina embedder: dims={jdims} | "
+                     f"api={getattr(jemb, 'last_response_preview', None)} | "
+                     f"{jsan}")
             rc = main.main(["ingest", "--reset", "--data-dir",
                             real_docs_dir, "--skip-sanity-check"])
             check("jina ingest exits 0", rc == 0, f"rc={rc}")
@@ -956,9 +1033,14 @@ def run_steps() -> None:
                     + f", rq13-reachable={cov340['covered'] == cov340['total']})")
     else:
         summary = ""
+    state = ""
+    if DEFERRED_NOTES:
+        state = " || DEFERRED(quota): " + ",".join(DEFERRED_NOTES)
+    if PIPELINE_NOTES:
+        state += " || " + " | ".join(PIPELINE_NOTES)
     notify("RAGLab CI PASSED: full pipeline mechanics + evaluation OK "
            "(metrics above, results JSON in the raglab-eval-results artifact)"
-           + summary + jina_summary)
+           + summary + jina_summary + state)
     progress("[ci] CI PIPELINE PASSED — all mechanics verified; metrics above are the report.")
     print("=" * 78)
     sys.exit(0)
