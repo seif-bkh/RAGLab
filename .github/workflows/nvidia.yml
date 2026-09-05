@@ -1,22 +1,22 @@
 name: NVIDIA model comparison
 
 on:
-  push:
-    branches: ["arena/01a071ba-raglab"]
-    paths:
-      - "raglab/nvidia_probe.py"
-      - ".github/workflows/nvidia.yml"
   workflow_dispatch:
     inputs:
       mode:
         description: "Exact-model availability probe or complete benchmark"
         type: choice
-        options: [probe, benchmark]
+        options: [probe, benchmark, report]
         default: probe
         required: true
+      source-run:
+        description: "For report mode: the run ID whose diagnostics should be re-published"
+        type: string
+        default: ""
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: nvidia-${{ github.ref }}
@@ -32,7 +32,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Recover existing diagnostics without any model calls
+        if: inputs.mode == 'report'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.source-run }}
+        run: |
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name raglab-nvidia-results --dir raglab/results/nvidia
+          python raglab/nvidia_probe.py --report-only
       - name: Probe exact model IDs (no fallback, no Gemini dependency)
+        if: inputs.mode == 'probe'
         working-directory: raglab
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}

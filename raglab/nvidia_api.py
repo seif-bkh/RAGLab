@@ -138,7 +138,8 @@ class NvidiaClient:
                                     "usage": data.get("usage") or {}})
                 return data
             except urllib.error.HTTPError as exc:
-                detail = safe_error(exc.read().decode("utf-8", errors="replace"))
+                raw = exc.read()
+                detail = safe_error(raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw)
                 error = NvidiaAPIError(f"NVIDIA API HTTP {exc.code}: {detail or exc.reason}",
                                        exc.code, retry_after_seconds(exc.headers.get("Retry-After")))
             except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:

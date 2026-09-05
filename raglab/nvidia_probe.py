@@ -12,6 +12,12 @@ from nvidia_api import (EMBED_MODEL, RIVA_MODEL, TRANSLATION_MODELS,
                         NvidiaClient, safe_error)
 
 
+def annotation(value):
+    # Also accessible through the Checks API if blob/log downloads are blocked.
+    text = json.dumps(value, ensure_ascii=False).replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+    print("::notice title=NVIDIA exact-model result::" + text, flush=True)
+
+
 def probe(output):
     client = NvidiaClient(attempts=2)
     report = {"generated_at": datetime.now(timezone.utc).isoformat(),
@@ -58,10 +64,12 @@ def probe(output):
                 result = client.chat(model, messages, max_tokens=4096 if model != RIVA_MODEL else 512)
             report["models"][model] = {"status": "ok", **result}
             print(f"[probe] OK {model}: {json.dumps(result, ensure_ascii=False)}", flush=True)
+            annotation({"model": model, "status": "ok", **result})
         except Exception as exc:
             report["models"][model] = {"status": "failed", "error": safe_error(exc),
                                        "http_status": getattr(exc, "status_code", None)}
             print(f"[probe] FAILED {model}: {safe_error(exc)}", flush=True)
+            annotation({"model": model, **report["models"][model]})
         save()
     report["status"] = "completed" if all(r["status"] == "ok" for r in report["models"].values()) else "incomplete"
     report["http_requests"] = client.calls
@@ -70,4 +78,9 @@ def probe(output):
 
 
 if __name__ == "__main__":
-    sys.exit(probe(Path(__file__).parent / "results/nvidia/probe.json"))
+    if "--report-only" in sys.argv:
+        report = json.loads((Path(__file__).parent / "results/nvidia/probe.json").read_text())
+        for model, result in report["models"].items():
+            annotation({"model": model, **result})
+    else:
+        sys.exit(probe(Path(__file__).parent / "results/nvidia/probe.json"))
