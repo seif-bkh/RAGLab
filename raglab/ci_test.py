@@ -1058,6 +1058,7 @@ def run_steps() -> None:
     progress("\n[ci] STEP 11d — real-docs NVIDIA A/B (embeddings + translation)")
     nvidia_summary = ""
     nvidia_notes: list[str] = []
+    nvidia_notified = False
     if not os.environ.get("NVIDIA_API_KEY", "").strip():
         progress("[ci]   NVIDIA_API_KEY not set — nvidia A/B skipped")
     else:
@@ -1072,6 +1073,9 @@ def run_steps() -> None:
             # Live catalog discovery: the hosted API retires models without
             # notice (llama-3.2-nv-embedqa -> HTTP 410 EOL); pick the first
             # preference actually served so the A/B never silently no-ops.
+            live: list[str] = []
+            emb_model = old_nemodel
+            chat_model = old_ntmodel
             try:
                 live = _nvidia_live_models()
                 emb_model = next((m for m in NVIDIA_EMBED_PREFS if m in live),
@@ -1088,10 +1092,18 @@ def run_steps() -> None:
             except Exception as exc:  # noqa: BLE001 — discovery is best-effort
                 progress(f"[ci]   nvidia catalog discovery failed ({exc}); "
                          "using configured defaults")
+            emb_ok = bool(live and emb_model in live) or not live
+            chat_ok = bool(live and chat_model in live) or not live
+            if live and not emb_ok:
+                nvidia_notes.append("catalog: no preferred embedding model — "
+                                    "embed A/B skipped")
+            if live and not chat_ok:
+                nvidia_notes.append("catalog: no preferred chat model — "
+                                    "translation A/B skipped")
 
             # --- B (before A: cheap, and leaves the real collection state
             # for A) — translation A/B on the fictional cross-lingual corpus.
-            if fictional_vector is not None:
+            if fictional_vector is not None and chat_ok:
                 cfg.QUERY_TRANSLATION_PROVIDER = "nvidia"
                 cfg.QUERY_TRANSLATION_MODEL = cfg.NVIDIA_TRANSLATION_MODEL
                 # Re-ingest the FICTIONAL docs (all embeddings cached: the
@@ -1134,73 +1146,80 @@ def run_steps() -> None:
             cfg.QUERY_TRANSLATION_MODEL = old_tmodel
             cfg.EMBEDDING_PROVIDER = "nvidia"
             cfg.EMBEDDING_MODEL = getattr(cfg, "NVIDIA_EMBEDDING_MODEL",
-                                          "nvidia/llama-3.2-nv-embedqa-1b-v2")
-            nemb = main.make_embedder(skip_sanity=False)
-            ndims = nemb._dimension
-            nsan = " | ".join(getattr(nemb, "sanity_lines",
-                                      ["dimension: ?"]))
-            progress(f"[ci]   nvidia embedder: dims={ndims} | "
-                     f"api={getattr(nemb, 'last_response_preview', None)} | "
-                     f"{nsan}")
-            rc = main.main(["ingest", "--reset", "--data-dir",
-                            real_docs_dir, "--skip-sanity-check"])
-            check("nvidia ingest exits 0", rc == 0, f"rc={rc}")
-            ncol = get_collection(cfg, reset=False)
-            ncnt = ncol.count()
-            progress(f"[ci]   nvidia ingest: {ncnt} chunks, dims={ndims}")
-            nv_res = {}
-            nv_runs = {}
-            for mode, margs, key in (("vector", [], "vector"),
-                                     ("rrf", ["--hybrid"], "rrf"),
-                                     ("blend0.7", ["--hybrid-blend"],
-                                      "blend")):
-                rc = _real_eval(["evaluate", *margs, "--questions",
-                                 "questions_real.json",
-                                 "--skip-sanity-check"],
-                                f"real-nvidia-{mode}")
-                if rc is None:
-                    progress(f"[ci]   nvidia {mode}: deferred")
-                    break
-                runn = get_latest_eval()
-                if runn is not None:
-                    nv_runs[key] = runn
-                    o = runn["metrics"]["overall"]
-                    nv_res[key] = (o["hit@1"], o["hit@3"], o["hit@5"])
-                    progress(f"[ci]   nvidia {mode}: h1={o['hit@1']:.3f} "
-                             f"h3={o['hit@3']:.3f} h5={o['hit@5']:.3f}")
-            if nv_res:
-                nline = " | ".join(
-                    f"{k}={v[0]:.3f}/{v[1]:.3f}/{v[2]:.3f}"
-                    for k, v in nv_res.items())
-                gline = ("gemini vector " + hit3(run_real["metrics"]["overall"])
-                         if run_real else "gemini vector (deferred)")
-                nranks = ""
-                vn = nv_runs.get("vector") or {}
-                for qid in ("rq13", "rq14"):
-                    for q in (vn.get("questions") or []):
-                        if q.get("id") == qid:
-                            nranks += f"{qid}@v={q.get('correct_rank')} "
-                nvidia_summary += (
-                    f" || real-docs nvidia-embed A/B (h1/h3/h5): "
-                    f"chunks={ncnt} {nline} (vs {gline})"
-                    + (f" | {nranks.strip()}" if nranks else ""))
-                # ONE merged notice for the whole nvidia leg (translation +
-                # embeddings) so the 10-annotations-per-step cap still lets
-                # the PASSED line through.
-                notify("real-docs nvidia A/B: "
-                       + (" | ".join(nvidia_notes) + " || " if nvidia_notes
-                          else "")
-                       + f"embed chunks={ncnt} {nline}"
-                       + (f" | {nranks.strip()}" if nranks else "")
-                       + (f" | vs gemini vector "
-                          f"{hit3(run_real['metrics']['overall'])}"
-                          if run_real else ""))
-            else:
-                progress("[ci]   nvidia embed legs all deferred")
-                if nvidia_notes:
+                                          "nvidia/llama-nemotron-embed-1b-v2")
+            if emb_ok:
+                nemb = main.make_embedder(skip_sanity=False)
+                ndims = nemb._dimension
+                nsan = " | ".join(getattr(nemb, "sanity_lines",
+                                          ["dimension: ?"]))
+                progress(f"[ci]   nvidia embedder: dims={ndims} | "
+                         f"api={getattr(nemb, 'last_response_preview', None)} | "
+                         f"{nsan}")
+                rc = main.main(["ingest", "--reset", "--data-dir",
+                                real_docs_dir, "--skip-sanity-check"])
+                check("nvidia ingest exits 0", rc == 0, f"rc={rc}")
+                ncol = get_collection(cfg, reset=False)
+                ncnt = ncol.count()
+                progress(f"[ci]   nvidia ingest: {ncnt} chunks, dims={ndims}")
+                nv_res = {}
+                nv_runs = {}
+                for mode, margs, key in (("vector", [], "vector"),
+                                         ("rrf", ["--hybrid"], "rrf"),
+                                         ("blend0.7", ["--hybrid-blend"],
+                                          "blend")):
+                    rc = _real_eval(["evaluate", *margs, "--questions",
+                                     "questions_real.json",
+                                     "--skip-sanity-check"],
+                                    f"real-nvidia-{mode}")
+                    if rc is None:
+                        progress(f"[ci]   nvidia {mode}: deferred")
+                        break
+                    runn = get_latest_eval()
+                    if runn is not None:
+                        nv_runs[key] = runn
+                        o = runn["metrics"]["overall"]
+                        nv_res[key] = (o["hit@1"], o["hit@3"], o["hit@5"])
+                        progress(f"[ci]   nvidia {mode}: h1={o['hit@1']:.3f} "
+                                 f"h3={o['hit@3']:.3f} h5={o['hit@5']:.3f}")
+                if nv_res:
+                    nline = " | ".join(
+                        f"{k}={v[0]:.3f}/{v[1]:.3f}/{v[2]:.3f}"
+                        for k, v in nv_res.items())
+                    gline = ("gemini vector " + hit3(run_real["metrics"]["overall"])
+                             if run_real else "gemini vector (deferred)")
+                    nranks = ""
+                    vn = nv_runs.get("vector") or {}
+                    for qid in ("rq13", "rq14"):
+                        for q in (vn.get("questions") or []):
+                            if q.get("id") == qid:
+                                nranks += f"{qid}@v={q.get('correct_rank')} "
+                    nvidia_summary += (
+                        f" || real-docs nvidia-embed A/B (h1/h3/h5): "
+                        f"chunks={ncnt} {nline} (vs {gline})"
+                        + (f" | {nranks.strip()}" if nranks else ""))
+                    # ONE merged notice for the whole nvidia leg (translation +
+                    # embeddings) so the 10-annotations-per-step cap still lets
+                    # the PASSED line through.
+                    nvidia_notified = True
                     notify("real-docs nvidia A/B: "
-                           + " | ".join(nvidia_notes)
-                           + " | embed legs deferred")
+                           + (" | ".join(nvidia_notes) + " || " if nvidia_notes
+                              else "")
+                           + f"embed chunks={ncnt} {nline}"
+                           + (f" | {nranks.strip()}" if nranks else "")
+                           + (f" | vs gemini vector "
+                              f"{hit3(run_real['metrics']['overall'])}"
+                              if run_real else ""))
+                else:
+                    progress("[ci]   nvidia embed legs all deferred")
+                    if nvidia_notes:
+                        nvidia_notified = True
+                        notify("real-docs nvidia A/B: "
+                               + " | ".join(nvidia_notes)
+                               + " | embed legs deferred")
+            else:
+                progress("[ci]   nvidia embed A/B skipped — no "
+                         "preferred embedding model in catalog")
+
         except RuntimeError as exc:
             if _REAL_QUOTA.search(str(exc)):
                 progress("[ci] nvidia A/B DEFERRED — API quota/rate limit "
@@ -1263,7 +1282,10 @@ def run_steps() -> None:
         state += " || " + " | ".join(PIPELINE_NOTES)
     notify("RAGLab CI PASSED: full pipeline mechanics + evaluation OK "
            "(metrics above, results JSON in the raglab-eval-results artifact)"
-           + summary + jina_summary + nvidia_summary + state)
+           + summary + jina_summary + nvidia_summary
+           + ((" || nvidia: " + " | ".join(nvidia_notes))
+              if nvidia_notes and not nvidia_notified else "")
+           + state)
     progress("[ci] CI PIPELINE PASSED — all mechanics verified; metrics above are the report.")
     print("=" * 78)
     sys.exit(0)
