@@ -841,6 +841,8 @@ def run_steps() -> None:
             jemb = main.make_embedder(skip_sanity=False)
             jdims = jemb._dimension
             jsan = " | ".join(getattr(jemb, "sanity_lines", ["dimension: ?"]))
+            notify(f"real-docs jina: embedder dims={jdims} | "
+                   f"api={getattr(jemb, 'last_response_preview', None)} | {jsan}")
             rc = main.main(["ingest", "--reset", "--data-dir",
                             real_docs_dir, "--skip-sanity-check"])
             check("jina ingest exits 0", rc == 0, f"rc={rc}")

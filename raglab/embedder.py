@@ -634,9 +634,44 @@ class JinaEmbedder(BaseEmbedder):
             raise JinaHTTPError(0, f"Jina API connection error: {exc}") from exc
 
         data = json.loads(body)
+        # Keep a small preview for diagnostics (CI annotates it; never the key).
+        self.last_response = data
+        self.last_response_preview = {
+            "api_model": data.get("model"),
+            "object": data.get("object"),
+            "n_items": len(data.get("data") or []),
+            "first_dim": (len((data.get("data") or [{}])[0].get("embedding")
+                              or []) if data.get("data") else 0),
+        }
         if data.get("object") == "list" and isinstance(data.get("data"), list):
             ordered = sorted(data["data"], key=lambda item: item.get("index", 0))
-            embs = [list(item["embedding"]) for item in ordered]
+            embs = []
+            for idx, item in enumerate(ordered):
+                emb = item.get("embedding")
+                if not isinstance(emb, list):
+                    raise RuntimeError(
+                        f"Jina API item {item.get('index')} has no embedding "
+                        f"list (got {type(emb).__name__}); input preview: "
+                        f"{texts[idx][:120]!r}"
+                    )
+                vals = []
+                for v in emb:
+                    try:
+                        fv = float(v)
+                    except (TypeError, ValueError) as exc:
+                        raise RuntimeError(
+                            f"Jina API item {item.get('index')} embedding "
+                            f"value {v!r} not numeric; input preview: "
+                            f"{texts[idx][:120]!r}"
+                        ) from exc
+                    if fv != fv:  # NaN
+                        raise RuntimeError(
+                            f"Jina API item {item.get('index')} embedding "
+                            f"contains NaN; input preview: "
+                            f"{texts[idx][:120]!r}"
+                        )
+                    vals.append(fv)
+                embs.append(vals)
             if len(embs) != len(texts):
                 raise RuntimeError(
                     f"Jina API returned {len(embs)} embeddings for "
