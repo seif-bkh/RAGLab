@@ -266,6 +266,38 @@ def get_latest_eval() -> dict | None:
 
 _REAL_QUOTA = re.compile(r"429|RESOURCE_EXHAUSTED|quota", re.I)
 
+# NVIDIA hosted API model preferences (in order). The catalog changes without
+# notice: nvidia/llama-3.2-nv-embedqa-1b-v2 went 410 (end of life) between
+# research and the first CI run, so the leg discovers the LIVE /v1/models
+# list first and falls back to the config defaults only if none match.
+NVIDIA_EMBED_PREFS = (
+    "nvidia/llama-nemotron-embed-1b-v2",
+    "nvidia/llama-nemotron-embed-4b-v2",
+    "nvidia/llama-nemotron-embed-vl-1b-v2",
+)
+NVIDIA_CHAT_PREFS = (
+    "moonshotai/kimi-k2.6",   # current Kimi on NIM (kimi-k3 not catalogued)
+    "deepseek-ai/deepseek-v4-pro",
+    "deepseek-ai/deepseek-v4-flash",
+)
+
+
+def _nvidia_live_models() -> list[str]:
+    """GET https://integrate.api.nvidia.com/v1/models (key in env)."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        "https://integrate.api.nvidia.com/v1/models",
+        headers={
+            "Authorization": f"Bearer {os.environ.get('NVIDIA_API_KEY', '')}",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return sorted(str(m.get("id")) for m in data.get("data", [])
+                  if m.get("id"))
+
 
 def _real_eval(args: list, stage: str) -> int | None:
     """Run one real-docs evaluation, deferring cleanly on the daily 429 quota.
@@ -1034,15 +1066,34 @@ def run_steps() -> None:
         old_dim = getattr(cfg, "NVIDIA_EMBEDDING_DIM", 0)
         old_tprovider = cfg.QUERY_TRANSLATION_PROVIDER
         old_tmodel = cfg.QUERY_TRANSLATION_MODEL
-        old_ntmodel = getattr(cfg, "NVIDIA_TRANSLATION_MODEL", "moonshotai/kimi-k3")
+        old_ntmodel = getattr(cfg, "NVIDIA_TRANSLATION_MODEL", "")
+        old_nemodel = getattr(cfg, "NVIDIA_EMBEDDING_MODEL", "")
         try:
+            # Live catalog discovery: the hosted API retires models without
+            # notice (llama-3.2-nv-embedqa -> HTTP 410 EOL); pick the first
+            # preference actually served so the A/B never silently no-ops.
+            try:
+                live = _nvidia_live_models()
+                emb_model = next((m for m in NVIDIA_EMBED_PREFS if m in live),
+                                 None) or old_nemodel
+                chat_model = next((m for m in NVIDIA_CHAT_PREFS if m in live),
+                                  None) or old_ntmodel
+                cfg.NVIDIA_EMBEDDING_MODEL = emb_model
+                cfg.NVIDIA_TRANSLATION_MODEL = chat_model
+                nvidia_notes.append(
+                    f"catalog: {len(live)} models | embed={emb_model} | "
+                    f"chat={chat_model}")
+                progress(f"[ci]   nvidia catalog: {len(live)} models | "
+                         f"embed={emb_model} | chat={chat_model}")
+            except Exception as exc:  # noqa: BLE001 — discovery is best-effort
+                progress(f"[ci]   nvidia catalog discovery failed ({exc}); "
+                         "using configured defaults")
+
             # --- B (before A: cheap, and leaves the real collection state
             # for A) — translation A/B on the fictional cross-lingual corpus.
             if fictional_vector is not None:
                 cfg.QUERY_TRANSLATION_PROVIDER = "nvidia"
-                cfg.QUERY_TRANSLATION_MODEL = "moonshotai/kimi-k3"
-                # the nvidia translator reads the nvidia-specific knob
-                cfg.NVIDIA_TRANSLATION_MODEL = "moonshotai/kimi-k3"
+                cfg.QUERY_TRANSLATION_MODEL = cfg.NVIDIA_TRANSLATION_MODEL
                 # Re-ingest the FICTIONAL docs (all embeddings cached: the
                 # Gemini provider is restored for this leg) so the evaluate
                 # below reads the right collection state.

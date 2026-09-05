@@ -65,19 +65,24 @@ JINA_EMBEDDING_CACHE_PATH = PROJECT_DIR / os.getenv(
 # NVIDIA NIM embeddings + LLM — EMBEDDING_PROVIDER = "nvidia" -----------------
 # Free hosted endpoints at https://integrate.api.nvidia.com/v1 (OpenAI-
 # compatible; key from NVIDIA_API_KEY in .env, NEVER in code). Two roles:
-#   EMBEDDER   nvidia/llama-3.2-nv-embedqa-1b-v2 — NeMo Retriever, 26 langs
-#              incl. Arabic, cross-lingual (query EN -> Arabic docs without a
-#              translation layer), 2048d with Matryoshka truncation
-#              (384..1024) and asymmetric input_type=passage|query.
+#   EMBEDDER   NVIDIA NeMo Retriever family (multilingual/cross-lingual: an
+#              English query can hit Arabic docs without a translation layer),
+#              asymmetric input_type=passage|query. NOTE: the older
+#              nvidia/llama-3.2-nv-embedqa-1b-v2 is END OF LIFE on the hosted
+#              API (HTTP 410); the current family is llama-nemotron-embed.
+#              CI discovers the live /v1/models catalog and overrides this
+#              default when the exact id is absent.
 #   TRANSLATOR QUERY_TRANSLATION_PROVIDER=nvidia + NVIDIA_TRANSLATION_MODEL
-#              (moonshotai/kimi-k3 or deepseek-ai/deepseek-v4-pro) — used for
-#              query translation only; answer generation stays a stub by
-#              design. Free NIM endpoints are rate-limited (~40 RPM): keep
-#              batches small, translations are cached.
+#              (moonshotai/kimi-k2.6 or deepseek-ai/deepseek-v4-pro; kimi-k3
+#              is not currently in the NIM catalog) — used for query
+#              translation only; answer generation stays a stub by design.
+#              Free NIM endpoints are rate-limited (~40 RPM): keep batches
+#              small, translations are cached.
 NVIDIA_EMBEDDING_MODEL = os.getenv("NVIDIA_EMBEDDING_MODEL",
-                                   "nvidia/llama-3.2-nv-embedqa-1b-v2")
-# Matryoshka dimension: 0 = server default (2048), or 384/512/768/1024 to
-# shrink vectors (34x smaller at 384; the docs report ~-2% MIRACL recall).
+                                   "nvidia/llama-nemotron-embed-1b-v2")
+# Matryoshka dimension: 0 = server default, or a documented truncation size
+# (e.g. 512/768/1024) to shrink vectors; the family supports embedding_type
+# int8 via the API but we keep float for cosine comparability.
 NVIDIA_EMBEDDING_DIM = int(os.getenv("NVIDIA_EMBEDDING_DIM", "0") or 0)
 NVIDIA_EMBEDDING_BASE_URL = os.getenv(
     "NVIDIA_EMBEDDING_BASE_URL",
@@ -88,9 +93,10 @@ NVIDIA_EMBEDDING_CACHE_PATH = PROJECT_DIR / os.getenv(
     "NVIDIA_EMBEDDING_CACHE_FILE", "embeddings_cache_nvidia.json")
 # Query-translation LLM (NVIDIA NIM free endpoints).
 NVIDIA_TRANSLATION_MODEL = os.getenv("NVIDIA_TRANSLATION_MODEL",
-                                     "moonshotai/kimi-k3")
+                                     "moonshotai/kimi-k2.6")
 NVIDIA_TRANSLATION_FALLBACK_MODELS = os.getenv(
-    "NVIDIA_TRANSLATION_FALLBACK_MODELS", "deepseek-ai/deepseek-v4-pro")
+    "NVIDIA_TRANSLATION_FALLBACK_MODELS",
+    "deepseek-ai/deepseek-v4-pro,deepseek-ai/deepseek-v4-flash")
 NVIDIA_TRANSLATION_BASE_URL = os.getenv(
     "NVIDIA_TRANSLATION_BASE_URL",
     "https://integrate.api.nvidia.com/v1/chat/completions")

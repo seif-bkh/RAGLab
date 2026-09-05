@@ -484,7 +484,7 @@ check("nvidia: passage/query input_type + bearer auth + plain-string input",
       and _nv_calls[0]["payload"]["input"] == ["doc one"]
       and _nv_calls[1]["payload"]["input"] == ["question?"]
       and "task" not in _nv_calls[0]["payload"]
-      and _nv_calls[0]["payload"]["model"] == "nvidia/llama-3.2-nv-embedqa-1b-v2"
+      and _nv_calls[0]["payload"]["model"] == getattr(cfg, "NVIDIA_EMBEDDING_MODEL", "nvidia/llama-nemotron-embed-1b-v2")
       and _nv_calls[0]["auth"] == "Bearer test-secret"
       and _nv_calls[0]["ctype"] == "application/json"
       and _nv_calls[0]["url"].endswith("/v1/embeddings"),
@@ -589,7 +589,7 @@ def _nvidia_chat_open_factory(content: str | None = None):
 
 class NvidiaCfg(FakeCfg):
     QUERY_TRANSLATION_PROVIDER = "nvidia"
-    NVIDIA_TRANSLATION_MODEL = "moonshotai/kimi-k3"
+    NVIDIA_TRANSLATION_MODEL = "moonshotai/kimi-k2.6"
     NVIDIA_TRANSLATION_FALLBACK_MODELS = "deepseek-ai/deepseek-v4-pro"
     NVIDIA_TRANSLATION_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
@@ -600,7 +600,7 @@ urllib.request.urlopen = _nvidia_chat_open_factory()
 try:
     os.environ["NVIDIA_API_KEY"] = "test-secret"
     tr_nv = QueryTranslator(NvidiaCfg())
-    out = tr_nv._chat("moonshotai/kimi-k3", "1. ما هو المبلغ؟")
+    out = tr_nv._chat("moonshotai/kimi-k2.6", "1. ما هو المبلغ؟")
 finally:
     urllib.request.urlopen = real_open
     if old_key:
@@ -609,7 +609,7 @@ finally:
         os.environ.pop("NVIDIA_API_KEY", None)
 check("nvidia chat: thinking off + temp 0 + bearer + content parsed",
       tr_nv.available and out == "1. ترجمة"
-      and _nv_chat_calls[0]["payload"]["model"] == "moonshotai/kimi-k3"
+      and _nv_chat_calls[0]["payload"]["model"] == "moonshotai/kimi-k2.6"
       and _nv_chat_calls[0]["payload"]["temperature"] == 0
       and _nv_chat_calls[0]["payload"]["chat_template_kwargs"] == \
           {"thinking": False}
@@ -624,7 +624,7 @@ urllib.request.urlopen = _nvidia_chat_open_factory(
 try:
     os.environ["NVIDIA_API_KEY"] = "test-secret"
     tr_nv = QueryTranslator(NvidiaCfg())
-    fenced = tr_nv._chat("moonshotai/kimi-k3", "1. ما هو المبلغ؟")
+    fenced = tr_nv._chat("moonshotai/kimi-k2.6", "1. ما هو المبلغ؟")
 finally:
     urllib.request.urlopen = real_open
     if old_key:
