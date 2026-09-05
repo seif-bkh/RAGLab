@@ -157,7 +157,18 @@ class CheckpointClient:
     def object(self, messages, *, max_tokens=8192):
         # Reference-authoring syntax repair is explicit and cached under a NEW
         # request hash. Candidate answers use chat(), never this repair path.
-        response = self.chat(self.model, messages, max_tokens=max_tokens)
+        budget_retry = False
+        try:
+            response = self.chat(self.model, messages, max_tokens=max_tokens)
+        except NvidiaAPIError as exc:
+            if exc.status_code != 422 or 'incomplete' not in str(exc).lower() or max_tokens > 10000:
+                raise
+            # Authoring/reference only: a separately identified longer-output
+            # request may repair truncation. Candidate chat() is never retried
+            # merely to obtain a better scoring answer.
+            max_tokens *= 2
+            budget_retry = True
+            response = self.chat(self.model, messages, max_tokens=max_tokens)
         original_hash = response.get('_harness_request_hash')
         try:
             value = parse_object(response['text'])
@@ -169,6 +180,8 @@ class CheckpointClient:
             value = parse_object(response['text'])
         provenance = {k: response.get(k) for k in
                       ('_harness_request_hash', '_harness_cached', 'usage', 'seconds', 'served_model')}
+        provenance['max_tokens'] = max_tokens
+        provenance['budget_retry'] = budget_retry
         provenance['original_request_hash'] = original_hash
         provenance['format_repaired'] = provenance['_harness_request_hash'] != original_hash
         return value, provenance
