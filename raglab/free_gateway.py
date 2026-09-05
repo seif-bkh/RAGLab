@@ -52,7 +52,11 @@ def free_eligibility(provider, model, catalog):
 
 def load_pricing(provider, opener=None):
     client = opener or urllib.request.build_opener(NoCredentialRedirects())
-    request = urllib.request.Request(PRICING_URLS[provider], headers={'Accept': 'application/json'})
+    headers = {'Accept': 'application/json', 'User-Agent': 'RAGLab-readonly-catalog/1.0'}
+    key = os.environ.get(PROVIDERS[provider]['key_env'], '').strip()
+    if key:
+        headers['Authorization'] = 'Bearer ' + key
+    request = urllib.request.Request(PRICING_URLS[provider], headers=headers)
     with client.open(request, timeout=30) as response:
         raw = response.read(2_000_001)
     if len(raw) > 2_000_000:

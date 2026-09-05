@@ -156,6 +156,7 @@ class NvidiaClient:
             req = urllib.request.Request(
                 url, data=None if payload is None else json.dumps(payload).encode("utf-8"),
                 headers={"Authorization": f"Bearer {self.api_key}",
+                         "User-Agent": "RAGLab/1.0",
                          "Content-Type": "application/json",
                          "Accept": "text/event-stream" if (payload or {}).get("stream") else "application/json"},
                 method="GET" if payload is None else "POST")

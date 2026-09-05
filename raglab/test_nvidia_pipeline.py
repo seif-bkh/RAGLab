@@ -468,6 +468,21 @@ class FreeGatewayPolicy(unittest.TestCase):
         row['billing_expr'] = 'fixed_fee'
         self.assertFalse(free_eligibility('kiosapi', 'free-sku', catalog)[0])
 
+    def test_pricing_reads_scope_credentials_and_identify_the_client(self):
+        from free_gateway import load_pricing
+        requests = []
+        class PriceResponse(Response):
+            def read(self, limit=None):
+                return super().read()
+        def read_price(req, timeout):
+            requests.append(req)
+            return PriceResponse({'data': []})
+        with patch.dict(os.environ, {'KIOSAPI_API_KEY': 'kios-only', 'XKIRO_API_KEY': 'x-only', 'NVIDIA_API_KEY': 'not-this'}):
+            load_pricing('kiosapi', opener=SimpleNamespace(open=read_price))
+        self.assertEqual(requests[0].full_url, 'https://kiosapi.com/api/pricing')
+        self.assertEqual(requests[0].get_header('Authorization'), 'Bearer kios-only')
+        self.assertEqual(requests[0].get_header('User-agent'), 'RAGLab-readonly-catalog/1.0')
+
     def test_paid_sku_rejected_before_client_can_send_a_key(self):
         from free_gateway import FreeGatewayClient
         catalog = self.xcatalog()
