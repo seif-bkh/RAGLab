@@ -253,7 +253,7 @@ BM25+metadata cue lifts rq13→3 but breaks rq08 3→1? no — rq08 3→? (see
 per-question rows above); rrf's h1 drop is concentrated in cross-lingual
 verbatim rows (rq03/rq14 drop from 1).
 
-## Chunk-size A/B: 220 vs 340 tokens (run `33946650497`, same Gemini key, same docs)
+## Chunk-size A/B: 220 vs 340 tokens (run `33947020272`, same Gemini key, same docs)
 
 | size (chunks) | vector | rrf | blend @ λ=.70 | best blend |
 |---|---|---|---|---|
@@ -269,6 +269,11 @@ Reading:
   + default blend is the best out-of-the-box config.
 - Overall best remains **220 + pure vector (.786)**; no hybrid on any split
   recovers the vector h1 (blend best = .714 on both splits).
+- Per-question vector @340t: **rq13@v=2, rq14@v=2** (vs .786/.786? no — vs
+  rq13@v=2 / rq14@v=1 at 220t; jina: rq13@v=1 / rq14@v=3). **rq13 is now
+  reachable everywhere** (old split: rank None — no chunk contained the
+  phrase); it sits at 1-2 depending on provider/size. rq14 flips between
+  1 (gemini-220) and 2-3 elsewhere.
 - rq13-reachable=True at 340 as well (16/16 offline at both sizes).
 
 Decision needed (user): vector-first lab (220) vs hybrid-first product (340).
