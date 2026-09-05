@@ -108,13 +108,13 @@ def run_steps() -> None:
     global CURRENT_STEP
     # --- 1. Offline inspect (no API calls) -----------------------------------
     CURRENT_STEP = "inspect"
-    progress("\n[ci] STEP 1/7 — inspect (load + chunk, offline)")
+    progress("\n[ci] STEP 1/9 — inspect (load + chunk, offline)")
     rc = main.main(["inspect"])
     check("inspect exits 0", rc == 0, f"rc={rc}")
 
     # --- 2. Startup report + 3-language sanity check (1 small API call) ------
     CURRENT_STEP = "sanity"
-    progress("\n[ci] STEP 2/7 — embedding sanity check (provider/model/dimension + "
+    progress("\n[ci] STEP 2/9 — embedding sanity check (provider/model/dimension + "
              "EN/FR/AR pairwise cosine)")
     embedder = main.make_embedder(skip_sanity=False)
     expected_dim = int(getattr(cfg, "GEMINI_OUTPUT_DIMENSIONALITY", 0) or 0) or None
@@ -127,7 +127,7 @@ def run_steps() -> None:
 
     # --- 3. Ingest (real embeddings, --reset) ---------------------------------
     CURRENT_STEP = "ingest"
-    progress("\n[ci] STEP 3/7 — ingest --reset")
+    progress("\n[ci] STEP 3/9 — ingest --reset")
     rc = main.main(["ingest", "--reset", "--skip-sanity-check"])
     check("ingest exits 0", rc == 0, f"rc={rc}")
     check("embedding cache written", cfg.EMBEDDING_CACHE_PATH.exists())
@@ -165,7 +165,7 @@ def run_steps() -> None:
 
     # --- 4. Query: vector-only + hybrid with language filter -------------------
     CURRENT_STEP = "query"
-    progress("\n[ci] STEP 4/7 — query (vector + hybrid + lang filter + translation)")
+    progress("\n[ci] STEP 4/9 — query (vector + hybrid + lang filter + translation)")
 
     # 4a. Query translation plumbing (cross-lingual experiment). Two batched
     # calls warm the cache; `evaluate` below then reuses it, so the API cost
@@ -224,7 +224,7 @@ def run_steps() -> None:
 
     # --- 5. Evaluate (vector-only baseline) -------------------------------------
     CURRENT_STEP = "evaluate"
-    progress("\n[ci] STEP 5/7 — evaluate (questions.json, vector-only)")
+    progress("\n[ci] STEP 5/9 — evaluate (questions.json, vector-only)")
     rc = main.main(["evaluate", "--skip-sanity-check"])
     check("evaluate exits 0", rc == 0, f"rc={rc}")
 
@@ -322,7 +322,7 @@ def run_steps() -> None:
 
     # --- 5b. Hybrid A/B: same questions, vector + BM25 RRF per variant ---------
     CURRENT_STEP = "hybrid-evaluate"
-    progress("\n[ci] STEP 6/7 — hybrid evaluation "
+    progress("\n[ci] STEP 6/9 — hybrid evaluation "
              "(vector + BM25 RRF, translated variants)")
     # eval_*.json names have 1-second precision; the hybrid run could overwrite
     # the vector file, so preserve it under a clearly-labelled copy.
@@ -377,9 +377,102 @@ def run_steps() -> None:
                    f"(no vector baseline in this run) | "
                    f"cats: {cats_str(m_h)} | langs: {langs_str(m_h)}")
 
+    # --- 6b. REAL documents (docs/): ingest + vector/hybrid evaluation --------
+    # The user's real corpus: BCT circular 2019-08, internal Islamic-banking
+    # guide, law 2016-48 (PDFs, Arabic) and two DOCX guides (Arabic). Their own
+    # question set lives in questions_real.json.
+    CURRENT_STEP = "real-docs-ingest"
+    real_docs_dir = str((cfg.PROJECT_DIR.parent / "docs").resolve())
+    progress(f"\n[ci] STEP 7/9 — ingest --reset --data-dir {real_docs_dir}")
+    rc = main.main(["ingest", "--reset", "--data-dir", real_docs_dir,
+                    "--skip-sanity-check"])
+    check("real-docs ingest exits 0", rc == 0, f"rc={rc}")
+    collection_real = get_collection(cfg, reset=False)
+    count_real = collection_real.count()
+    check("real-docs collection count > 0", count_real > 0, f"count={count_real}")
+    metas_real = (collection_real.get(include=["metadatas"])["metadatas"] or [])
+    langs_real = {m.get("language") for m in metas_real}
+    check("real-docs collection is Arabic-only", langs_real == {"ar"},
+          str(sorted(langs_real)))
+    check("real-docs metadata complete",
+          bool(metas_real) and required_fields <= set(metas_real[0]))
+    notify(f"real-docs: stored={count_real} chunks, languages="
+           f"{sorted(langs_real)} (4 Arabic documents: 2 DOCX + 2 PDF)")
+
+    # 6b.1 vector evaluation on the REAL question set
+    CURRENT_STEP = "real-evaluate"
+    progress("\n[ci] STEP 8/9 — evaluate --questions questions_real.json "
+             "(vector-only)")
+    rc = main.main(["evaluate", "--questions", "questions_real.json",
+                    "--skip-sanity-check"])
+    check("real-docs vector evaluate exits 0", rc == 0, f"rc={rc}")
+    run_real = get_latest_eval()
+    check("real-docs vector results JSON written", run_real is not None)
+    if run_real:
+        shutil.copy(
+            sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
+            cfg.RESULTS_DIR / "eval_001_real_vector_ab.json")
+        m_real = run_real["metrics"]
+        o_real = m_real["overall"]
+        s_real = m_real["separation"]
+        oos_real = m_real["out_of_scope"]
+        progress(f"\n[ci] REAL-DOCS (vector) — overall hit rates:"
+                 f"  hit@1={o_real['hit@1']:.3f}  hit@3={o_real['hit@3']:.3f}"
+                 f"  hit@5={o_real['hit@5']:.3f}  (n={o_real['n']})")
+        for cat, d in sorted(m_real["by_category"].items()):
+            progress(f"[ci]   category {cat:<14} n={d['n']:<3} "
+                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                     f"hit@5={d['hit@5']:.3f}")
+        for lang, d in sorted(m_real["by_language"].items()):
+            progress(f"[ci]   language {lang:<14} n={d['n']:<3} "
+                     f"hit@1={d['hit@1']:.3f} hit@3={d['hit@3']:.3f} "
+                     f"hit@5={d['hit@5']:.3f}")
+        notify(f"real-docs: vector h1/h3/h5={hit3(o_real)} (n={o_real['n']}) | "
+               f"cats: {cats_str(m_real)} | langs: {langs_str(m_real)}")
+        notify(f"real-docs: vector sep gap="
+               f"{s_real['gap_mean_correct_minus_best_incorrect']:.4f} "
+               f"oos_max_top1={oos_real['max_top1_score']:.4f} | "
+               f"xl detail: {xl_detail_str(run_real) or '-'}")
+
+    # 6b.2 hybrid evaluation on the REAL question set
+    CURRENT_STEP = "real-hybrid-evaluate"
+    progress("\n[ci] STEP 9/9 — evaluate --hybrid --questions questions_real.json")
+    rc = main.main(["evaluate", "--hybrid", "--questions", "questions_real.json",
+                    "--skip-sanity-check"])
+    check("real-docs hybrid evaluate exits 0", rc == 0, f"rc={rc}")
+    run_real_h = get_latest_eval()
+    check("real-docs hybrid results JSON written", run_real_h is not None)
+    if run_real_h:
+        shutil.copy(
+            sorted(glob.glob(str(cfg.RESULTS_DIR / "eval_*.json")))[-1],
+            cfg.RESULTS_DIR / "eval_002_real_hybrid_ab.json")
+        m_rh = run_real_h["metrics"]
+        o_rh = m_rh["overall"]
+        s_rh = m_rh["separation"]
+        oos_rh = m_rh["out_of_scope"]
+        progress(f"\n[ci] REAL-DOCS (hybrid) — overall hit rates:"
+                 f"  hit@1={o_rh['hit@1']:.3f}  hit@3={o_rh['hit@3']:.3f}"
+                 f"  hit@5={o_rh['hit@5']:.3f}  (n={o_rh['n']})")
+        if run_real is not None:
+            delta = (f" (Δ vs vector "
+                     f"{o_rh['hit@1'] - o_real['hit@1']:+.3f}/"
+                     f"{o_rh['hit@3'] - o_real['hit@3']:+.3f}/"
+                     f"{o_rh['hit@5'] - o_real['hit@5']:+.3f})")
+            sep_ref = (f"(vector "
+                       f"{s_real['gap_mean_correct_minus_best_incorrect']:.4f}; ")
+        else:
+            delta = ""
+            sep_ref = ""
+        notify(f"real-docs: hybrid h1/h3/h5={hit3(o_rh)}{delta} | "
+               f"cats: {cats_str(m_rh)} | langs: {langs_str(m_rh)}")
+        notify(f"real-docs: hybrid sep gap="
+               f"{s_rh['gap_mean_correct_minus_best_incorrect']:.4f} "
+               f"{sep_ref}oos_max_top1={oos_rh['max_top1_score']:.4f}) | "
+               f"xl detail: {xl_detail_str(run_real_h) or '-'}")
+
     # --- 7. Answer stub exists (regression guard) ------------------------------
     CURRENT_STEP = "answer-stub"
-    progress("\n[ci] STEP 7/7 — answer.py stub")
+    progress("\n[ci] STEP 10/10 — answer.py stub")
     import answer  # noqa: E402
     stub = answer.generate_answer("test", [])
     check("answer stub returns placeholder", "[STUB]" in stub)

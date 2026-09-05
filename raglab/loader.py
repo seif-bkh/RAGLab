@@ -17,14 +17,19 @@ each intermediate step.
 """
 
 import re
+import unicodedata
+import zipfile
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
-SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf"}
+SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
 
 # --- Arabic normalization constants ---------------------------------------
 ALEF_VARIANTS = "أإآٱ"  # all unify to bare alef "ا"
 TATWEEL = "\u0640"       # "ـ" (kashida)
 DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]")
+
+_DOCX_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 # Arabic letter range used by the language heuristic.
 ARABIC_RE = re.compile(r"[\u0600-\u06FF]")
@@ -49,9 +54,15 @@ ENGLISH_STOPWORDS = {
 def normalize_arabic(text: str) -> str:
     """Light Arabic normalization: unify alef variants, remove tatweel and diacritics.
 
+    Also applies NFKC FIRST: Arabic PDFs often store text in "presentation
+    forms" (e.g. ﻗ instead of ق). NFKC maps them back to base letters so that
+    the indexed text matches what users write and what the language detector
+    expects. NFKC is identity for ordinary Latin/Arabic text, so this is safe
+    for the fictional markdown sample docs too.
+
     Does not translate, does not stem, does not shift the text's meaning.
     """
-    out = text
+    out = unicodedata.normalize("NFKC", text)
     for variant in ALEF_VARIANTS:
         out = out.replace(variant, "ا")
     out = out.replace(TATWEEL, "")
@@ -159,7 +170,16 @@ def detect_language(text: str) -> str:
 
 
 def read_pdf(path: Path) -> str:
-    """Extract text from a PDF, page by page, marking each page for inspection."""
+    """Extract text from a PDF, page by page, marking each page for inspection.
+
+    NOTE (real-world finding): Arabic PDFs produced by some Tunisian official
+    publishers store the text in VISUAL order and/or with presentation-form
+    glyphs. NFKC in normalize_arabic fixes the glyphs; the visual-order
+    scrambling of whole lines cannot be fixed without an RTL reordering pass,
+    so some paragraphs of such PDFs remain word-order-jumbled. This is
+    reported per document in `inspect` output; DOCX extraction is unaffected
+    (logical order).
+    """
     from pypdf import PdfReader
 
     reader = PdfReader(str(path))
@@ -169,6 +189,46 @@ def read_pdf(path: Path) -> str:
         # Keep the marker so extracted-pages are visible in chunk output.
         pages.append(f"[page {i}]\n{text}")
     return "\n\n".join(pages)
+
+
+def read_docx(path: Path) -> str:
+    """Extract text from a .docx with the standard library only.
+
+    DOCX is a zip of XML; we read word/document.xml and walk it for paragraphs
+    (<w:p>) and tables (<w:tbl>, rendered as "| cell | cell |" rows). Headers,
+    footers and footnotes live in other parts and are skipped. No new
+    dependency, fully printable, and DOCX text keeps logical order (unlike
+    some Arabic PDFs above).
+    """
+    with zipfile.ZipFile(str(path)) as zf:
+        xml = zf.read("word/document.xml")
+    root = ET.fromstring(xml)
+    body = root.find(f"{_DOCX_NS}body")
+    out: list[str] = []
+
+    def para_text(p) -> str:
+        return "".join(t.text or "" for t in p.iter(f"{_DOCX_NS}t"))
+
+    def walk(el) -> None:
+        for child in el:
+            if child.tag == f"{_DOCX_NS}p":
+                line = para_text(child).strip()
+                if line:
+                    out.append(line)
+            elif child.tag == f"{_DOCX_NS}tbl":
+                for row in child.iter(f"{_DOCX_NS}tr"):
+                    cells = []
+                    for cell in row.iter(f"{_DOCX_NS}tc"):
+                        ctexts = [para_text(p) for p in cell.iter(f"{_DOCX_NS}p")]
+                        cells.append(" ".join(c for c in ctexts if c).strip())
+                    if any(cells):
+                        out.append("| " + " | ".join(cells) + " |")
+            else:
+                walk(child)
+
+    if body is not None:
+        walk(body)
+    return "\n".join(out)
 
 
 def load_document(path: Path, origin: str = "data/") -> dict:
@@ -181,6 +241,8 @@ def load_document(path: Path, origin: str = "data/") -> dict:
 
     if suffix == ".pdf":
         raw = read_pdf(path)
+    elif suffix == ".docx":
+        raw = read_docx(path)
     else:
         raw = path.read_text(encoding="utf-8", errors="replace")
 
@@ -201,21 +263,31 @@ def load_document(path: Path, origin: str = "data/") -> dict:
     }
 
 
-def load_all(data_dir: Path) -> list[dict]:
-    """Load every supported file in data_dir (sorted by name), skip nothing silently."""
+def load_all(data_dirs) -> list[dict]:
+    """Load every supported file from one or more directories (sorted by name).
+
+    Accepts a single Path or a list of Paths (e.g. the fictional product
+    sheets AND a docs/ folder of real documents). Never skips a bad file
+    silently: every failure is printed.
+    """
+    if isinstance(data_dirs, (str, Path)):
+        data_dirs = [data_dirs]
+    dirs = [Path(d) for d in data_dirs]
     docs: list[dict] = []
-    if not data_dir.is_dir():
-        print(f"[loader] WARNING: data directory does not exist: {data_dir}")
-        return docs
+    for data_dir in dirs:
+        if not data_dir.is_dir():
+            print(f"[loader] WARNING: data directory does not exist: {data_dir}")
+            continue
+        origin = f"{data_dir.name}/"
+        for path in sorted(data_dir.iterdir()):
+            if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                try:
+                    docs.append(load_document(path, origin=origin))
+                except Exception as exc:  # noqa: BLE001 — lab tool: never hide a bad file
+                    print(f"[loader] ERROR loading {path.name}: {exc}")
 
-    for path in sorted(data_dir.iterdir()):
-        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
-            try:
-                docs.append(load_document(path))
-            except Exception as exc:  # noqa: BLE001 — lab tool: never hide a bad file
-                print(f"[loader] ERROR loading {path.name}: {exc}")
-
-    print(f"[loader] {len(docs)} document(s) loaded from {data_dir}")
+    names = ", ".join(str(d) for d in dirs)
+    print(f"[loader] {len(docs)} document(s) loaded from {names}")
     if not docs:
         print("[loader] WARNING: no supported files found "
               f"({', '.join(sorted(SUPPORTED_EXTENSIONS))}).")

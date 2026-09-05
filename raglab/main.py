@@ -14,6 +14,7 @@ clearly marked stub. Run `python main.py <subcommand> --help` for details.
 import argparse
 import statistics
 import sys
+from pathlib import Path
 
 import config as cfg
 from chunker import chunk_all
@@ -75,7 +76,8 @@ def make_translator(quiet: bool = False):
 
 def cmd_inspect(args) -> int:
     banner("INSPECT — load and chunk only, NO embedding, NO API calls")
-    docs = load_all(cfg.DATA_DIR)
+    data_dirs = args.data_dir if args.data_dir else [cfg.DATA_DIR]
+    docs = load_all(data_dirs)
     if not docs:
         print("[inspect] nothing to inspect; add files to", cfg.DATA_DIR)
         return 1
@@ -130,7 +132,8 @@ def cmd_inspect(args) -> int:
 
 def cmd_ingest(args) -> int:
     banner("INGEST — load, chunk, embed, store")
-    docs = load_all(cfg.DATA_DIR)
+    data_dirs = args.data_dir if args.data_dir else [cfg.DATA_DIR]
+    docs = load_all(data_dirs)
     chunks = chunk_all(docs, cfg)
     if not chunks:
         print("[ingest] no chunks produced; nothing to do")
@@ -269,7 +272,9 @@ def cmd_query(args) -> int:
 
 def cmd_evaluate(args) -> int:
     banner("EVALUATE — run questions.json against the collection")
-    cases = load_question_set(cfg.QUESTIONS_FILE)
+    qpath = (Path(args.questions).resolve() if args.questions
+             else cfg.QUESTIONS_FILE)
+    cases = load_question_set(qpath)
     if not cases:
         print("[evaluate] no questions in", cfg.QUESTIONS_FILE)
         return 1
@@ -302,9 +307,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_inspect = sub.add_parser("inspect", help="load+chunk only, print every chunk")
+    p_inspect.add_argument("--data-dir", action="append", default=None,
+                           metavar="PATH",
+                           help="extra directory to load (repeatable; default: data/)")
     p_inspect.set_defaults(func=cmd_inspect)
 
     p_ingest = sub.add_parser("ingest", help="chunk, embed and store into ChromaDB")
+    p_ingest.add_argument("--data-dir", action="append", default=None,
+                          metavar="PATH",
+                          help="extra directory to load (repeatable; default: data/)")
     p_ingest.add_argument("--reset", action="store_true", default=False,
                           help="delete the collection first (fresh start)")
     p_ingest.add_argument("--skip-sanity-check", action="store_true", default=False,
@@ -336,6 +347,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="use vector + BM25 RRF fusion for evaluation")
     p_eval.add_argument("--top-k", type=int, default=cfg.EVAL_TOP_K,
                         help=f"hits recorded per question (default {cfg.EVAL_TOP_K})")
+    p_eval.add_argument("--questions", default=None, metavar="PATH",
+                        help="question set JSON (default: questions.json)")
     p_eval.add_argument("--no-translation", action="store_true", default=False,
                         dest="no_translation",
                         help="disable query translation (baseline comparison)")

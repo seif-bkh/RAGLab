@@ -97,7 +97,7 @@ secret — the workflow fails with a clear message naming the expected secret.
 | file | purpose |
 |---|---|
 | `config.py` | all knobs: chunk size, overlap, provider, model, paths |
-| `loader.py` | read `.txt`/`.md`/`.pdf` from `data/`, clean, normalize Arabic, detect language |
+| `loader.py` | read `.txt`/`.md`/`.pdf`/`.docx` from `data/` (or `--data-dir`), clean, normalize Arabic, detect language |
 | `chunker.py` | headings → paragraphs → size; prepends heading; table rows → sentences |
 | `embedder.py` | provider interface + caching; batching, retries, sanity check |
 | `store.py` | local ChromaDB (cosine), BM25 fallback, RRF merge |
@@ -108,13 +108,26 @@ secret — the workflow fails with a clear message naming the expected secret.
 ### Cleaning (`loader.py`)
 
 - `.txt`/`.md` read as UTF-8; `.pdf` extracted with `pypdf` per page
-  (each page keeps a `[page N]` marker so extraction is inspectable).
+  (each page keeps a `[page N]` marker so extraction is inspectable);
+  `.docx` extracted with the **standard library only** (zip + XML walk of
+  `word/document.xml`: paragraphs and tables as `| cell | cell |` rows) —
+  no new dependency.
+- `inspect` / `ingest` accept `--data-dir PATH` (repeatable) to load extra
+  corpora (e.g. `--data-dir ../docs` for the real documents next to the
+  repo); `evaluate` accepts `--questions PATH` for another question set.
+- **Arabic PDF caveat:** some official Arabic PDFs are stored in visual
+  order and with presentation-form glyphs. NFKC (first step of
+  `normalize_arabic`) maps the glyphs to base letters; whole-line visual
+  reordering cannot be fixed without an RTL pass, so some paragraphs of such
+  PDFs stay word-order-jumbled (`inspect` shows the extracted text so you
+  can see it). DOCX is unaffected.
 - Whitespace normalized: CRLF → LF, non-breaking spaces → spaces, paragraph
   reflow (no glued line breaks inside paragraphs), exactly one blank line
   between blocks. Headings (`#`), table rows (`|`), lists and rules keep
   their own lines.
-- Light **Arabic normalization**: unify `أ إ آ ٱ` → `ا`, remove tatweel
-  `ـ`, strip diacritics. **No translation, no stemming.**
+- Light **Arabic normalization**: NFKC (presentation forms → base letters,
+  e.g. Arabic PDFs), unify `أ إ آ ٱ` → `ا`, remove tatweel `ـ`, strip
+  diacritics. **No translation, no stemming.**
 - Language detected by a tiny stopword heuristic (`fr` / `ar` / `en` /
   `unknown`) and attached as metadata.
 
@@ -315,8 +328,10 @@ raglab/
 ├── evaluate.py           # metrics + results JSON
 ├── translate.py          # query translation (cross-lingual experiment)
 ├── answer.py             # STUB (no generation)
-├── questions.json        # 17 evaluation cases
+├── questions.json        # 17 evaluation cases (fictional Atlas sheets)
+├── questions_real.json   # 16 cases for the REAL docs/ corpus (Arabic)
 ├── data/                 # FICTIONAL sample documents (FR + AR)
+├── ../docs/              # REAL documents (BCT circular, law 2016-48, guides)
 ├── chroma_db/            # local ChromaDB (gitignored, generated)
 ├── results/              # evaluation runs (gitignored, generated)
 ├── embeddings_cache.json # embedding cache (gitignored, generated)
