@@ -110,7 +110,7 @@ def validate_and_split(families, source_units, plan):
     return public, private
 
 
-def audit_absence(families, units):
+def audit_absence(families, units, *, reject=True):
     negatives = [f for f in families if f['category'] in {'out_of_scope','insufficient_information'}]
     client = CheckpointClient('absence_audit', call_limit=20)
     reports = []
@@ -138,13 +138,24 @@ def audit_absence(families, units):
         write_jsonl(OUTPUT/'dataset/reference_absence_audit.jsonl', reports)
         client.check_pause()
     bad = [r for r in reports if r['decision'] != 'abstention_justified']
-    if bad:
+    if bad and reject:
         raise ValueError('Negative reference ambiguity must be resolved before candidate testing: ' + str(bad[:10]))
     return reports
 
 
 def compile_dataset():
     plan = read_json(PLAN_PATH)
+    frozen_path = OUTPUT/'dataset/manifest.json'
+    if frozen_path.exists():
+        existing=read_json(frozen_path)
+        if existing.get('status')=='frozen':
+            if existing['version'] != plan['version']:
+                raise ValueError('Use a separate directory for a new dataset version')
+            for group,directory in [('public_files','public'),('reference_files','references')]:
+                for name,meta in existing[group].items():
+                    if fingerprint(read_jsonl(OUTPUT/'dataset'/directory/name)) != meta['fingerprint']:
+                        raise ValueError('Frozen question/reference file changed: '+name)
+            return existing
     sources = read_json(OUTPUT/'sources/manifest.json')
     if sources['status'] != 'ready_for_reference_authoring':
         raise ValueError('Original-source audit is not complete')
@@ -160,7 +171,20 @@ def compile_dataset():
         base.extend(read_jsonl(root/'families.jsonl'))
     if len(base) != 900 or len({r['id'] for r in base}) != 900:
         raise ValueError('Expected 900 audited base families')
-    audit_absence(base, units)
+    from hard_harness.repair import duplicate_ids, repair_before_freeze
+    duplicates=duplicate_ids(base)
+    if duplicates:
+        base,_=repair_before_freeze(base,units,{identifier:'Exact question duplicate of '+', '.join(ids)
+                                   for identifier,ids in duplicates.items()},purpose='duplicate')
+    for review_round in range(2):
+        absence=audit_absence(base,units,reject=False)
+        problems={r['id']:'The full-corpus negative/reference audit found: '+str(r) for r in absence
+                  if r['decision']!='abstention_justified'}
+        if not problems:
+            break
+        base,_=repair_before_freeze(base,units,problems,purpose=f'negative-{review_round+1}')
+    else:
+        audit_absence(base,units,reject=True)
     families = base + make_adversarial(base)
     public, private = validate_and_split(families, units, plan)
     out = OUTPUT/'dataset'

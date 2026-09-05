@@ -24,6 +24,8 @@ jobs:
       sources_run: ${{ steps.plan.outputs.sources_run }}
       dataset_run: ${{ steps.plan.outputs.dataset_run }}
       resume_run: ${{ steps.plan.outputs.resume_run }}
+      authors_run: ${{ steps.plan.outputs.authors_run }}
+      predictions_run: ${{ steps.plan.outputs.predictions_run }}
       parallelism: ${{ steps.plan.outputs.parallelism }}
       candidate_key_secret: ${{ steps.plan.outputs.candidate_key_secret }}
       candidate_parallelism: ${{ steps.plan.outputs.candidate_parallelism }}
@@ -37,7 +39,7 @@ jobs:
           python - <<'PY'
           import json, os
           p=json.load(open('raglab/benchmarks/hard_harness_plan.json'))
-          assert p['phase'] in {'sources','author','evaluate'}
+          assert p['phase'] in {'sources','author','compile','evaluate','grade'}
           if p['llm']['provider']=='xkiro':
               assert p['llm']['model']=='qwen/qwen3.8-max:free'
               assert p['llm']['credential_secret'] in {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'}
@@ -58,7 +60,7 @@ jobs:
           assert candidate['credential_secret'] in {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'}
           fields={'phase':p['phase'],'key_secret':key_secret,'parallelism':'1' if p['llm']['provider']=='google' else '2',
                   'candidate_key_secret':candidate['credential_secret'],'candidate_parallelism':'2'}
-          for key in ('sources_run','dataset_run','resume_run'):
+          for key in ('sources_run','dataset_run','resume_run','authors_run','predictions_run'):
               value=str(p.get(key,'')); assert not value or value.isdigit(); fields[key]=value
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:
               for k,v in fields.items(): f.write(f'{k}={v}\n')
@@ -183,6 +185,7 @@ jobs:
           if-no-files-found: warn
 
   compile:
+    if: always() && needs.plan.result == 'success' && ((needs.plan.outputs.phase == 'author' && needs.author.result == 'success') || needs.plan.outputs.phase == 'compile')
     needs: [plan, author]
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -195,11 +198,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ needs.plan.outputs.sources_run }}
+          AUTHORS_RUN: ${{ needs.plan.outputs.authors_run || github.run_id }}
         run: |
           gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name hard-harness-sources --dir raglab/results/hard_harness
           for SHARD in $(seq 0 8); do
             DIR=$(printf 'raglab/results/hard_harness/author_%02d' "$SHARD")
-            gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "hard-harness-author-$SHARD" --dir "$DIR"
+            gh run download "$AUTHORS_RUN" --repo "$GITHUB_REPOSITORY" --name "hard-harness-author-$SHARD" --dir "$DIR"
           done
       - uses: actions/cache/restore@v4
         with:
@@ -342,6 +346,7 @@ jobs:
           if-no-files-found: warn
 
   grade:
+    if: always() && needs.plan.result == 'success' && ((needs.plan.outputs.phase == 'evaluate' && needs.answer.result == 'success') || needs.plan.outputs.phase == 'grade')
     needs: [plan, answer]
     name: Compare against frozen separate reference answers
     runs-on: ubuntu-latest
@@ -355,11 +360,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DATASET_RUN: ${{ needs.plan.outputs.dataset_run }}
+          PREDICTIONS_RUN: ${{ needs.plan.outputs.predictions_run || github.run_id }}
         run: |
           gh run download "$DATASET_RUN" --repo "$GITHUB_REPOSITORY" --name hard-harness-answer-keys --dir raglab/results/hard_harness/dataset/references
           for SHARD in $(seq 0 29); do
             DIR=$(printf 'raglab/results/hard_harness/predictions_%02d' "$SHARD")
-            gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "hard-harness-predictions-$SHARD" --dir "$DIR"
+            gh run download "$PREDICTIONS_RUN" --repo "$GITHUB_REPOSITORY" --name "hard-harness-predictions-$SHARD" --dir "$DIR"
           done
       - uses: actions/cache/restore@v4
         with:

@@ -251,6 +251,24 @@ class DatasetIntegrity(unittest.TestCase):
             self.assertEqual(report['new_model_calls'],0)
             self.assertEqual([r['id'] for r in read_jsonl(out/'author_00/families.jsonl')],['hh0002','hh0003'])
 
+    def test_duplicate_detection_preserves_first_family_and_flags_later_ids(self):
+        from hard_harness.repair import duplicate_ids
+        first=self.family(1); second=self.family(2); third=self.family(3)
+        second['languages']['fr']['question']=first['languages']['fr']['question']
+        third['languages']['en']['question']=first['languages']['en']['question']
+        self.assertEqual(duplicate_ids([third,second,first]), {'hh0002':['hh0001'],'hh0003':['hh0001']})
+
+    def test_frozen_reference_repair_is_forbidden(self):
+        from unittest.mock import patch
+        import hard_harness.repair as repair
+        with tempfile.TemporaryDirectory() as temp:
+            out=Path(temp)
+            write_json(out/'dataset/manifest.json', {'status':'frozen'})
+            with patch.object(repair,'OUTPUT',out), patch.object(repair,'CheckpointClient') as client:
+                with self.assertRaisesRegex(ValueError,'Frozen'):
+                    repair.repair_before_freeze([],{}, {},purpose='duplicate')
+                client.assert_not_called()
+
     def test_three_thousand_public_questions_are_separate_from_keys(self):
         from hard_harness.dataset import make_adversarial, validate_and_split
         base = [self.family(i) for i in range(1,651)]
