@@ -69,10 +69,12 @@ was restored, and no generative call of any kind):
   their evidence, embeddings find the span 62.8% of the time and lexical finds it never.
   That is the cross-lingual claim this lab cares about, and it needed no answer model.
 - **The chunker, not the retriever, is the current ceiling:** only 5 of 230 audited source
-  units (2.2%) fit inside a single 220-token chunk, and 217 are split or absent, which is
-  why whole-span answer-readiness sits near 10% even though ranking is doing its job. The
-  answer prompt joins the top-k, so the report now also prints the rate at which every gold
-  span is present in the *assembled* context — the number that actually bounds an answerer.
+  units (2.2%) fit inside a single 220-token chunk, and 217 are split or absent. Handing
+  the answer prompt its joined top-5 lifts full-span availability only from 10.0% to
+  **12.2%** (lexical 2.7% → 3.2%), because a 450-character span needs *adjacent* chunks,
+  not merely five retrieved ones. That 12.2% is the honest ceiling on an answer model given
+  this corpus, and no answer-side measurement can exceed it for the strict requirement of
+  quoting the span; 37.3% of queries at least get most of the evidence.
 - A similarity threshold is not yet a good abstention rule on this corpus: the best
   threshold that wrongly rejects at most 5% of answerable queries catches only 24% of
   queries whose supporting document was deleted (AUC 0.68).
@@ -80,7 +82,10 @@ was restored, and no generative call of any kind):
   alone found evidence the lexical arm missed on 61 queries versus 8 the other way.
 
 `--chunk-tokens` / `--chunk-overlap` grade a chunking change against the same labels with
-zero model calls; locally 420-token chunks moved lexical answer-readiness 17.4% → 21.8%.
+zero model calls (locally, 420-token chunks moved lexical answer-readiness 17.4% → 21.8%).
+Run 34006036092 reports the pinned 220-token corpus beside 420 and 640, so a chunking
+decision can be made on measurements rather than intuition; the pinned setting is untouched
+by that job and a re-pin stays a separate, explicit change.
 
 ## LLM-free retrieval judgement (available now)
 
