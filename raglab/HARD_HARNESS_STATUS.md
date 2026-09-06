@@ -180,12 +180,34 @@ the gap is the label defect removed, not a better ranker. Arabic questions in th
 words with Arabic queries only; the English and French variants of the same families are the
 embedding arm's job, and that is the number worth reading out of CI.
 
-### Corrected sweep (findability judged on the document)
+### Authoritative 100-per-language sweep (run `0d2589f`, both arms, `cl100k_base`)
 
-Judge run `34024960494` failed on a `dict`/attribute bug in that change and was fixed in the
-following commit; the re-run of the same matrix is the authoritative 100-per-language number.
-The label pool is now chunk-independent — **313 of 469 accepted families (66.7%)** have gold text
-that exists in `docs/` as the runtime loader reads it, at every chunk size, so the three rows
-below score one identical 100x3 question set instead of 179 / 222 / 287 families. Locally
-(fallback estimator) the balanced sample reads 24.7% / 31.3% / 32.7% whole-span at 220 / 420 / 640
-with the lexical arm; CI with `cl100k_base` and both arms decides the chunking question.
+Findability is judged on the document as the loader returns it, so the pool is 313 of 469 families
+(66.7%) at every chunk size and all six rows score one identical 100 x 3 question set — which the
+earlier rows of this page do not, and why they are superseded.
+
+| chunks | arm | whole span in top-5 | joined top-5 | no chunk holds any of it | semantic-only queries | abstain AUC | recall@1 | MRR | ar / fr / en whole-span |
+|---:|---|---:|---:|---:|---|---:|---:|---:|---|
+| 220 (pinned) | lexical | 3.0% | 3.7% | 37.0% | 0.0% of 50 | 0.555 | 0.7% | 0.021 | 9 / 0 / 0 |
+| 220 (pinned) | **vector** | 11.3% | 15.7% | 37.0% | 44.0% of 50 | 0.711 | 3.0% | 0.071 | 12 / 11 / 11 |
+| 420 | lexical | 18.7% | 18.7% | 10.0% | 0.0% of 123 | 0.586 | 10.0% | 0.145 | 50 / 4 / 2 |
+| 420 | **vector** | 62.3% | 63.7% | 10.0% | 95.1% of 123 | 0.793 | 52.3% | 0.565 | 63 / 61 / 63 |
+| 640 | lexical | 26.7% | 26.7% | 0.0% | 0.0% of 162 | 0.591 | 18.0% | 0.234 | 72 / 5 / 3 |
+| 640 | **vector** | **82.3%** | 82.3% | 0.0% | **96.3%** of 162 | **0.798** | **68.3%** | **0.748** | 83 / 82 / 82 |
+
+Readings that matter for the freeze:
+
+- 37% of queries at the pinned 220-token chunking have **no chunk at all** containing any part of
+  their gold span: no ranker, embedding or otherwise, can return an intact citation, so
+  answer-ready is capped at 11.3% there. The pinned number is not a sampling accident.
+- At 640 the embedding arm hands the exact source span to the prompt for 82.3% of the 300
+  questions, has it at rank 1 for 68.3%, and never loses a whole span to a boundary. Abstain
+  separability is best there too (AUC 0.798), so the retrieval decision and the refusal decision
+  do not trade off against each other at that size.
+- Cross-lingual retrieval is carried entirely by the embeddings: the Arabic/French/English spread
+  is 1 point at 640 (83 / 82 / 82) where BM25 is 72 / 5 / 3, because the corpus is Arabic and a
+  lexical ranker has nothing to overlap with.
+- 156 of 469 accepted families remain unanswerable-by-construction — their gold text is not in
+  `docs/` as the runtime loads it — and are excluded from these six rows rather than counted as
+  retrieval misses. That is a labelling-path fix to make, not a ranking property to tune.
+
