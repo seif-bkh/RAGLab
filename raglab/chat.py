@@ -45,7 +45,37 @@ the reply ceiling rather than the prompt.
 """
 
 
-def chat_config(model=CHAT_MODEL, *, thinking=False, cache_path=None):
+def plan_chunking(path=None):
+    """The chunking the frozen plan pins (640/40) and why, falling back to config's 220/40.
+
+    The chat used to inherit the application default of 220-token chunks, which the authoritative
+    retrieval sweep measured at 11% whole-document recall against 82% at 640. A chat that cannot find
+    the paragraph it needs abstains confidently and looks like a corpus gap, so it reads the same pin
+    the benchmark reads. The source is printed on every start because 'which chunking' is the answer to
+    'why did retrieval miss'.
+    """
+    from pathlib import Path
+    plan_path = Path(path) if path else PROJECT_DIR / 'benchmarks' / 'hard_harness_plan.json'
+    try:
+        chunking = json.loads(plan_path.read_text()).get('chunking') or {}
+        size, overlap = int(chunking['chunk_size_tokens']), int(chunking['chunk_overlap_tokens'])
+        return size, overlap, f'pinned by {plan_path.name}'
+    except Exception:                                                # noqa: BLE001
+        return int(cfg.CHUNK_SIZE_TOKENS), int(cfg.CHUNK_OVERLAP_TOKENS), 'application default'
+
+
+def context_budget(top_k, chunk_size, overlap=0, floor=3000):
+    """Room for every retrieved excerpt, so the token budget never silently drops one.
+
+    build_sources skips a whole chunk rather than truncating it, which is right, but at 640-token
+    chunks a 3000-token ceiling drops the 5th hit: 'k=5' would quietly mean 4 excerpts. The chat sizes
+    the ceiling from k instead, and prints both numbers so the drop is visible if it ever still happens.
+    """
+    return max(int(floor), int(top_k) * (int(chunk_size) + int(overlap)))
+
+
+def chat_config(model=CHAT_MODEL, *, thinking=False, cache_path=None, chunk_size=None,
+                chunk_overlap=None, top_k=None):
     """The lab's settings with the chat's model and cache swapped in.
 
     A copy, deliberately: config.py is imported by `main.py answer` and by the harness, and it rejects
@@ -55,6 +85,15 @@ def chat_config(model=CHAT_MODEL, *, thinking=False, cache_path=None):
     local.ANSWER_MODEL = model
     local.ANSWER_PROVIDER = 'nvidia'
     local.ANSWER_PROMPT_VERSION = 'grounded-v2' if thinking else 'grounded-v1'
+    size, overlap, local.CHUNK_SOURCE = plan_chunking()
+    local.CHUNK_SIZE_TOKENS = int(chunk_size or size)
+    local.CHUNK_OVERLAP_TOKENS = int(chunk_overlap if chunk_overlap is not None else overlap)
+    local.ANSWER_TOP_K = int(top_k or local.ANSWER_TOP_K)
+    local.ANSWER_CONTEXT_TOKENS = context_budget(local.ANSWER_TOP_K, local.CHUNK_SIZE_TOKENS,
+                                                 local.CHUNK_OVERLAP_TOKENS)
+    # Its own collection: main.py's index is chunked and fingerprinted for the app's defaults, and two
+    # entry points sharing one collection just produce staleness arguments.
+    local.CHROMA_COLLECTION_NAME = 'raglab_chat'
     local.NVIDIA_CHAT_STREAM = False
     # Named to match the repo's existing ignore pattern (raglab/answers_cache*.json), so an
     # interactive session cannot leave a cache file for someone to commit by accident.
@@ -93,9 +132,16 @@ def pending_chunks(local):
 
 def open_collection(local, embedder, *, reset=False):
     """A live collection, built from the corpus only when the index is empty and --ingest allowed it."""
-    from store import get_collection, store_chunks
+    from store import ensure_fresh_chunks, get_collection, store_chunks
     collection = get_collection(local, reset=reset)
     if collection.count():
+        try:
+            ensure_fresh_chunks(collection, local)
+        except RuntimeError as exc:
+            # Chunk texts are immutable records: answering over a collection built with other settings
+            # returns results that are quietly wrong, so this stops rather than degrading.
+            raise ValueError(f'{safe_error(exc)} — rebuild it for the chat with: '
+                             f'./raglab/chat.sh --reset --ingest') from None
         return collection
     if not local.CHAT_ALLOW_INGEST:
         raise ValueError(f'the index is empty. Re-run with --ingest to embed '
@@ -160,7 +206,7 @@ class ReasoningSwitch:
 
 
 def ask(local, embedder, collection, generator, question, *, top_k=None, neighbor_radius=None,
-        use_cache=True):
+        use_cache=True, mode='vector', language=None, lang_filter=None, corpus_langs=None):
     """One turn: retrieve, optionally widen the excerpts, then answer with citations or abstain."""
     from answer import local_private_refusal
     from evaluate import prepare_query_text
@@ -169,19 +215,24 @@ def ask(local, embedder, collection, generator, question, *, top_k=None, neighbo
     question = ' '.join(str(question).split())
     if not question:
         raise ValueError('empty question')
-    language = detect_language(question)
+    language = language or detect_language(question)
     guarded = local_private_refusal(local, question, language)
     if guarded is not None:                       # refused locally: no retrieval and no model call
-        return {**guarded, 'question': question, 'retrieved': 0}
-    hits, variants = retrieve(cfg, embedder, collection, prepare_query_text(question),
+        return {**guarded, 'question': question, 'retrieved': 0, 'context_tokens': 0}
+    hits, variants = retrieve(local, embedder, collection, prepare_query_text(question),
                               language=language, translator=None,
                               top_k=top_k or local.ANSWER_TOP_K,
-                              variant_strategy=local.QUERY_VARIANT_STRATEGY)
+                              variant_strategy=local.QUERY_VARIANT_STRATEGY, mode=mode,
+                              lang_filter=lang_filter)
     hits = expand_neighbors(collection, hits, radius=local.ANSWER_NEIGHBOR_RADIUS
                             if neighbor_radius is None else neighbor_radius)
     result = generator.answer(question, hits, language, use_cache=use_cache)
+    kept = len(result.get('sources') or [])
     return {**result, 'question': question, 'retrieved': len(hits), 'query_variants': variants,
-            'language': language}
+            'language': language, 'retrieval_mode': mode,
+            'dropped_for_budget': max(0, len(hits) - kept), 'context_tokens': local.ANSWER_CONTEXT_TOKENS,
+            'corpus_languages': sorted(corpus_langs or []),
+            'question_language_mismatch': bool(corpus_langs) and language not in set(corpus_langs)}
 
 
 def format_turn(result, *, show_context=False):
@@ -199,6 +250,55 @@ def format_turn(result, *, show_context=False):
     rejected = result.get('raw_preview') or (result.get('error') if result.get('status') == 'error' else '')
     if rejected:
         lines.append(f"\n[model said, not accepted] {rejected}")
+    if result.get('status') != 'answered':
+        lines.append(diagnosis(result, show_context=show_context))
+    return '\n'.join(lines)
+
+
+def diagnosis(result, *, show_context=False):
+    """What a refusal actually means here, with the excerpts the model was given.
+
+    'I cannot answer this from the supplied documents' is true whether the corpus is silent, retrieval
+    missed, or the question is out of bounds - and those need different actions. So the print names the
+    reason it has evidence for, shows the excerpts that were supplied, and says what would change.
+    """
+    lines = []
+    reason = result.get('reason')
+    retrieved = result.get('retrieved', 0)
+    if reason == 'private_or_live_request':
+        return '\n'.join(['[chat] refused before retrieval and before any model call: the question asks '
+                           'for personal or live information this lab cannot have. Nothing to do with '
+                           'retrieval or chunking.'])
+    if reason == 'no_context':
+        lines.append('[chat] nothing was retrieved, so nothing was read. Either the index is empty '
+                     '(./raglab/chat.sh --ingest) or --lang excludes every chunk.')
+    elif reason == 'insufficient_evidence':
+        lines.append(f'[chat] the model read {retrieved} excerpt(s) and abstained, which is the contract '
+                     'working: it is not allowed to fill a gap from background knowledge. Check the '
+                     'excerpts below - if the answer is in the corpus, retrieval missed it.')
+    elif reason == 'invalid_output':
+        lines.append('[chat] the reply was not an accepted claim set (see above). This is the failure '
+                     'mode the benchmark also counts: a right answer with a paraphrased quote is '
+                     'rejected. Try a larger -k, or ask for one fact at a time.')
+    else:
+        lines.append(f'[chat] status={result.get("status")} reason={reason}')
+    sources = result.get('sources') or []
+    if sources:
+        lines.append(f'\n  supplied to the model ({len(sources)} of {retrieved} hits fit the '
+                     f'{result.get("context_tokens", 0)}-token ceiling):')
+        for source in sources[:8 if not show_context else 20]:
+            preview = ' '.join(source['text'].split())[:200]
+            lines.append(f"   [{source['source_id']}] {source['document']} — {source.get('heading') or ''}"
+                         f"\n       {preview}")
+    hints = []
+    if result.get('question_language_mismatch'):
+        hints.append('the question is in English while this corpus is Arabic-dominant, and query '
+                     'translation is retired in this pipeline: re-ask in Arabic or French, since '
+                     'cross-lingual embedding alone is a weak signal on formal banking prose')
+    if retrieved and retrieved <= 5:
+        hints.append('try a larger -k (e.g. -k 12) so a longer excerpt window competes')
+    if hints:
+        lines.append('[chat] would probably change this: ' + '; '.join(hints) + '.')
     return '\n'.join(lines)
 
 
@@ -243,6 +343,35 @@ def read_questions(lines, settings):
                 continue
             print(f'[chat] retrieving {settings["top_k"]} excerpt(s) per question')
             continue
+        if line.startswith(':lang'):
+            try:
+                value = line.split(None, 1)[1].strip().lower()
+            except IndexError:
+                print('[chat] usage: :lang ar   (ar, fr, en, or auto)')
+                continue
+            if value == 'auto':
+                settings['language'] = None
+            elif value in {'ar', 'fr', 'en'}:
+                settings['language'] = value
+            else:
+                print('[chat] :lang takes ar, fr, en or auto')
+                continue
+            print('[chat] ' + (f'claims will be written in {value}; detection is off' if value != 'auto'
+                               else 'language auto-detected per question'))
+            continue
+        if line.startswith(':mode'):
+            try:
+                value = line.split(None, 1)[1].strip().lower()
+            except IndexError:
+                print('[chat] usage: :mode rrf   (vector, rrf or blend)')
+                continue
+            if value not in {'vector', 'rrf', 'blend'}:
+                print('[chat] :mode takes vector, rrf or blend')
+                continue
+            settings['mode'] = value
+            print(f'[chat] retrieval mode {value}' + ('' if value == 'vector' else
+                  ' — note: only the vector arm is measured in this repo, hybrid is unmeasured here'))
+            continue
         if line.startswith(':log'):
             try:
                 settings['log'] = Path(line.split(None, 1)[1].strip()).expanduser()
@@ -277,15 +406,29 @@ def check(model=CHAT_MODEL):
     print(f"- chat model: {model} at {NVIDIA_CHAT_BASE_URL}/chat/completions — thinking off, so "
           f"temperature 0 and {local.ANSWER_MAX_TOKENS if hasattr(local, 'ANSWER_MAX_TOKENS') else 4096}"
           ' max_tokens; answer cache ' + Path(local.ANSWER_CACHE_PATH).name)
-    print(f"- chunking: {local.CHUNK_SIZE_TOKENS} tokens with {local.CHUNK_OVERLAP_TOKENS} overlap — the "
-          'application default, NOT the harness pin of 640/40, so retrieval quality is not comparable')
+    print(f"- chunking: {local.CHUNK_SIZE_TOKENS}/{local.CHUNK_OVERLAP_TOKENS} tokens ({local.CHUNK_SOURCE})"
+          ' — the corpus is re-indexed when this changes, so --check reports which one the index on disk '
+          'was built with')
     status = 0 if key else 1
     try:
         dirs = data_dirs(None)
         print(f'- corpus: {", ".join(path.name for path in dirs)}')
-        from store import get_collection
-        count = get_collection(local, reset=False).count()
+        from store import chunk_fp, collection_languages, get_collection
+        collection = get_collection(local, reset=False)
+        count = collection.count()
         print(f"- index: {count} chunk(s) in {Path(local.CHROMA_DIR).name}/{local.CHROMA_COLLECTION_NAME}")
+        if count:
+            metas = (collection.get(include=['metadatas'], limit=1).get('metadatas') or [{}])
+            stored = (metas[0] or {}).get('chunk_fp') or 'unfingerprinted'
+            print(f"- index chunking: stored {str(stored)[:12]} vs current "
+                  f"{chunk_fp(local)[:12]} — "
+                  + ('match' if stored == chunk_fp(local) else 'MISMATCH, rebuild with --reset --ingest'))
+            langs = collection_languages(collection)
+            print(f'- languages in the index: {", ".join(langs) or "unknown"} — an English question '
+                  'against an Arabic-dominant corpus relies on cross-lingual embedding alone '
+                  '(query translation is retired here)')
+            if stored != chunk_fp(local):
+                status = 1
         if not count:
             # An empty index is reported as not-ready on purpose: `chat.sh` opens the chat only when the
             # check passes, so the failure lands here with the fix named, not on the first question.
@@ -307,6 +450,16 @@ def main(argv=None):
                         help=f'excerpts per question (default {cfg.ANSWER_TOP_K})')
     parser.add_argument('--neighbor-radius', type=int, choices=[0, 1, 2], default=0, dest='radius',
                         help='widen each hit with adjacent chunks (more context, more tokens)')
+    parser.add_argument('--mode', choices=['vector', 'rrf', 'blend'], default='vector',
+                        help='retrieval fusion; only vector is measured in this repo')
+    parser.add_argument('--lang-filter', choices=['en', 'fr', 'ar'], default=None, dest='lang_filter',
+                        help='restrict retrieval to chunks of one language')
+    parser.add_argument('--query-lang', choices=['en', 'fr', 'ar'], default=None, dest='query_lang',
+                        help='write the claims in this language instead of detecting it')
+    parser.add_argument('--chunk-tokens', type=int, default=None, dest='chunk_tokens',
+                        help='chunk size for --ingest (default: the plan pin, see --check)')
+    parser.add_argument('--chunk-overlap', type=int, default=None, dest='chunk_overlap',
+                        help='chunk overlap for --ingest')
     parser.add_argument('--thinking', action='store_true',
                         help="turn on Nemotron's reasoning mode; the reply ceiling rises to fit it")
     parser.add_argument('--ingest', action='store_true', help='embed the corpus first if the index is empty')
@@ -332,7 +485,8 @@ def main(argv=None):
     if args.check:
         return check(args.model)
 
-    local = chat_config(args.model, thinking=args.thinking)
+    local = chat_config(args.model, thinking=args.thinking, chunk_size=args.chunk_tokens,
+                        chunk_overlap=args.chunk_overlap, top_k=max(1, min(20, args.top_k)))
     local.CHAT_DATA_DIRS = data_dirs(args.data_dirs)
     local.CHAT_ALLOW_INGEST = args.ingest or args.reset
     local.ANSWER_NEIGHBOR_RADIUS = args.radius
@@ -348,7 +502,9 @@ def main(argv=None):
     from embedder import build_embedder
     embedder = build_embedder(cfg)
     print(f'[chat] embeddings {embedder.provider_name}/{embedder.model} | chat {local.ANSWER_MODEL} | '
-          f'{local.CHUNK_SIZE_TOKENS}-token chunks | index {Path(local.CHROMA_DIR).name}')
+          f'chunks {local.CHUNK_SIZE_TOKENS}/{local.CHUNK_OVERLAP_TOKENS} ({local.CHUNK_SOURCE}) | '
+          f'index {Path(local.CHROMA_DIR).name}/{local.CHROMA_COLLECTION_NAME} | '
+          f'k={local.ANSWER_TOP_K} in {local.ANSWER_CONTEXT_TOKENS} tokens')
     collection = open_collection(local, embedder, reset=args.reset)
     generator = build_generator(local)
     if args.print_prompt:
@@ -359,14 +515,20 @@ def main(argv=None):
         print(json.dumps(answer_messages(question, 'en', demo, local.ANSWER_PROMPT_VERSION),
                          ensure_ascii=False, indent=2))
 
+    from store import collection_languages
     settings = {'top_k': local.ANSWER_TOP_K, 'show_context': args.show_context,
                 'log': Path(args.log).expanduser() if args.log else None, 'model': args.model,
                 'thinking': args.thinking, 'chunking': local.CHUNK_SIZE_TOKENS,
-                'overlap': local.CHUNK_OVERLAP_TOKENS}
+                'overlap': local.CHUNK_OVERLAP_TOKENS, 'mode': args.mode,
+                'language': args.query_lang, 'neighbor_radius': args.radius,
+                'corpus_languages': collection_languages(collection)}
 
     def one_turn(question):
         result = ask(local, embedder, collection, generator, question, top_k=settings['top_k'],
-                     neighbor_radius=args.radius, use_cache=not args.no_cache)
+                     neighbor_radius=settings.get('neighbor_radius', args.radius),
+                     use_cache=not args.no_cache, mode=settings['mode'],
+                     language=settings.get('language'), lang_filter=args.lang_filter,
+                     corpus_langs=settings.get('corpus_languages'))
         log_turn(settings['log'], result)
         return result
 

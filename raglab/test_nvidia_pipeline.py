@@ -781,6 +781,10 @@ class MeasurementReports(unittest.TestCase):
             list(answer_parts({'label': 'dev_model'}, [{'id': 'q1', 'answer': 'ع' * 40000}]))
 
 
+PROJECT = Path(__file__).resolve().parent
+cfg_CHUNK = int(os.environ.get('CHUNK_SIZE_TOKENS', '220'))
+
+
 class ChatEntry(unittest.TestCase):
     """The conversational path may change the chat model; it may not change what the benchmark
     believes, may not reach a provider for a question it must refuse locally, and may not print a key.
@@ -882,7 +886,12 @@ class ChatEntry(unittest.TestCase):
             def count(self):
                 return self._count
 
-        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi_SECRETVALUE99'}):
+            def get(self, include=None, limit=None):
+                return {'metadatas': [{'chunk_fp': 'fp-current'}] if self._count else []}
+
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi_SECRETVALUE99'}), \
+             patch('store.chunk_fp', return_value='fp-current'), \
+             patch('store.collection_languages', return_value=['ar', 'fr']):
             with patch('store.get_collection', return_value=Collection(256)):
                 buffer = io.StringIO()
                 with contextlib.redirect_stdout(buffer):
@@ -913,6 +922,101 @@ class ChatEntry(unittest.TestCase):
              contextlib.redirect_stdout(buffer):
             self.chat.check()
         self.assertIn('--ingest', buffer.getvalue())
+
+    def test_the_chat_indexes_at_the_pinned_chunking_not_the_app_default(self):
+        import chat
+        size, overlap, source = chat.plan_chunking(PROJECT / 'benchmarks' / 'hard_harness_plan.json')
+        self.assertEqual((size, overlap), (640, 40))          # the measured pin, not 220
+        self.assertIn('hard_harness_plan.json', source)
+        missing = chat.plan_chunking(PROJECT / 'benchmarks' / 'nope.json')
+        self.assertEqual(missing[0], cfg_CHUNK)               # documented fallback
+        self.assertIn('default', missing[2])
+        local = chat.chat_config()
+        self.assertEqual((local.CHUNK_SIZE_TOKENS, local.CHUNK_OVERLAP_TOKENS), (640, 40))
+        # A separate collection, so the app's index and the chat's index cannot argue over one store.
+        self.assertEqual(local.CHROMA_COLLECTION_NAME, 'raglab_chat')
+
+    def test_the_context_ceiling_sizes_from_k_so_a_hit_is_not_quietly_dropped(self):
+        import chat
+        self.assertEqual(chat.context_budget(5, 640, 40), 5 * 680)
+        self.assertEqual(chat.context_budget(1, 220, 40), 3000)   # never below the app floor
+        local = chat.chat_config(top_k=5)
+        self.assertGreaterEqual(local.ANSWER_CONTEXT_TOKENS, 5 * (640 + 40))
+
+    def test_a_stale_index_stops_the_chat_with_the_rebuild_command(self):
+        class Collection:
+            def count(self):
+                return 127
+
+            def get(self, include=None, limit=None):
+                return {'metadatas': [{'chunk_fp': 'built-with-220'}]}
+
+        local = self.chat.chat_config(top_k=5)
+        local.CHAT_DATA_DIRS, local.CHAT_ALLOW_INGEST = [], True
+        with patch('store.get_collection', return_value=Collection()), \
+             patch('store.ensure_fresh_chunks',
+                   side_effect=RuntimeError('[store] collection is STALE')):
+            with self.assertRaises(ValueError) as raised:
+                self.chat.open_collection(local, SimpleNamespace(batch_size=16))
+        self.assertIn('--reset --ingest', str(raised.exception))
+
+    def test_retrieval_is_checked_against_the_chats_settings_not_the_modules(self):
+        # retrieve() enforces the chunking fingerprint from the cfg it is handed: passing the module
+        # config here let a 220-token index pass a 640-token chat's own settings silently.
+        seen = {}
+
+        def fake_retrieve(cfg_arg, embedder, collection, text, **kwargs):
+            seen['cfg'] = cfg_arg
+            seen.update(kwargs)
+            return [], [{'label': 'en(original)', 'lang': 'en', 'text': text}]
+
+        class Generator:
+            def answer(self, question, hits, language=None, use_cache=True):
+                return {'status': 'refused', 'reason': 'no_context', 'answer': 'no', 'sources': [],
+                        'model': language and 'm'}
+
+        local = self.chat.chat_config(top_k=9)
+        with patch('retrieval.retrieve', side_effect=fake_retrieve), \
+             patch('retrieval.expand_neighbors', side_effect=lambda c, h, radius=0: h):
+            self.chat.ask(local, None, None, Generator(), 'what is the minimum capital?',
+                          mode='rrf', language='fr', lang_filter='ar')
+        self.assertIs(seen['cfg'], local)
+        self.assertEqual(seen['top_k'], 9)
+        self.assertEqual((seen['mode'], seen['lang_filter'], seen['language']), ('rrf', 'ar', 'fr'))
+
+    def test_a_refusal_shows_what_was_read_and_which_failure_it_was(self):
+        result = {'status': 'refused', 'reason': 'insufficient_evidence', 'answer': 'cannot answer',
+                  'question': 'can i buy a pc', 'retrieved': 5, 'context_tokens': 3400,
+                  'question_language_mismatch': True,
+                  'sources': [{'source_id': 'S1', 'document': 'Guide.docx', 'chunk_id': 'a',
+                               'heading': 'المرابحة', 'text': 'تمويل شراء سيارة جديدة ' + 'x' * 400}]}
+        text = self.chat.format_turn(result)
+        self.assertIn('abstained, which is the contract', text)
+        self.assertIn('Guide.docx', text)                        # the excerpt the model was handed
+        self.assertIn('cross-lingual', text)                      # the language mismatch, named
+        self.assertIn('-k 12', text)
+        self.assertNotIn('x' * 250, text)                          # previewed, not dumped
+        other = self.chat.format_turn({**result, 'reason': 'no_context', 'retrieved': 0, 'sources': []})
+        self.assertIn('index is empty', other)
+        guard = self.chat.format_turn({**result, 'reason': 'private_or_live_request', 'sources': []})
+        self.assertIn('before any model call', guard)
+
+    def test_the_repl_understands_language_and_mode_commands(self):
+        import contextlib
+        settings = {'top_k': 5, 'show_context': False, 'log': None, 'model': 'm', 'thinking': False,
+                    'chunking': 640, 'overlap': 40, 'mode': 'vector', 'language': None}
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            asked = list(self.chat.read_questions([':lang ar', ':mode', ':mode hybrid', ':mode rrf',
+                                                   ':lang xx', 'ما هو'], settings))
+        self.assertEqual(asked, ['ما هو'])
+        self.assertEqual((settings['language'], settings['mode']), ('ar', 'rrf'))
+        printed = buffer.getvalue()
+        self.assertIn('unmeasured', printed)          # an unmeasured arm is allowed but labelled
+        self.assertIn('usage: :mode', printed)
+        self.assertIn(':mode takes vector, rrf or blend', printed)
+        self.assertIn(':lang takes ar, fr, en or auto', printed)
+        self.assertNotIn('xx\n> ', printed)           # a bad value is never asked as a question
 
     def test_one_offline_turn_satisfies_the_citation_contract_on_this_model(self):
         from answer import AnswerGenerator

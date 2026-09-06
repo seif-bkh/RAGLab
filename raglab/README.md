@@ -84,10 +84,21 @@ the answer arrives as claims carrying quotes that must really appear in the retr
 invented number comes back as `refused/invalid_output` with the model's raw reply shown rather than as
 fluent prose.
 
+A refusal is printed with the excerpts the model was handed, so it is diagnosable rather than
+mysterious. `I cannot answer this from the supplied documents` is true whether the corpus is silent,
+retrieval missed, or the question asks for personal or live data — so the chat says which of those it
+has evidence for, previews the excerpts it supplied, and names what would likely change the outcome. Two
+settings follow from measurements in this repo: the chat indexes at the **pinned 640/40** chunking
+(read from `benchmarks/hard_harness_plan.json`, `--chunk-tokens` overrides) because the retrieval sweep
+measured 82% whole-document recall there against 11% at the application's 220 default; and the context
+ceiling is sized from `-k` (5 × 680 tokens), because `build_sources` drops an entire excerpt rather than
+truncating it, so a fixed 3000-token ceiling would quietly answer from 4 of 5 hits. Retrieval runs in
+its own collection (`raglab_chat`) so the app's index and the chat's never argue over one store.
+
 Two labels matter. This is **not** the supported answerer above: `main.py answer` and the benchmark keep
 xKiro Qwen and reject any substitution, so no score in this repo belongs to the chat model. And the chat
 indexes at the application default chunking (220/40), not the harness pin (640/40), so its retrieval
-quality is a different measurement from the frozen sweep. In `chat` commands: `:k 8`, `:show`,
+quality is a different measurement from the frozen sweep. In `chat` commands: `:k 8`, `:show`, `:lang ar|fr|en|auto`, `:mode vector|rrf|blend`,
 `:log chat_turns.jsonl`, `:context`, `:quit`. `--data-dir PATH` replaces the default corpus outright.
 
 ## Grounding, free pricing and credentials
