@@ -432,8 +432,8 @@ def check(model=CHAT_MODEL):
         if not count:
             # An empty index is reported as not-ready on purpose: `chat.sh` opens the chat only when the
             # check passes, so the failure lands here with the fix named, not on the first question.
-            print('- not ready: nothing to retrieve from. Build it once (NVIDIA embedding calls, cached '
-                  'afterwards): ./raglab/chat.sh --ingest --check')
+            print('- not ready: nothing to retrieve from. Build it once, then ask:  ./raglab/chat.sh '
+                  '--ingest   (embedding calls now, cached afterwards; add --check to see the result)')
             status = 1
     except Exception as exc:                                             # noqa: BLE001
         print(f'- corpus/index: {safe_error(exc)}')
@@ -482,8 +482,12 @@ def main(argv=None):
     if not args.model.startswith('nvidia/'):
         raise ValueError(f'{args.model!r} is not on the NVIDIA endpoint this command talks to; the '
                          'benchmark answer path uses xKiro Qwen and will not accept this model either')
-    if args.check:
+    if args.check and not (args.ingest or args.reset):
         return check(args.model)
+    # --check together with --ingest means 'build the index, then report'. Without this, the exact
+    # command the readiness report suggested was the one that reported and exited: a loop. A check
+    # must never send someone to a command that cannot fix what it just reported.
+    build_only = args.check
 
     local = chat_config(args.model, thinking=args.thinking, chunk_size=args.chunk_tokens,
                         chunk_overlap=args.chunk_overlap, top_k=max(1, min(20, args.top_k)))
@@ -506,6 +510,11 @@ def main(argv=None):
           f'index {Path(local.CHROMA_DIR).name}/{local.CHROMA_COLLECTION_NAME} | '
           f'k={local.ANSWER_TOP_K} in {local.ANSWER_CONTEXT_TOKENS} tokens')
     collection = open_collection(local, embedder, reset=args.reset)
+    if build_only:
+        print()
+        code = check(args.model)
+        print('[chat] index is built. Ask something:  ./raglab/chat.sh')
+        return code
     generator = build_generator(local)
     if args.print_prompt:
         from answer import answer_messages
@@ -542,6 +551,8 @@ def main(argv=None):
         return 0 if result.get('validation_ok', True) else 2
 
     print('Ask about the documents. Ctrl-D or :quit to leave. :help for commands.')
+    print(f"[chat] {collection.count()} chunk(s) | k={settings['top_k']} | mode={settings['mode']} | "
+          f"languages in the index: {', '.join(settings.get('corpus_languages') or ['?'])}")
     stream = sys.stdin if not sys.stdin.isatty() else _prompted_lines()
     for question in read_questions(stream, settings):
         try:

@@ -1018,6 +1018,61 @@ class ChatEntry(unittest.TestCase):
         self.assertIn(':lang takes ar, fr, en or auto', printed)
         self.assertNotIn('xx\n> ', printed)           # a bad value is never asked as a question
 
+    def test_check_reports_and_ingest_builds_and_together_do_both(self):
+        # The reported loop: --check printed "run ./raglab/chat.sh --ingest --check", and that command
+        # reported and exited before building anything. Check-with-ingest now builds, then reports.
+        calls = []
+
+        class FakeCollection:
+            def __init__(self, count):
+                self._count = count
+
+            def count(self):
+                return self._count
+
+        class Embedder:
+            provider_name, model, batch_size, api_calls, cache_hits = 'nvidia', 'emb', 16, 3, 0
+
+            def embed_texts(self, texts):
+                return [[0.0] * 4 for _ in texts]
+
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi-x'}), \
+             patch('embedder.build_embedder', return_value=Embedder()), \
+             patch('chat.open_collection', side_effect=lambda *a, **k: calls.append(k) or FakeCollection(127)), \
+             patch('chat.build_generator', side_effect=AssertionError('must not build a client')), \
+             patch('chat.check', return_value=0) as reported, \
+             patch('store.collection_languages', return_value=['ar', 'fr', 'en']):
+            self.assertEqual(self.chat.main(['--check', '--ingest']), 0)
+        self.assertEqual(len(calls), 1)                    # it built
+        # The report is printed once, after the build: the state a user acts on has to be the state the
+        # index is actually in, and open_collection already printed the cost before embedding.
+        self.assertEqual(reported.call_count, 1)
+
+        calls.clear()
+        with patch('chat.check', return_value=1) as reported:
+            self.assertEqual(self.chat.main(['--check']), 1)
+        self.assertEqual(calls, [])
+        self.assertEqual(reported.call_count, 1)           # report only: no index, no embedding
+
+    def test_the_not_ready_line_offers_a_command_that_really_builds(self):
+        import contextlib
+
+        class Collection:
+            def count(self):
+                return 0
+
+            def get(self, include=None, limit=None):
+                return {'metadatas': []}
+
+        buffer = io.StringIO()
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi-x'}), \
+             patch('store.get_collection', return_value=Collection()), \
+             contextlib.redirect_stdout(buffer):
+            self.chat.check()
+        text = buffer.getvalue()
+        self.assertIn('./raglab/chat.sh --ingest', text)
+        self.assertNotIn('--ingest --check\n', text)        # the command that only re-reported itself
+
     def test_one_offline_turn_satisfies_the_citation_contract_on_this_model(self):
         from answer import AnswerGenerator
         local = self.chat.chat_config(cache_path=self.path / 'answers.json')
