@@ -94,6 +94,9 @@ class Corpus:
             self.by_document[chunk.source].append(position)
         self.by_document = dict(self.by_document)
 
+    def full_text(self):
+        return ' '.join(self.texts)
+
     def joined(self, positions):
         """The prompt's view: the retrieved chunks concatenated in rank order."""
         return ' '.join(self.texts[position] for position in positions)
@@ -201,7 +204,7 @@ def order_by(scores, *, allowed=None):
     return sorted(positions, key=lambda position: (-scores[position], position))
 
 
-def judge_families(families, corpus: Corpus, *, rank_scores, top_k=5, allowed=None):
+def judge_families(families, corpus: Corpus, *, rank_scores, top_k=5, allowed=None, findable=None):
     """One row per (family, language): rank order from `rank_scores`, labels from spans."""
     rows = []
     for family in families:
@@ -236,6 +239,10 @@ def judge_families(families, corpus: Corpus, *, rank_scores, top_k=5, allowed=No
                                                               None),
                                                            next((r + 1 for r, i in enumerate(order) if i in partial),
                                                                  None)) if rank], default=None),
+                # A label that does not exist in the text the candidate reads cannot be
+                # retrieved from it by anybody, so those queries are counted separately
+                # instead of being charged to retrieval.
+                'label_findable': (None if findable is None else family['id'] in findable),
                 'context_has_span': corpus.spans_in_context(spans, top)[0],
                 'context_spans_present': corpus.spans_in_context(spans, top)[1],
                 'context_spans_total': corpus.spans_in_context(spans, top)[2],
@@ -314,6 +321,12 @@ def threshold_at_fpr(positive, negative, *, fpr=0.05):
     return None
 
 
+def recall_of(rows, limit):
+    if not rows:
+        return None
+    return round(sum(1 for row in rows if row['first_gold_rank'] and row['first_gold_rank'] <= limit) / len(rows), 4)
+
+
 def _block(rows, *, top_k):
     if not rows:
         return {'queries': 0}
@@ -351,17 +364,14 @@ def _block(rows, *, top_k):
         # What the answerer could actually see: the answer prompt joins the top-k chunks,
         # so a span split across two retrieved chunks still reaches it whole.
         'context_answer_ready_rate': round(sum(1 for row in rows if row.get('context_has_span')) / len(rows), 4),
+        # Same measurement restricted to queries whose evidence exists in this corpus at
+        # all: the difference between the two is a labelling defect, not a retrieval one.
+        'answer_ready_rate_label_findable': recall_of([row for row in rows if row.get('label_findable')], top_k),
         'semantic_only_queries': len(semantic),
         'semantic_only_recall': recall_of(semantic, top_k),
         'mean_top_score': round(statistics.mean(row['top_scores'][0] for row in rows if row['top_scores']), 4)
         if any(row['top_scores'] for row in rows) else None,
     }
-
-
-def recall_of(rows, limit):
-    if not rows:
-        return None
-    return round(sum(1 for row in rows if row['first_gold_rank'] and row['first_gold_rank'] <= limit) / len(rows), 4)
 
 
 def summarise(rows, *, top_k=5, abstain=None):
@@ -412,7 +422,8 @@ CAVEATS = [
     'Questions come from model-authored families, so they are more templated than real user questions. The corpus '
     'text, the gold spans and the ranking maths are not model-judged.',
     'Labels are exact source-span containment. A chunk that answers without quoting the span verbatim is scored as '
-    'a miss, which understates recall wherever paraphrase or table flattening changed the wording.',
+    'a miss, which understates recall wherever paraphrase or table flattening changed the wording. The '
+    'label_integrity block separates that from labels that are genuinely absent from the corpus.',
     'The unanswerable condition is produced by deleting the supporting document from the searchable set. It tests '
     'abstain signal, not the model\'s willingness to refuse.',
     'Embeddings rank the corpus here; they do not judge correctness, so this is not a self-graded score. The '
@@ -515,6 +526,12 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
         corpus = Corpus(chunk_all(load_all(ROOT.parent / 'docs'), cfg))
     families = accepted_families() if families is None else list(families)
     queries = question_texts(families)
+    # Does each family's gold text exist in the candidate corpus at all? The references were
+    # built from a separate extraction pass, so a wording difference there would otherwise be
+    # reported forever as retrieval failing to find something that is not present.
+    corpus_text = corpus.full_text()
+    findable = {family['id'] for family in families
+                if any(span and span in corpus_text for span in gold_spans(family))}
     indices, arm_status = {}, {}
     if 'lexical' in arms:
         lexical = LexicalIndex(corpus)
@@ -555,7 +572,7 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
         # Each arm is measured inside its own guard: a broken arm is named in the report
         # with its error, and the other arm's numbers still reach the reader.
         try:
-            rows = judge_families(families, corpus, rank_scores=score, top_k=top_k)
+            rows = judge_families(families, corpus, rank_scores=score, top_k=top_k, findable=findable)
             absent = abstention_rows(families, corpus, top_k=top_k, rank_scores_for=lambda family_id, language,
                                      question, allowed: score(family_id, language, question, allowed=allowed))
             present_scores = [row['top_scores'][0] for row in rows if row['top_scores']]
@@ -581,6 +598,12 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
         pair = agreement(read_jsonl(out / 'lexical_rows.jsonl'), read_jsonl(out / 'vector_rows.jsonl'))
         write_json(out / 'agreement.json', pair)
         report['agreement'] = pair
+    label_integrity = {'families': len(families), 'labels_present_in_corpus': len(findable),
+                       'labels_absent': len(families) - len(findable),
+                       'present_rate': round(len(findable) / len(families), 4) if families else None,
+                       'note': 'Absent means the accepted reference quotes source text that the runtime '
+                               'extraction of docs/ does not contain verbatim; no retriever can hand that over, '
+                               'and it points at two extraction paths disagreeing, not at ranking.'}
     coverage = unit_coverage(corpus, gold_unit_texts()) if gold_unit_texts() else {
         'status': 'unavailable', 'note': 'results/hard_harness/sources/gold_units.json was not present, so the '
                                          'chunking diagnostic could not run; download the sources checkpoint to '
@@ -598,7 +621,7 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
                 'label_source': str(SNAPSHOT.relative_to(ROOT.parent)),
                 'embedding_model': getattr(cfg, 'NVIDIA_EMBEDDING_MODEL', None),
                 'judged_by': 'exact source-span containment; no model judged anything',
-                'unit_coverage': coverage,
+                'unit_coverage': coverage, 'label_integrity': label_integrity,
                 'caveats': CAVEATS, 'report': report}
     write_json(out / 'manifest.json', manifest)
     (out / 'REPORT.md').write_text(markdown(manifest), encoding='utf-8')
@@ -690,6 +713,13 @@ def markdown(manifest):
                   '> A lexical ranker that never saw the embedding model reaching the same conclusion is what keeps '
                   'this from being the index grading its own taste. Where they disagree, neither number above can '
                   'be trusted alone, and that is precisely where a model or a human reader is required.']
+    integrity = manifest.get('label_integrity') or {}
+    if integrity.get('families'):
+        lines += ['', '## Can these labels be retrieved at all?', '',
+                  f"- {integrity['labels_present_in_corpus']} of {integrity['families']} accepted families "
+                  f"({integrity['present_rate']:.1%}) have gold text that exists verbatim in the runtime corpus; "
+                  f"**{integrity['labels_absent']} do not**, so they are unanswerable from this index whatever "
+                  f"retrieval does. Recall above is also reported over the findable subset only.", '']
     coverage = manifest.get('unit_coverage') or {}
     if coverage.get('units'):
         lines += ['', '## Chunking, measured without any query at all', '',

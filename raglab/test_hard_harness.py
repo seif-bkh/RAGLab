@@ -713,6 +713,30 @@ class RetrievalJudge(unittest.TestCase):
         self.assertIn('dimension', manifest['arm_status']['vector']['error'])
         self.assertEqual(manifest['report']['lexical']['overall']['queries'], 3)
 
+    def test_a_label_that_is_absent_from_the_corpus_is_not_charged_to_retrieval(self):
+        """Two extraction paths disagreeing is a labelling defect, not a recall failure."""
+        from types import SimpleNamespace
+        import hard_harness.retrieval_judge as judge
+        corpus = self.corpus('alpha beta gamma delta epsilon zeta', 'unrelated text with other words here')
+        present = self.family('alpha beta gamma delta epsilon zeta', question='alpha question?')
+        present['id'] = 'hh0001'
+        absent = self.family('kappa lambda mu nu xi omicron pi', question='alpha question?')   # not in the corpus
+        absent['id'] = 'hh0002'
+        with tempfile.TemporaryDirectory() as temp:
+            manifest = judge.evaluate(arms=('lexical',), out=Path(temp), families=[present, absent],
+                                      corpus=corpus, cfg=SimpleNamespace(NVIDIA_EMBEDDING_MODEL='none'))
+            report = (Path(temp) / 'REPORT.md').read_text()
+        integrity = manifest['label_integrity']
+        self.assertEqual((integrity['labels_present_in_corpus'], integrity['labels_absent']), (1, 1))
+        self.assertEqual(integrity['present_rate'], 0.5)
+        overall = manifest['report']['lexical']['overall']
+        self.assertEqual(overall['queries'], 6)
+        # Overall half the queries "fail"; measured only over labels that exist in this
+        # corpus, retrieval got every single one into the top-1. That gap is the defect.
+        self.assertEqual(overall['answer_ready_rate'], 0.5)
+        self.assertEqual(overall['answer_ready_rate_label_findable'], 1.0)
+        self.assertIn('unanswerable from this index whatever', report)
+
     def test_reference_answers_are_never_read_into_a_retrieval_metric(self):
         from hard_harness.retrieval_judge import Corpus, judge_families
         family = self.family('bank must obtain written consent',
