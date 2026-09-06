@@ -844,6 +844,21 @@ class RetrievalJudge(unittest.TestCase):
 
 
 class DatasetIntegrity(unittest.TestCase):
+    def test_a_rejected_answer_keeps_the_validators_reason_in_the_grading_row(self):
+        """300 rows of 'invalid_output' with no message is undiagnosable; the reason must travel."""
+        from hard_harness.grading import deterministic_grade
+        prediction = {'id': 'hh0001.en', 'family_id': 'hh0001', 'language': 'en', 'provider': 'xkiro',
+                      'model': 'qwen/qwen3.8-max:free',
+                      'result': {'validation_ok': False, 'reason': 'invalid_output',
+                                 'error': 'Every claim requires evidence',
+                                 'raw_preview': '{"answerable": true, "claims": [{"text": "x"}]}',
+                                 'answer': '', 'status': 'refused'}}
+        reference = {'category': 'supported', 'fact_group': 'fg', 'expected_behavior': 'answer'}
+        row = deterministic_grade(prediction, reference)
+        self.assertEqual(row['grade'], 'invalid_output')
+        self.assertEqual(row['error'], 'Every claim requires evidence')
+        self.assertIn('claims', row['raw_preview'])
+
     def test_focused_primary_repair_keeps_stable_evidence_aliases(self):
         from hard_harness.authoring import author_messages
         units={uid:{'id':uid,'document':'test.docx','page':None,'quality':'test','text':'Original source evidence statement with enough detail.'}

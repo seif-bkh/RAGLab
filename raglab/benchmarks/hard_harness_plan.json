@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "20-resume-semantic-grading-of-the-300-answered-questions",
+  "revision": "21-grade-deterministic-outcomes-before-any-provider-is-contacted",
   "phase": "grade",
   "languages": [
     "ar",
@@ -118,5 +118,6 @@
   "dataset_manifest_note": "Frozen in run 34026077962: 100 questions per language (300), sample 100 families drawn from a 476-family pool of which 315 have gold text present in docs/, at 640/40 chunking. source_runtime_manifest above is that run's recomputed fingerprint, so the candidate path accepts the corpus this dataset version was designed against.",
   "answer_run_note": "Answering runs on xKiro qwen/qwen3.8-max:free via XKIRO_API_KEY (alternate alias XKIRO_API_KEY_JINKO). Predictions never see answer_key files; grading compares them afterwards.",
   "predictions_run": "34026369379",
-  "grading_resume_note": "Run 34026369379 answered 300/300 questions on qwen/qwen3.8-max:free at 640-token chunks and graded 82 before Google free tier returned HTTP 429 (limit: 20/min on gemini-3.5-flash). Every grader response is cached, so this phase resumes from the 82 rather than re-spending them; the pause is recorded as provider_pause, never as an answer score."
+  "grading_resume_note": "Run 34026369379 answered 300/300 questions on qwen/qwen3.8-max:free at 640-token chunks and graded 82 before Google free tier returned HTTP 429 (limit: 20/min on gemini-3.5-flash). Every grader response is cached, so this phase resumes from the 82 rather than re-spending them; the pause is recorded as provider_pause, never as an answer score.",
+  "answer_contract_note": "Run 34028010045 paused in the grader calibration before classifying anything. Re-grading the SAME 300 cached predictions costs no answer-model calls and will now report why each reply was rejected by the output contract, because the validator message and a truncated copy of the reply travel into the grading row. This phase is diagnostic; it is not a score."
 }
