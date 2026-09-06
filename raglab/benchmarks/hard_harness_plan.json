@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "15-draft-first-authoring-with-opportunistic-independent-audit",
+  "revision": "16-negatives-first-shard-order-with-integer-matrix-values",
   "phase": "author",
   "languages": [
     "ar",
@@ -96,5 +96,6 @@
     "why": "Authoring runs on xKiro Qwen; the reference audit runs on Google, whose free tier measured ~1-2 usable requests/minute. Drafting everything first means a run is never blocked by the scarce provider, and each run still promotes as many audits as the current allowance permits."
   },
   "audit_independence_note": "Accepted families 0-469 were audited by the same model that drafted them (cross_provider_audited 0). Role profiles now separate the providers, so families authored from this revision on are drafted by xKiro Qwen and audited by Google; the snapshot manifest and the frozen dataset manifest carry the counts and the report prints them as a caveat. A same-model audit is not described as independent anywhere.",
-  "negative_priority_note": "All 469 accepted families are supported ones. The 200 out-of-scope and 50 insufficient-evidence families sit in shards 6-8, which were never reached, so the author matrix is ordered least-progressed-first and the scaled freeze is refused until those categories are filled."
+  "negative_priority_note": "All 469 accepted families are supported ones. The 200 out-of-scope and 50 insufficient-evidence families sit in shards 6-8, which were never reached, so the author matrix is ordered least-progressed-first and the scaled freeze is refused until those categories are filled.",
+  "shard_order_note": "The plan job orders the author matrix least-progressed-first from the committed snapshot manifest, so the untouched negative families in shards 6-8 are authored before the supported shards that already have 100 each. Values are plain integers: object matrix entries bound matrix.shard to the whole object and failed every shard in setup (run 34003466393)."
 }
