@@ -692,6 +692,14 @@ class DatasetIntegrity(unittest.TestCase):
             self.assertEqual(first['audit_stop_reason'],'provider_pause')
             self.assertEqual(len(list((work/'draft_pending').glob('*.json'))),3)
             self.assertEqual(len(list((work/'draft_families').glob('*.json'))),0)
+            # The queue is also published with the shard checkpoint, because the work
+            # cache is best-effort storage and eviction must not cost re-drafting.
+            published = read_jsonl(out/'author_00/pending_drafts.jsonl')
+            self.assertEqual(sorted(row['spec_id'] for row in published),
+                             ['hh0001','hh0002','hh0003'])
+            for folder in (work/'draft_pending', work/'draft_families'):
+                for stale in folder.glob('*.json'):
+                    stale.unlink()          # simulate an evicted Actions cache
             # A later run reuses the drafts (no second authoring call) and promotes
             # every family the audit still allows.
             calls={'author':0}

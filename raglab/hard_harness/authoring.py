@@ -343,6 +343,25 @@ def author_shard(shard, *, recover_only=False):
     audit_mode = (plan.get('authoring') or {}).get('audit_mode', 'inline')
     PENDING_DRAFTS = WORK / 'draft_pending'
     PENDING_DRAFTS.mkdir(parents=True, exist_ok=True)
+    # A drafted family waiting on the rate-limited audit is expensive to reproduce, so
+    # it is published with the shard checkpoint and re-seeded from there (or from the
+    # resume artifact) when the request cache has been evicted. Nothing is queued for
+    # audit that does not still validate against the current source and spec.
+    seed_hash = read_json(OUTPUT / 'sources/manifest.json')['gold_unit_manifest']
+    for source in (out / 'pending_drafts.jsonl', archived / 'pending_drafts.jsonl'):
+        if not audit_mode == 'drafts_only' or not source.exists():
+            continue
+        for row in read_jsonl(source):
+            spec = specs_by_id.get(row.get('spec_id') or (row.get('family') or {}).get('id'))
+            if spec is None or not isinstance(row.get('family'), dict):
+                continue
+            try:
+                validate_family(row['family'], spec, units)
+            except ValueError:
+                continue
+            path = PENDING_DRAFTS / f'{fingerprint({"version": AUTHOR_VERSION, "spec": spec, "source": seed_hash})}.json'
+            if not path.exists():
+                write_json(path, row)
     summary = {'status':'running','shard':shard,'target_families':len(assigned),'families':0,
                'source_manifest':source_fingerprint,
                'author_model':role_profile(plan,'question_author')['model'],
@@ -512,6 +531,17 @@ def author_shard(shard, *, recover_only=False):
     summary['auditor_models_observed']=sorted({(r.get('audit_provenance') or {}).get('served_model') or 'unknown' for r in rows})
     write_jsonl(out/'families.jsonl',rows)
     write_jsonl(out/'reference_audit.jsonl',audits)
+    if audit_mode == 'drafts_only':
+        still_pending = []
+        for spec in assigned:
+            if spec['id'] in completed:
+                continue
+            path = PENDING_DRAFTS / f'{fingerprint({"version": AUTHOR_VERSION, "spec": spec, "source": summary["source_manifest"]})}.json'
+            if path.exists():
+                still_pending.append(read_json(path))
+        write_jsonl(out/'pending_drafts.jsonl', still_pending)
+        summary['pending_drafts'] = len(still_pending)
+        write_json(out/'manifest.json', summary)
     write_jsonl(out/'rejected_drafts.jsonl',rejected)
     write_jsonl(out/'unresolved_references.jsonl',unresolved_drafts)
     write_json(out/'manifest.json',summary)
