@@ -178,9 +178,11 @@ def grade_all():
             summary['calibration'] = {'status': 'not_needed',
                                       'note': 'no prediction required a semantic comparison'}
         deadline = soft_deadline(plan)
-        # Ten comparisons per request: the free tier counts requests, not content, so a
-        # smaller batch spends the same day's quota on fewer of them and resumes coarsely.
-        for start in range(0,len(pending),10):
+        # Six per batch is load-bearing for resumability, not just for granularity: the grader
+        # cache keys on the request contents, so changing the batch size invalidates every
+        # judgment a previous run paid for. Run 34029250378 found that out by re-paying for 72
+        # comparisons after a batch-size edit and grading only 6 before pausing again.
+        for start in range(0,len(pending),6):
             if deadline_reached(deadline):
                 summary['stop_reason'] = 'shard_deadline'
                 break
