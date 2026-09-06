@@ -158,7 +158,6 @@ def grade_all():
                 'score, and no grader is contacted for it.'}
     summary['deterministic_grades'] = dict(Counter(row['grade'] for row in results))
     try:
-        calibrate(client)
         for identifier, prediction in sorted(predictions.items()):
             if identifier in classified:
                 continue                      # already settled without a model call
@@ -170,6 +169,14 @@ def grade_all():
                 'candidate_claims':prediction['result']['claims'],
                 'candidate_sources':[s for s in prediction['result']['sources'] if s['source_id'] in {
                     e['source_id'] for c in prediction['result']['claims'] for e in c['evidence']}]})
+        # The grader is contacted only for predictions the deterministic checks could not
+        # settle. Two runs were paused by calibration quota while every row was already decided,
+        # which reported nothing a reader could act on.
+        if pending:
+            calibrate(client)
+        else:
+            summary['calibration'] = {'status': 'not_needed',
+                                      'note': 'no prediction required a semantic comparison'}
         deadline = soft_deadline(plan)
         for start in range(0,len(pending),6):
             if deadline_reached(deadline):

@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "21-grade-deterministic-outcomes-before-any-provider-is-contacted",
+  "revision": "22-contact-the-grader-only-for-rows-it-can-actually-settle",
   "phase": "grade",
   "languages": [
     "ar",
