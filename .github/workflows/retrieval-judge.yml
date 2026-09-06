@@ -50,12 +50,12 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      # The pinned harness corpus is judged as-is, and two larger chunk sizes are judged
-      # beside it: whole-span evidence depends on the chunker, and a chunking decision can
-      # be measured with no model call at all, so the cheap fix is checked before any
-      # answer-quality number is quoted. The pinned setting is never changed here.
+      # 'pinned' is the corpus the plan freezes (currently 640 tokens) and is the only row the
+      # answer harness shares; the smaller sizes are judged beside it so a future downgrade is a
+      # measured decision rather than a silent one. A chunking decision needs no model call at
+      # all, so this stays cheap enough to run on every corpus change.
       matrix:
-        chunk: [220, 420, 640]
+        chunk: [pinned, 420, 220]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -89,7 +89,7 @@ jobs:
           # tee opens its target before the program runs, so the report directory has to
           # exist first or the step dies on the pipeline instead of on the measurement.
           mkdir -p raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}
-          if [ "${{ matrix.chunk }}" = "220" ]; then
+          if [ "${{ matrix.chunk }}" = "pinned" ]; then
             cd raglab && python hard_harness_main.py judge --arms lexical,vector --top-k 5 \
               --out results/hard_harness/retrieval_judge_220
           else
