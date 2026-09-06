@@ -45,6 +45,23 @@ the reply ceiling rather than the prompt.
 """
 
 
+def checked_config(local):
+    """Refuse a settings object that cannot do what store.py will ask of it.
+
+    store.py tags each stored chunk with `cfg.active_embedding_model()` and gates its embedding-model
+    and embedding-space checks behind `hasattr(cfg, "active_embedding_model")`. So a half-built config
+    object is doubly wrong: it raises during ingest, and if it got that far it would skip the very check
+    that stops a chat from answering out of vectors produced by a different model. The guard is
+    explicit because the failure it prevents is silent.
+    """
+    for name in ('active_embedding_model',):
+        if not callable(getattr(local, name, None)):
+            raise ValueError(f'config.{name}() is missing from the chat settings; refusing to build an '
+                             'index whose chunks cannot be attributed to an embedding model, and whose '
+                             'embedding space store.py would then be unable to verify')
+    return local
+
+
 def plan_chunking(path=None):
     """The chunking the frozen plan pins (640/40) and why, falling back to config's 220/40.
 
@@ -80,8 +97,16 @@ def chat_config(model=CHAT_MODEL, *, thinking=False, cache_path=None, chunk_size
 
     A copy, deliberately: config.py is imported by `main.py answer` and by the harness, and it rejects
     stale model values on purpose, so a chat session must not be able to change what they believe.
+
+    The copy carries the module's callables as well as its constants, which is not cosmetic. store.py
+    tags every chunk with cfg.active_embedding_model() and only runs its embedding-model/space checks
+    behind `hasattr(cfg, "active_embedding_model")` - so a namespace of uppercase constants crashes
+    mid-ingest at the first, and silently skips the second. Anything that reads like a config object has
+    to behave like one.
     """
-    local = SimpleNamespace(**{key: getattr(cfg, key) for key in dir(cfg) if key.isupper()})
+    local = SimpleNamespace(**{key: value for key, value in vars(cfg).items()
+                              if not key.startswith('_') and (key.isupper() or callable(value))})
+    checked_config(local)
     local.ANSWER_MODEL = model
     local.ANSWER_PROVIDER = 'nvidia'
     local.ANSWER_PROMPT_VERSION = 'grounded-v2' if thinking else 'grounded-v1'
@@ -156,9 +181,11 @@ def open_collection(local, embedder, *, reset=False):
     print(f'[chat] embedding {len(chunks)} chunk(s) for a first-time index '
           f'(batch {embedder.batch_size})...', flush=True)
     vectors = embedder.embed_texts([chunk.text for chunk in chunks])
-    store_chunks(collection, list(zip(chunks, vectors)), local)
-    print(f'[chat] index built: {collection.count()} chunk(s) | embedding calls={embedder.api_calls} '
-          f'cache hits={embedder.cache_hits}')
+    stored = store_chunks(collection, list(zip(chunks, vectors)), local)
+    # Counted separately on purpose: boilerplate and invalid vectors are dropped at store time, so
+    # '284 chunks' becoming an index of 280 is an exclusion, not a lost batch.
+    print(f'[chat] index built: {stored} chunk(s) stored from {len(chunks)} chunked | '
+          f'embedding calls={embedder.api_calls} cache hits={embedder.cache_hits}')
     return collection
 
 

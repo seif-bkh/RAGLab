@@ -1,7 +1,9 @@
 """Offline contract, provenance, safety, and regression tests; no API access."""
+import inspect
 import io
 import json
 import os
+import re
 import tempfile
 import unittest
 import urllib.error
@@ -942,6 +944,35 @@ class ChatEntry(unittest.TestCase):
         self.assertEqual(chat.context_budget(1, 220, 40), 3000)   # never below the app floor
         local = chat.chat_config(top_k=5)
         self.assertGreaterEqual(local.ANSWER_CONTEXT_TOKENS, 5 * (640 + 40))
+
+    def test_the_chats_config_object_is_a_config_object_not_just_its_constants(self):
+        """The crash that made this test: the chat's settings are a copy of config, and a copy of only
+        the UPPERCASE names satisfies every read except the ones that *call* something on cfg — so
+        store.py's chunk tagging raised AttributeError mid-ingest, while its embedding-space guard
+        (gated on hasattr) had already been skipped silently. Anything passed as `cfg` must carry the
+        module's callables too, for every module the chat hands it to.
+        """
+        import chat
+        local = chat.chat_config()
+        self.assertEqual(local.active_embedding_model(), EMBED_MODEL)
+        for module_name in ('store', 'retrieval', 'chunker', 'answer'):
+            module = __import__(module_name)
+            source = inspect.getsource(module)
+            for attr in sorted(set(re.findall(r'\bcfg\.([A-Za-z_][A-Za-z0-9_]*)', source))):
+                self.assertTrue(hasattr(local, attr),
+                                f'{module_name}.py reads cfg.{attr}, which the chat config lacks')
+
+    def test_a_missing_callable_is_refused_instead_of_skipping_the_space_check(self):
+        import chat
+        from types import SimpleNamespace as NS
+        broken = NS(**{key: value for key, value in vars(chat.cfg).items()
+                       if key.isupper() and not callable(value)})
+        self.assertFalse(hasattr(broken, 'active_embedding_model'))
+        # store.ensure_fresh_chunks gates its embedding-space check on exactly that hasattr, so a
+        # bare-constants namespace must never reach it.
+        with self.assertRaises(ValueError) as raised:
+            chat.checked_config(broken)
+        self.assertIn('active_embedding_model', str(raised.exception))
 
     def test_a_stale_index_stops_the_chat_with_the_rebuild_command(self):
         class Collection:
