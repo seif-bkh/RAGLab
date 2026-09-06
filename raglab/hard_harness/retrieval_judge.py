@@ -403,6 +403,19 @@ CAVEATS = [
 ]
 
 
+def _pinned_corpus_agreement(corpus):
+    """Compare against plan['source_runtime_manifest'] the way the candidate path builds it."""
+    try:
+        from dataclasses import asdict
+        from hard_harness.common import PLAN_PATH
+        plan = read_json(PLAN_PATH) if PLAN_PATH.exists() else {}
+        mine = fingerprint([asdict(chunk) for chunk in corpus.chunks])
+        return {'measured': mine[:16], 'pinned': (plan.get('source_runtime_manifest') or '')[:16],
+                'match': mine == plan.get('source_runtime_manifest')}
+    except Exception as exc:      # noqa: BLE001 - a test corpus need not be a dataclass
+        return {'status': 'unknown', 'reason': type(exc).__name__}
+
+
 def _tokenizer_identity():
     """Chunk boundaries decide what counts as a whole span, so say which tokenizer built them."""
     try:
@@ -558,6 +571,9 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
                 'chunk_overlap_tokens': getattr(cfg, 'CHUNK_OVERLAP_TOKENS', None),
                 'chunks': len(corpus.chunks), 'documents': sorted(corpus.by_document),
                 'corpus_fingerprint': fingerprint([chunk.text for chunk in corpus.chunks]),
+                # Say whether this was measured on the corpus the harness pins, because a
+                # different tokenizer build silently changes every boundary-sensitive rate.
+                'pinned_corpus_agreement': _pinned_corpus_agreement(corpus),
                 'tokenizer': _tokenizer_identity(),
                 'label_source': str(SNAPSHOT.relative_to(ROOT.parent)),
                 'embedding_model': getattr(cfg, 'NVIDIA_EMBEDDING_MODEL', None),
@@ -629,8 +645,9 @@ def markdown(manifest):
              f"{manifest['created_at']}.", '',
              f"The label is exact source-span containment inside a retrieved chunk. No generative model wrote, "
              f"judged or repaired anything in this report, and no reference answer was read. Corpus chunks were "
-             f"built with tokenizer `{manifest.get('tokenizer')}`; if that is not the pinned tiktoken build, the "
-             f"boundary-sensitive rates (`partial_only_rate`) differ from the frozen harness corpus.", '',
+             f"built with tokenizer `{manifest.get('tokenizer')}`; agreement with the pinned candidate corpus: "
+             f"{manifest.get('pinned_corpus_agreement', {}).get('match', 'unknown')}. If that is not True these "
+             f"rates describe a different chunking than the answer harness will see.", '',
              f"Arms: {', '.join(manifest['arms'])}. "]
     for arm in manifest['arms']:
         status = (manifest.get('arm_status') or {}).get(arm, {})
