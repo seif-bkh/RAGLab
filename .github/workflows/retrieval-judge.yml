@@ -57,6 +57,9 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           set -o pipefail
+          # tee opens its target before the program runs, so the report directory has to
+          # exist first or the step dies on the pipeline instead of on the measurement.
+          mkdir -p raglab/results/hard_harness/retrieval_judge
           cd raglab && python hard_harness_main.py judge --arms lexical,vector --top-k 5 \
             | tee results/hard_harness/retrieval_judge/summary.json
       - name: Keep embeddings and tokenizer for the next run

@@ -60,6 +60,12 @@ def main(argv=None):
         manifest = evaluate(arms=tuple(name.strip() for name in args.arms.split(',') if name.strip()),
                             top_k=args.top_k, fpr=args.fpr, out=args.out)
         report = manifest['report']
+        _out = Path(args.out) if args.out else OUTPUT / 'retrieval_judge'
+        _out.mkdir(parents=True, exist_ok=True)
+        write_json(_out / 'summary.json', {key: manifest[key] for key in
+                                           ('status', 'created_at', 'arms', 'arm_status', 'top_k', 'fpr',
+                                            'questions', 'families', 'chunks', 'documents', 'corpus_fingerprint',
+                                            'tokenizer', 'embedding_model', 'caveats') if key in manifest})
         print(json.dumps({
             'status': manifest['status'], 'arms': manifest['arms'],
             'arm_status': {arm: state.get('status') for arm, state in manifest['arm_status'].items()},
