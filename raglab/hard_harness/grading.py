@@ -93,6 +93,35 @@ def validate_judgments(data, ids):
     return rows
 
 
+def judge_batch(client, batch, max_tokens):
+    """Ask the judge for a whole batch; shrink the ask instead of killing the phase.
+
+    The model that grades here is a reasoning model, and a reply that covers a batch's ids twice
+    or skips one is a judge reliability problem, not an answer-quality result. Aborting left 206
+    rows unscored in run 34030906572; halving isolates the offending comparison, and a single
+    item that still cannot be answered is recorded as 'judge_unusable' and excluded from scoring
+    rather than guessed at.
+    """
+    from nvidia_api import safe_error
+    ids = [item['id'] for item in batch]
+    try:
+        data, provenance = client.object(judge_messages(batch), max_tokens=max_tokens)
+        return validate_judgments(data, ids), provenance, 'ok'
+    except Exception as exc:                                        # noqa: BLE001
+        if len(batch) == 1:
+            return ([{**batch[0], 'id': ids[0], 'grade': 'judge_unusable', 'correct': None,
+                      'reason': safe_error(exc)[:240]}], None, 'unusable')
+        rows, provenance, outcome = [], None, 'split'
+        middle = len(batch) // 2
+        for part in (batch[:middle], batch[middle:]):
+            part_rows, part_provenance, part_outcome = judge_batch(client, part, max_tokens)
+            rows.extend(part_rows)
+            provenance = provenance or part_provenance
+            if part_outcome == 'unusable':
+                outcome = 'unusable'
+        return rows, provenance, outcome
+
+
 def calibrate(client):
     cases = calibration_cases()
     result, provenance = client.object(judge_messages(cases), max_tokens=5000)
@@ -161,6 +190,7 @@ def grade_all():
         'note': 'A reply that fails the JSON answer contract is a format outcome, never a semantic '
                 'score, and no grader is contacted for it.'}
     summary['deterministic_grades'] = dict(Counter(row['grade'] for row in results))
+    judge_outcomes = {}
     try:
         for identifier, prediction in sorted(predictions.items()):
             if identifier in classified:
@@ -191,23 +221,38 @@ def grade_all():
                 summary['stop_reason'] = 'shard_deadline'
                 break
             batch = pending[start:start+6]
-            data, provenance = client.object(judge_messages(batch),max_tokens=grade_max_tokens)
-            for row in validate_judgments(data,[c['id'] for c in batch]):
+            rows, provenance, outcome = judge_batch(client, batch, grade_max_tokens)
+            judge_outcomes[outcome] = judge_outcomes.get(outcome, 0) + len(batch)
+            for row in rows:
                 ref, pred = references[row['id']], predictions[row['id']]
-                results.append({**row,'correct':True if row['grade']=='correct' else (None if row['grade']=='reference_issue' else False),
+                if row['grade'] in {'reference_issue', 'judge_unusable'}:
+                    correct = None            # not the candidate's failure, never scored as one
+                else:
+                    correct = row['grade'] == 'correct'
+                results.append({**row,'correct':correct,
                     'family_id':ref['family_id'],'language':ref['language'],'category':ref['category'],
                     'fact_group':ref['fact_group'],'attack_template_id':ref.get('attack_template_id'),
-                    'provider':pred['provider'],'model':pred['model'],'grader':'model_semantic', 'judge_provenance':provenance})
+                    'provider':pred['provider'],'model':pred['model'],'grader':'model_semantic',
+                    'judge_outcome':outcome,'judge_provenance':provenance})
             write_jsonl(out/'judgments.jsonl',results)
             print(f'[grade] {len(results)}/{len(predictions)} predictions classified',flush=True)
         # A deadline stop is never reported as a finished comparison.
         summary['status'] = ('complete' if len(predictions)==expected_records and len(results)==len(predictions)
-                             and not summary.get('stop_reason')
+                             and not summary.get('stop_reason') and not summary['judge_unusable']
+                             else 'complete_with_judge_gaps' if summary['judge_unusable']
+                             and len(results)==len(predictions) and not summary.get('stop_reason')
                              else 'partial_deadline' if summary.get('stop_reason') else 'partial')
     except Exception as exc:
         from nvidia_api import safe_error
         summary.update(status='paused' if client.pause else 'blocked',error=safe_error(exc))
     summary['client'] = client.summary()
+    summary['judge_outcomes'] = judge_outcomes
+    summary['judge_unusable'] = judge_outcomes.get('unusable', 0)
+    if summary['judge_unusable']:
+        # Scored rows exclude them, and the reader has to know the denominator moved.
+        summary['caveat'] = (f"{summary['judge_unusable']} comparison(s) the judging model could not "
+                             "answer in a usable form; they are excluded from every score and listed as "
+                             "grade=judge_unusable rather than charged to the candidate.")
     summary['graded_questions'] = len(results)
     summary['ungraded_questions'] = expected_records-len(results)
     summary['by_language'] = {}

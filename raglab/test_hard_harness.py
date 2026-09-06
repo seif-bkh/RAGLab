@@ -968,6 +968,52 @@ class ExperientialGateway(unittest.TestCase):
         self.assertEqual(provider_for_model('qwen/qwen3.8-max:free'), 'xkiro')
 
 
+class JudgeOutputContract(unittest.TestCase):
+    """A judging model that mis-covers ids must cost rows, not the whole phase."""
+
+    class Client:
+        def __init__(self, fail_above=1):
+            self.fail_above = fail_above
+            self.asks = []
+
+        def object(self, messages, *, max_tokens):
+            payload = json.loads(messages[-1]['content'])
+            items = payload['items'] if 'items' in payload else payload.get('cases', payload)
+            ids = [row['id'] for row in (items if isinstance(items, list) else [])]
+            self.asks.append(ids)
+            if len(ids) > self.fail_above:
+                raise ValueError('Semantic judge must cover every supplied ID exactly once')
+            rows = [{'id': identifier, 'grade': 'correct', 'language_ok': True, 'grounded': True,
+                     'unsupported_claims': [], 'missing_facts': []} for identifier in ids]
+            return {'judgments': rows}, {'request_hash': 'x'}
+
+    def test_a_bad_batch_is_isolated_by_halving(self):
+        from hard_harness.grading import judge_batch
+        batch = [{'id': f'hh000{i}.en'} for i in range(1, 7)]
+        easy = self.Client(fail_above=99)
+        rows, provenance, outcome = judge_batch(easy, batch, 1000)
+        self.assertEqual((outcome, len(easy.asks)), ('ok', 1))       # a good batch is one ask
+        client = self.Client(fail_above=1)
+        rows, provenance, outcome = judge_batch(client, batch, 1000)
+        self.assertEqual(outcome, 'split')
+        self.assertEqual([row['id'] for row in rows], [item['id'] for item in batch])
+        self.assertGreater(len(client.asks), 1)      # it shrank rather than giving up
+
+    def test_a_single_item_the_judge_cannot_answer_is_not_charged_to_the_candidate(self):
+        from hard_harness.grading import judge_batch
+
+        class Useless:
+            def object(self, messages, *, max_tokens):
+                raise ValueError('judge produced prose')
+
+        rows, provenance, outcome = judge_batch(Useless(), [{'id': 'hh0001.en'}], 1000)
+        self.assertEqual(outcome, 'unusable')
+        self.assertEqual(rows[0]['grade'], 'judge_unusable')
+        self.assertIsNone(rows[0]['correct'])
+        self.assertIn('judge produced prose', rows[0]['reason'])
+        self.assertIsNone(provenance)
+
+
 class DatasetIntegrity(unittest.TestCase):
     def test_a_rejected_answer_keeps_the_validators_reason_in_the_grading_row(self):
         """300 rows of 'invalid_output' with no message is undiagnosable; the reason must travel."""
