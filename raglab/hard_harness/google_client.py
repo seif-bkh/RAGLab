@@ -14,7 +14,7 @@ import urllib.request
 from nvidia_api import NvidiaAPIError, retry_after_seconds, safe_error
 from provider_catalog import NoCredentialRedirects
 
-ALLOWED_FREE_TIER_MODELS = {'gemini-3.1-flash-lite'}
+ALLOWED_FREE_TIER_MODELS = {'gemini-3.1-flash-lite', 'gemini-3.5-flash'}
 BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
 _PACE_LOCK = threading.Lock()
 _LAST_REQUEST = {}

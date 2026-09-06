@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "10-resume-google-capacity-and-reference-fixes",
+  "revision": "11-resume-reference-work-on-google-3-5-flash",
   "phase": "author",
   "languages": [
     "ar",
@@ -24,13 +24,14 @@
   },
   "llm": {
     "provider": "google",
-    "model": "gemini-3.1-flash-lite",
+    "model": "gemini-3.5-flash",
     "credential_secret": "GEMINI_API_KEY",
     "credential_aliases": [
       "GEMINI_API_KEY",
       "GOOGLE_API_KEY"
     ],
-    "free_tier_project_confirmed": true
+    "free_tier_project_confirmed": true,
+    "free_tier_source": "https://ai.google.dev/gemini-api/docs/pricing"
   },
   "embedding": {
     "provider": "nvidia",
@@ -54,7 +55,7 @@
   "random_seed": 20260905,
   "source_runtime_manifest": "807785db25fb798499e67f12f59589f6db33792e88cb00cf104752853046e60e",
   "sources_run": "33985662461",
-  "resume_run": "33995452874",
+  "resume_run": "33997136207",
   "candidate_llm": {
     "provider": "xkiro",
     "model": "qwen/qwen3.8-max:free",

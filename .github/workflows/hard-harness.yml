@@ -47,7 +47,7 @@ jobs:
               assert p['llm']['provider']=='google'
               assert p['google_fallback_authorized'] and p['google_fallback_active']
               assert p['llm']['free_tier_project_confirmed'] is True
-              assert p['llm']['model']=='gemini-3.1-flash-lite'
+              assert p['llm']['model'] in {'gemini-3.1-flash-lite','gemini-3.5-flash'}
               assert p['llm']['credential_secret'] in {'GEMINI_API_KEY','GOOGLE_API_KEY'}
           key_secret=p['llm']['credential_secret']
           if p['llm']['provider']=='google':
