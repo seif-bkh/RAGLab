@@ -1,0 +1,129 @@
+name: Retrieval quality without an answer model
+
+# Embeddings-only judgement: the label is exact source-span containment, so this runs on
+# every chunking/corpus change without a generative model, without a judge, and without
+# waiting for the graded answer harness to clear its provider ceilings.
+on:
+  push:
+    branches: ["arena/01a071ba-raglab", "arena/01a0741e-raglab"]
+    paths:
+      - "raglab/hard_harness/retrieval_judge.py"
+      - "raglab/hard_harness_main.py"
+      - ".github/workflows/retrieval-judge.yml"
+      - "raglab/chunker.py"
+      - "raglab/loader.py"
+      - "raglab/store.py"
+      - "raglab/embedder.py"
+      - "raglab/nvidia_api.py"
+      - "raglab/config.py"
+      - "raglab/benchmarks/hard_harness_accepted/**"
+      - "docs/**"
+  pull_request:
+    paths:
+      - "raglab/hard_harness/retrieval_judge.py"
+      - ".github/workflows/retrieval-judge.yml"
+      - "raglab/chunker.py"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+
+concurrency:
+  group: retrieval-judge-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Scaled retry: 100 families per language (one question each in ar/en/fr, 300 questions),
+  # drawn from the accepted pool in a deterministic round-robin over (subtype, question style)
+  # and only from families whose gold text exists verbatim in the corpus, so a retrieval miss
+  # here is a ranking miss and not the transcription defect found in the full pool.
+  # Set to "0" to judge every accepted family.
+  HARD_HARNESS_JUDGE_LIMIT_PER_LANGUAGE: "100"
+
+jobs:
+  judge:
+    name: Judge retrieval from embeddings and lexical overlap
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # 'pinned' is the corpus the plan freezes (currently 640 tokens) and is the only row the
+      # answer harness shares; the smaller sizes are judged beside it so a future downgrade is a
+      # measured decision rather than a silent one. A chunking decision needs no model call at
+      # all, so this stays cheap enough to run on every corpus change.
+      matrix:
+        chunk: [pinned, 420, 220]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -r raglab/requirements-harness.txt
+      - run: python -m compileall -q raglab && cd raglab && python -m unittest -q test_hard_harness
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/hard_harness/
+          key: retrieval-judge-v1-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: retrieval-judge-v1-${{ github.ref_name }}-
+      - name: Fetch the audited source units for the chunking diagnostic
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          RUN=$(python -c "import json;print(json.load(open('raglab/benchmarks/hard_harness_plan.json')).get('sources_run',''))")
+          if [ -n "$RUN" ]; then
+            gh run download "$RUN" --repo "$GITHUB_REPOSITORY" --name hard-harness-sources \
+              --dir raglab/results/hard_harness || echo 'Sources checkpoint unavailable; the report will say the chunking diagnostic did not run.'
+          else
+            echo 'No sources run recorded in the plan; skipping the chunking diagnostic.'
+          fi
+      - name: Judge both arms (lexical BM25 and nvidia embeddings)
+        # chunk=220 is the pinned harness setting; the others are comparisons only
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
+          NVIDIA_EMBEDDING_CACHE_FILE: .cache/hard_harness/embeddings_cache_nvidia.json
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -o pipefail
+          # tee opens its target before the program runs, so the report directory has to
+          # exist first or the step dies on the pipeline instead of on the measurement.
+          mkdir -p raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}
+          if [ "${{ matrix.chunk }}" = "pinned" ]; then
+            cd raglab && python hard_harness_main.py judge --arms lexical,vector --top-k 5 \
+              --out results/hard_harness/retrieval_judge_220
+          else
+            cd raglab && python hard_harness_main.py judge --arms lexical,vector --top-k 5 \
+              --chunk-tokens ${{ matrix.chunk }} --out results/hard_harness/retrieval_judge_${{ matrix.chunk }}
+          fi
+      - name: Keep embeddings and tokenizer for the next run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/hard_harness/
+          key: retrieval-judge-v1-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Show the report
+        if: always()
+        run: |
+          DIR=raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}
+          if [ -f "$DIR/REPORT.md" ]; then
+            cat "$DIR/REPORT.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No report was written in $DIR; the judge did not reach the reporting step." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: retrieval-judge-${{ matrix.chunk }}
+          path: raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Publish the report as checkpoints
+        if: always()
+        # Artifacts expire and this sandbox cannot fetch them; the check-run channel is
+        # the readable one. The per-query rows stay in the artifact, not in the checks.
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          rm -f raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}/*_rows.jsonl \
+                raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}/*_absent.jsonl
+          python raglab/hard_harness_main.py publish --phase retrieval_judge_${{ matrix.chunk }}

@@ -248,8 +248,10 @@ class AnswerGenerator:
         try:
             claims = validate_answer(response["text"], sources)
         except (ValueError, KeyError, TypeError) as exc:
+            reply = response.get("text") if isinstance(response, dict) else None
             return {**base, "status": "refused", "reason": "invalid_output", "validation_ok": False,
                     "answer": REFUSALS[language], "error": safe_error(exc),
+                    "raw_preview": str(reply or "")[:400],
                     "seconds": response.get('seconds', 0) if isinstance(response, dict) else 0,
                     "served_model": response.get('served_model') if isinstance(response, dict) else None}
         if not cached and use_cache:
