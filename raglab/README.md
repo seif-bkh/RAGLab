@@ -96,10 +96,11 @@ truncating it, so a fixed 3000-token ceiling would quietly answer from 4 of 5 hi
 its own collection (`raglab_chat`) so the app's index and the chat's never argue over one store.
 
 Two labels matter. This is **not** the supported answerer above: `main.py answer` and the benchmark keep
-xKiro Qwen and reject any substitution, so no score in this repo belongs to the chat model. And the chat
-indexes at the application default chunking (220/40), not the harness pin (640/40), so its retrieval
-quality is a different measurement from the frozen sweep. In `chat` commands: `:k 8`, `:show`, `:lang ar|fr|en|auto`, `:mode vector|rrf|blend`,
-`:log chat_turns.jsonl`, `:context`, `:quit`. `--data-dir PATH` replaces the default corpus outright.
+xKiro Qwen and reject any substitution, so no score in this repo belongs to the chat model. And its
+questions are not the harness's: the frozen sample and its numbers stay the harness's, while this path is
+for reading the documents. In `chat` commands: `:k 8`, `:show`, `:lang ar|fr|en|auto`,
+`:mode vector|rrf|blend`, `:log chat_turns.jsonl`, `:context`, `:quit`. `--data-dir PATH` replaces the
+default corpus outright.
 
 ## Grounding, free pricing and credentials
 
