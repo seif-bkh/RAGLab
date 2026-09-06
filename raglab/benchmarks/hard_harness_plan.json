@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "16-negatives-first-shard-order-with-integer-matrix-values",
+  "revision": "17-json-safe-author-prompt-and-a-stop-guard-on-unparsable-output",
   "phase": "author",
   "languages": [
     "ar",
@@ -93,7 +93,8 @@
   "scale_note": "First pass is a scaled dataset version: 475 paired scenarios per language (1,425 records) with the same 65/20/10/5 category proportions as the 1,000-per-language target. Authoring still enumerates the identical 900 base specs, so every already-accepted family keeps its cache key; the compiler selects the lowest accepted ID per category. The frozen manifest records scaled_version, how many families were accepted, and which were selected, and the full target stays questions_per_language 1000.",
   "authoring": {
     "audit_mode": "drafts_only",
-    "why": "Authoring runs on xKiro Qwen; the reference audit runs on Google, whose free tier measured ~1-2 usable requests/minute. Drafting everything first means a run is never blocked by the scarce provider, and each run still promotes as many audits as the current allowance permits."
+    "why": "Authoring runs on xKiro Qwen; the reference audit runs on Google, whose free tier measured ~1-2 usable requests/minute. Drafting everything first means a run is never blocked by the scarce provider, and each run still promotes as many audits as the current allowance permits.",
+    "prompt_note": "Run 34003690682: shards 6-8 spent 307/331 requests on replies that failed JSON parsing (Expecting ',' delimiter) and accepted nothing, because an abstain family must return prose with quotes and an empty evidence list. The prompt now forbids double quotes inside string values, caps reference_answer length, and states that an empty sources list is intentional for negatives; a shard also stops after 12 unparsable replies instead of spending the whole budget, and reports status blocked_format rather than a deadline."
   },
   "audit_independence_note": "Accepted families 0-469 were audited by the same model that drafted them (cross_provider_audited 0). Role profiles now separate the providers, so families authored from this revision on are drafted by xKiro Qwen and audited by Google; the snapshot manifest and the frozen dataset manifest carry the counts and the report prints them as a caveat. A same-model audit is not described as independent anywhere.",
   "negative_priority_note": "All 469 accepted families are supported ones. The 200 out-of-scope and 50 insufficient-evidence families sit in shards 6-8, which were never reached, so the author matrix is ordered least-progressed-first and the scaled freeze is refused until those categories are filled.",
