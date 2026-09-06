@@ -860,6 +860,108 @@ class DatasetIntegrity(unittest.TestCase):
         row.update(language_ok=True,grade='reference_issue')
         self.assertEqual(validate_judgments({'judgments':[row]},['x'])[0]['grade'],'reference_issue')
 
+    def test_a_scaled_version_freezes_from_accepted_shards_end_to_end(self):
+        """The freeze path must work at 6 questions per language and at 1,000."""
+        from unittest.mock import patch
+        import hard_harness.dataset as dataset
+        counts = {'supported': 4, 'out_of_scope': 1, 'adversarial': 1, 'insufficient_information': 0}
+        per_language = sum(counts.values())
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); out = root / 'results'
+            plan_path = root / 'plan.json'
+            write_json(plan_path, {'version': 'test-scaled-v1', 'author_shards': 1,
+                                   'counts_per_language': counts,
+                                   'questions_per_language': per_language,
+                                   'full_target_questions_per_language': 1000,
+                                   'answer_shard_size': 100, 'answer_shards': 1,
+                                   'random_seed': 7, 'source_runtime_manifest': 'runtime-hash',
+                                   'llm': {'model': ANSWER_MODEL}})
+            units = [{'id': 'unit', 'document': 'test.docx', 'page': None,
+                      'text': 'original source evidence text', 'quality': 'test',
+                      'eligible_for_reference': True}]
+            (out / 'sources').mkdir(parents=True)
+            write_json(out / 'sources/gold_units.json', units)
+            source_hash = fingerprint(units)
+            write_json(out / 'sources/manifest.json',
+                       {'status': 'ready_for_reference_authoring', 'gold_unit_manifest': source_hash})
+            base = [self.family(i) for i in range(1, 5)]
+            # Deliberately high ID: a category the version does not request must be
+            # left out of the freeze even though it was accepted and audited.
+            base += [self.family(5, 'out_of_scope'), self.family(900, 'insufficient_information')]
+            for family in base:
+                family['author_provenance'] = {'served_model': ANSWER_MODEL}
+                family['audit_provenance'] = {'served_model': 'gemini-3.5-flash'}
+            (out / 'author_00').mkdir(parents=True)
+            write_jsonl(out / 'author_00/families.jsonl', base)
+            write_jsonl(out / 'author_00/reference_audit.jsonl',
+                        [{'id': f['id'], 'approved': True, 'issues': []} for f in base])
+            write_json(out / 'author_00/manifest.json',
+                       {'source_manifest': source_hash, 'families': len(base)})
+
+            class AbsenceAuditor:
+                def __init__(self, role, *, call_limit):
+                    self.role, self.pause = role, None
+                def object(self, messages, *, max_tokens=0):
+                    asked = json.loads(messages[1]['content'])['families']
+                    return ({'reviews': [{'id': row['id'], 'decision': 'abstention_justified',
+                                          'source_unit_ids': [], 'reason': 'fixture'} for row in asked]}, {})
+                def check_pause(self):
+                    pass
+
+            def freeze():
+                with patch.object(dataset, 'OUTPUT', out), patch.object(dataset, 'PLAN_PATH', plan_path), \
+                     patch.object(dataset, 'ROOT', root), \
+                     patch.object(dataset, 'CheckpointClient', AbsenceAuditor):
+                    return dataset.compile_dataset()
+
+            manifest = freeze()
+            self.assertEqual(manifest['status'], 'frozen')
+            self.assertTrue(manifest['scaled_version'])
+            self.assertEqual((manifest['questions_per_language'], manifest['question_records']),
+                             (per_language, 3 * per_language))
+            self.assertEqual(manifest['answer_shards'], 1)
+            self.assertEqual(manifest['base_families_accepted'], 6)
+            # The zero-count category contributes nothing and nothing was padded: the
+            # surplus insufficient family is simply not selected.
+            self.assertEqual(manifest['base_families_selected'], 5)
+            self.assertEqual(manifest['accepted_per_shard'], {0: 6})
+            self.assertFalse(manifest['reference_model_independent_of_candidate'])
+            self.assertEqual(manifest['provider_mix']['authoring'], {f'xkiro:{ANSWER_MODEL}': 5})
+            self.assertEqual(manifest['provider_mix']['audit'], {'google:gemini-3.5-flash': 5})
+            ids = set()
+            for lang in ('ar', 'fr', 'en'):
+                public = read_jsonl(out / 'dataset/public' / f'questions.{lang}.jsonl')
+                private = read_jsonl(out / 'dataset/references' / f'answer_key.{lang}.jsonl')
+                self.assertEqual((len(public), len(private)), (per_language, per_language))
+                self.assertEqual({r['id'] for r in public}, {r['id'] for r in private})
+                self.assertTrue(all('reference_answer' not in row and 'required_facts' not in row
+                                    for row in public))
+                ids |= {r['id'] for r in public}
+            self.assertEqual(len(ids), 3 * per_language)
+            self.assertNotIn('hh0900.en', {row['id'] for row in
+                                          read_jsonl(out / 'dataset/public/questions.en.jsonl')})
+            # The single adversarial record continues after the selected base families.
+            self.assertIn('hh0006.en', {row['id'] for row in
+                                       read_jsonl(out / 'dataset/public/questions.en.jsonl')})
+            # A second call replays the frozen dataset without touching a provider.
+            with patch.object(dataset, 'CheckpointClient',
+                              side_effect=AssertionError('a frozen dataset must not re-audit')):
+                with patch.object(dataset, 'OUTPUT', out), patch.object(dataset, 'PLAN_PATH', plan_path), \
+                     patch.object(dataset, 'ROOT', root):
+                    self.assertEqual(freeze()['dataset_id'], manifest['dataset_id'])
+            # A version that cannot be filled is refused instead of padded.
+            (out / 'dataset/manifest.json').unlink()
+            rows = [row for row in read_jsonl(out / 'author_00/families.jsonl')
+                    if row['id'] != 'hh0005']        # drop the only out-of-scope family
+            write_jsonl(out / 'author_00/families.jsonl', rows)
+            write_json(out / 'author_00/manifest.json',
+                       {'source_manifest': source_hash, 'families': len(rows)})
+            with patch.object(dataset, 'OUTPUT', out), patch.object(dataset, 'PLAN_PATH', plan_path), \
+                 patch.object(dataset, 'ROOT', root), \
+                 patch.object(dataset, 'CheckpointClient', AbsenceAuditor):
+                with self.assertRaisesRegex(ValueError, 'still needed'):
+                    dataset.compile_dataset()
+
     def test_prediction_public_reader_rejects_answer_key_fields(self):
         from hard_harness.predict import load_public_questions
         with tempfile.TemporaryDirectory() as temp:

@@ -111,7 +111,11 @@ def validate_and_split(families, source_units, plan):
     if len(families) != scale['per_language'] or len({f['id'] for f in families}) != scale['per_language']:
         raise ValueError(f"Exactly {scale['per_language']} unique scenario families required; never pad counts")
     counts = Counter(f['category'] for f in families)
-    if dict(counts) != plan['counts_per_language']:
+    expected_counts = {name: int(value) for name, value in plan['counts_per_language'].items()}
+    # A category the version sets to zero legitimately appears in no family, so a
+    # missing key is a zero rather than a mismatch; an unexpected category still fails.
+    if ({name: counts.get(name, 0) for name in expected_counts} != expected_counts
+            or set(counts) - set(expected_counts)):
         raise ValueError(f'Wrong category counts: {dict(counts)}')
     public, private = {l: [] for l in LANGUAGES}, {l: [] for l in LANGUAGES}
     seen = {l: {} for l in LANGUAGES}
@@ -222,8 +226,15 @@ def compile_dataset():
         raise ValueError('Two author shards accepted the same family ID')
     scale = dataset_scale(plan)
     base = select_accepted(base_all, scale)
+    snapshot_manifest_path = ROOT / 'benchmarks' / 'hard_harness_accepted' / 'manifest.json'
+    snapshot_summary = read_json(snapshot_manifest_path) if snapshot_manifest_path.exists() else {}
+    independence = snapshot_summary.get('audit_independence') or {}
+    independent_reference_audit = (int(independence.get('cross_provider_audited', 0)) > 0
+                                   and not int(independence.get('same_provider_audited', 0)))
+    # The mix describes the references this version actually froze, not everything
+    # that has ever been accepted, so a scaled version labels its own provenance.
     mix = {'authoring': Counter(), 'audit': Counter()}
-    for row in base_all:
+    for row in base:
         family = row.get('family', row)
         for key, bucket in (('author_provenance', 'authoring'), ('audit_provenance', 'audit')):
             provenance = family.get(key) or {}
@@ -246,6 +257,13 @@ def compile_dataset():
     else:
         audit_absence(base,units,reject=True)
     families = base + make_adversarial(base, plan)
+    provider_mix = {**provider_mix,
+                    'note': 'Counts are per accepted base family frozen into this version. Providers are '
+                            'deliberately mixed across free tiers, so no subset of this dataset is single-provider; '
+                            'adversarial records come from deterministic mutation of those families and add no '
+                            'model call.',
+                    'adversarial_derived_without_model_call': sum(
+                        1 for family in families if family['category'] == 'adversarial')}
     public, private = validate_and_split(families, units, plan)
     out = OUTPUT/'dataset'
     manifest = {'version': plan['version'], 'frozen_at': now(), 'status': 'frozen',
@@ -254,20 +272,15 @@ def compile_dataset():
                 'questions_per_language': scale['per_language'], 'answer_shards': scale['answer_shards'],
                 'answer_shard_size': scale['answer_shard_size'],
                 'counts_per_language': plan['counts_per_language'], 'expert_reviewed': False,
-                'reference_model_independent_of_candidate': False,
+                # True only when every accepted reference was audited by a provider other
+                # than the one that drafted it; the committed snapshot manifest decides.
+                'reference_model_independent_of_candidate': independent_reference_audit,
                 'scaled_version': scale['per_language'] < scale['full_target'],
                 'full_target_questions_per_language': scale['full_target'],
                 'base_families_accepted': len(base_all), 'base_families_selected': len(base),
-                'audit_independence': (read_json(ROOT / 'benchmarks' / 'hard_harness_accepted' / 'manifest.json')
-                               if (ROOT / 'benchmarks' / 'hard_harness_accepted' / 'manifest.json').exists()
-                               else {}).get('audit_independence', {}),
-        'provider_mix': {**provider_mix,
-                         'note': 'Providers are deliberately mixed across free tiers, so no subset of this '
-                                 'dataset is single-provider; adversarial records are derived from these '
-                                 'accepted families by deterministic mutation and add no model call.',
-                         'adversarial_derived_without_model_call': int(sum(
-                             scale['counts_per_language'].get('adversarial', 0) for _ in LANGUAGES))},
-        'accepted_per_shard': shard_counts,
+                'audit_independence': independence,
+                'provider_mix': provider_mix,
+                'accepted_per_shard': shard_counts,
                 'selection': 'lowest accepted family ID per category, so a later run extends this version',
                 'source_manifest': sources, 'public_files': {}, 'reference_files': {},
                 'limitations': 'Paired translations and reused evidence/attack families are correlated. Model-audited references are not expert-certified.'}
