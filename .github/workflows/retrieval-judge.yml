@@ -40,6 +40,14 @@ jobs:
     name: Judge retrieval from embeddings and lexical overlap
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # The pinned harness corpus is judged as-is, and two larger chunk sizes are judged
+      # beside it: whole-span evidence depends on the chunker, and a chunking decision can
+      # be measured with no model call at all, so the cheap fix is checked before any
+      # answer-quality number is quoted. The pinned setting is never changed here.
+      matrix:
+        chunk: [220, 420, 640]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,6 +70,7 @@ jobs:
             echo 'No sources run recorded in the plan; skipping the chunking diagnostic.'
           fi
       - name: Judge both arms (lexical BM25 and nvidia embeddings)
+        # chunk=220 is the pinned harness setting; the others are comparisons only
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
@@ -71,9 +80,14 @@ jobs:
           set -o pipefail
           # tee opens its target before the program runs, so the report directory has to
           # exist first or the step dies on the pipeline instead of on the measurement.
-          mkdir -p raglab/results/hard_harness/retrieval_judge
-          cd raglab && python hard_harness_main.py judge --arms lexical,vector --top-k 5 \
-            | tee results/hard_harness/retrieval_judge/summary.json
+          mkdir -p raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}
+          if [ "${{ matrix.chunk }}" = "220" ]; then
+            cd raglab && python hard_harness_main.py judge --arms lexical,vector --top-k 5 \
+              --out results/hard_harness/retrieval_judge_220
+          else
+            cd raglab && python hard_harness_main.py judge --arms lexical,vector --top-k 5 \
+              --chunk-tokens ${{ matrix.chunk }} --out results/hard_harness/retrieval_judge_${{ matrix.chunk }}
+          fi
       - name: Keep embeddings and tokenizer for the next run
         if: always()
         uses: actions/cache/save@v4
@@ -83,16 +97,17 @@ jobs:
       - name: Show the report
         if: always()
         run: |
-          if [ -f raglab/results/hard_harness/retrieval_judge/REPORT.md ]; then
-            cat raglab/results/hard_harness/retrieval_judge/REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          DIR=raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}
+          if [ -f "$DIR/REPORT.md" ]; then
+            cat "$DIR/REPORT.md" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo 'No report was written; the judge did not reach the reporting step.' >> "$GITHUB_STEP_SUMMARY"
+            echo "No report was written in $DIR; the judge did not reach the reporting step." >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: retrieval-judge
-          path: raglab/results/hard_harness/retrieval_judge/
+          name: retrieval-judge-${{ matrix.chunk }}
+          path: raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}/
           if-no-files-found: warn
           retention-days: 30
       - name: Publish the report as checkpoints
@@ -101,6 +116,6 @@ jobs:
         # the readable one. The per-query rows stay in the artifact, not in the checks.
         env: {GH_TOKEN: "${{ github.token }}"}
         run: |
-          rm -f raglab/results/hard_harness/retrieval_judge/*_rows.jsonl \
-                raglab/results/hard_harness/retrieval_judge/*_absent.jsonl
-          python raglab/hard_harness_main.py publish --phase retrieval_judge
+          rm -f raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}/*_rows.jsonl \
+                raglab/results/hard_harness/retrieval_judge_${{ matrix.chunk }}/*_absent.jsonl
+          python raglab/hard_harness_main.py publish --phase retrieval_judge_${{ matrix.chunk }}
