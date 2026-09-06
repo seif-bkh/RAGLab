@@ -1,7 +1,7 @@
 {
   "version": "hard-harness-v1",
-  "revision": "18-freeze-640-token-chunks-on-a-100-per-language-sample",
-  "phase": "compile",
+  "revision": "19-answer-the-frozen-100x3-sample-at-640-tokens",
+  "phase": "evaluate",
   "languages": [
     "ar",
     "fr",
@@ -62,7 +62,7 @@
   "answer_shards": 3,
   "answer_shard_size": 100,
   "random_seed": 20260905,
-  "source_runtime_manifest": "807785db25fb798499e67f12f59589f6db33792e88cb00cf104752853046e60e",
+  "source_runtime_manifest": "950c40fd40e3e28d22d167e79252d19682298e793af116d2c4336ff2f29690de",
   "sources_run": "33985662461",
   "resume_run": "34002128822",
   "candidate_llm": {
@@ -113,5 +113,8 @@
   },
   "dataset_limit_per_language": 100,
   "authors_run": "34017059277",
-  "provider_mix_note": "Answering is xKiro Qwen only. Reference-side roles may run on Google under the existing free-tier pacing; every published count is labelled with the provider that produced it, so a mixed-provider run is never reported as a Qwen-only number."
+  "provider_mix_note": "Answering is xKiro Qwen only. Reference-side roles may run on Google under the existing free-tier pacing; every published count is labelled with the provider that produced it, so a mixed-provider run is never reported as a Qwen-only number.",
+  "dataset_run": "34026077962",
+  "dataset_manifest_note": "Frozen in run 34026077962: 100 questions per language (300), sample 100 families drawn from a 476-family pool of which 315 have gold text present in docs/, at 640/40 chunking. source_runtime_manifest above is that run's recomputed fingerprint, so the candidate path accepts the corpus this dataset version was designed against.",
+  "answer_run_note": "Answering runs on xKiro qwen/qwen3.8-max:free via XKIRO_API_KEY (alternate alias XKIRO_API_KEY_JINKO). Predictions never see answer_key files; grading compares them afterwards."
 }
