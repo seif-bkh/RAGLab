@@ -86,7 +86,8 @@ def parse_object(text):
 # Reference work may legitimately use a different provider from the candidate.
 # Authoring is the high-volume side; auditing/judging must stay independent of the
 # answering model, so a role may point at its own profile in the plan.
-ROLE_PROFILE_KEYS = {'candidate': 'candidate_llm', 'question_author': 'author_llm'}
+ROLE_PROFILE_KEYS = {'candidate': 'candidate_llm', 'question_author': 'author_llm',
+                     'semantic_grader': 'grader_llm'}
 
 
 def role_profile(plan, role):
@@ -125,6 +126,9 @@ def provider_for_model(name):
         return 'xkiro'
     if text.startswith('gemini'):
         return 'google'
+    if 'glm' in text.lower():
+        # The gateway may report the upstream id rather than the catalog slug.
+        return 'experiential'
     return 'other'
 
 
@@ -171,6 +175,15 @@ class CheckpointClient:
                 raise HarnessPause('Google is not active; ask the user before changing the harness plan')
             if profile.get('free_tier_project_confirmed') is not True:
                 raise HarnessPause('Confirm the Google key is for a free-tier project before inference')
+        elif profile['provider'] == 'experiential':
+            # A judging role on a third provider keeps the answerer from marking its own work.
+            if profile['model'] != 'glm-5.3-flash':
+                raise HarnessPause('The Experiential Labs profile must use the approved catalog slug '
+                                   'glm-5.3-flash; nothing else is substituted')
+            if profile.get('credits_acknowledged') is not True:
+                raise HarnessPause('Experiential Labs bills routed tokens against account credits. Set '
+                                   'grader_llm.credits_acknowledged only with the user approval recorded '
+                                   'in the plan note')
         else:
             raise HarnessPause('Unknown harness provider; no silent fallback')
         self.model = profile['model']
@@ -179,6 +192,7 @@ class CheckpointClient:
         supplied_alias = os.environ.get('HARNESS_CREDENTIAL_ALIAS')
         approved_aliases = profile.get('credential_aliases', [self.credential_alias])
         permitted_aliases = ({'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'} if self.provider == 'xkiro'
+                             else {'EXPERIENTIAL_API_KEY'} if self.provider == 'experiential'
                              else {'GEMINI_API_KEY','GOOGLE_API_KEY'})
         if not set(approved_aliases) <= permitted_aliases:
             raise HarnessPause('Credential aliases must belong to the selected provider')
@@ -199,6 +213,11 @@ class CheckpointClient:
                 self.client = FreeGatewayClient(self.provider, self.model,
                     load_pricing(self.provider, api_key=key), budget=self.budget, api_key=key,
                     json_mode=role != 'candidate')
+            elif self.provider == 'experiential':
+                from hard_harness.experiential_client import ExperientialHarnessClient
+                self.client = ExperientialHarnessClient(self.model, key, budget=self.budget,
+                                                        pacing=profile.get('pacing'),
+                                                        base_url=profile.get('base_url'))
             else:
                 from hard_harness.google_client import GoogleHarnessClient
                 self.client = GoogleHarnessClient(self.model, key,

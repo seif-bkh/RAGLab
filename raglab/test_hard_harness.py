@@ -1,6 +1,7 @@
 """Offline integrity/continuation contracts for the 3,000-question harness."""
 import json
 import tempfile
+import urllib.error
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -841,6 +842,130 @@ class RetrievalJudge(unittest.TestCase):
         rows = judge_families([family], corpus, rank_scores=lambda fid, lang, q, allowed=None: [1.0])
         self.assertNotIn('GOLD-ONLY-TOKEN-918', json.dumps(rows, ensure_ascii=False))
         self.assertTrue(all('reference_answer' not in row and 'required_facts' not in row for row in rows))
+
+
+class ExperientialGateway(unittest.TestCase):
+    """The judging role on a third provider: contract shape, and no silent substitution."""
+
+    class Reply:
+        def __init__(self, payload):
+            self._payload = json.dumps(payload).encode()
+
+        def read(self):
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class Opener:
+        def __init__(self, replies):
+            self.replies = list(replies)
+            self.requests = []
+
+        def open(self, request, timeout=None):
+            self.requests.append({'url': request.full_url,
+                                  'auth': request.get_header('Authorization'),
+                                  'body': json.loads(request.data.decode())})
+            reply = self.replies.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return ExperientialGateway.Reply(reply)
+
+    def client(self, replies, **kwargs):
+        from hard_harness.experiential_client import ExperientialHarnessClient
+        return ExperientialHarnessClient('glm-5.3-flash', 'xpl_secretvalue0000000000000000000000000000',
+                                         budget={'used': 0, 'limit': 50},
+                                         opener=self.Opener(replies), **kwargs)
+
+    def test_the_request_sends_only_the_fields_the_gateway_documents(self):
+        from hard_harness.experiential_client import chat_request_body
+        body = chat_request_body('glm-5.3-flash', [{'role': 'user', 'content': 'hi'}], 9000)
+        self.assertEqual(body, {'model': 'glm-5.3-flash', 'messages': [{'role': 'user', 'content': 'hi'}],
+                               'max_tokens': 9000})
+        for banned in ('temperature', 'top_p', 'response_format'):
+            self.assertNotIn(banned, json.dumps(body))
+        # The documented escape for all_routes_failed: the output ceiling is dropped, nothing else.
+        self.assertEqual(chat_request_body('glm-5.3-flash', [], 9000, include_limit=False),
+                         {'model': 'glm-5.3-flash', 'messages': []})
+
+    def test_a_reply_of_only_reasoning_is_refused_not_graded(self):
+        from hard_harness.experiential_client import assistant_text
+        from nvidia_api import NvidiaAPIError
+        starved = {'choices': [{'message': {'content': '', 'reasoning_content': 'thought' * 40}}]}
+        with self.assertRaises(NvidiaAPIError) as raised:
+            assistant_text(starved)
+        self.assertIn('output ceiling', str(raised.exception))
+        self.assertEqual(assistant_text({'choices': [{'message': {'content': '{"ok": true}'}}]})[0],
+                         '{"ok": true}')
+
+    def test_the_judgement_round_trips_and_the_key_never_reappears(self):
+        opener_payload = {'model': 'glm-5.3-flash',
+                          'choices': [{'message': {'content': '{"judgments": []}'}}],
+                          'usage': {'prompt_tokens': 10, 'completion_tokens': 4, 'total_tokens': 14}}
+        client = self.client([opener_payload])
+        result = client.chat('glm-5.3-flash', [{'role': 'user', 'content': 'grade'}], max_tokens=8000)
+        self.assertEqual(result['text'], '{"judgments": []}')
+        self.assertEqual(result['served_model'], 'glm-5.3-flash')
+        self.assertEqual(result['usage']['total_tokens'], 14)
+        request = client.opener.requests[0]
+        self.assertEqual(request['url'], 'https://api.experientiallabs.ai/v1/chat/completions')
+        self.assertEqual(request['auth'], 'Bearer ' + client.api_key)
+        self.assertEqual(request['body']['max_tokens'], 8000)
+        self.assertNotIn('temperature', request['body'])
+
+    def test_all_routes_failed_retries_once_without_the_output_ceiling(self):
+        failure = urllib.error.HTTPError('https://api.experientiallabs.ai/v1/chat/completions', 502,
+                                         'Bad Gateway', {}, None)
+        failure.read = lambda: b'{"error":{"code":"all_routes_failed","message":"xpl_secretvalue0000000000000000000000000000 rejected"}}'
+        client = self.client([failure, {'choices': [{'message': {'content': '{}'}}], 'model': 'glm-5.3-flash'}])
+        result = client.chat('glm-5.3-flash', [{'role': 'user', 'content': 'grade'}], max_tokens=8000)
+        self.assertEqual(result['text'], '{}')
+        bodies = [entry['body'] for entry in client.opener.requests]
+        self.assertIn('max_tokens', bodies[0])
+        self.assertNotIn('max_tokens', bodies[1])
+        # The redaction happens before anything is stored or printed.
+        self.assertNotIn('xpl_secretvalue', json.dumps(bodies))
+
+    def test_an_unapproved_slug_or_a_missing_credential_stops_the_run(self):
+        from hard_harness.experiential_client import ExperientialHarnessClient
+        from nvidia_api import NvidiaAPIError
+        with self.assertRaises(ValueError):
+            ExperientialHarnessClient('gpt-9.9', 'xpl_x', budget={'used': 0, 'limit': 1})
+        with self.assertRaises(NvidiaAPIError):
+            ExperientialHarnessClient('glm-5.3-flash', '', budget={'used': 0, 'limit': 1})
+
+    def test_the_grader_role_cannot_spend_credits_the_plan_has_not_acknowledged(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            plan = Path(temp) / 'plan.json'
+            write_json(plan, {'llm': {'provider': 'google', 'model': 'gemini-3.5-flash',
+                                     'credential_secret': 'GEMINI_API_KEY'},
+                             'grader_llm': {'provider': 'experiential', 'model': 'glm-5.3-flash',
+                                            'credential_secret': 'EXPERIENTIAL_API_KEY'},
+                             'google_fallback_authorized': True, 'google_fallback_active': True})
+            with patch('hard_harness.common.PLAN_PATH', plan):
+                from hard_harness.common import CheckpointClient, HarnessPause
+                with self.assertRaises(HarnessPause) as raised:
+                    CheckpointClient('semantic_grader', call_limit=1, cache_root=temp)
+                self.assertIn('credits', str(raised.exception))
+                # The answerer's own profile is untouched by a judging-role switch.
+                from hard_harness.common import role_profile
+                with open(plan) as handle:
+                    read = json.load(handle)
+                self.assertEqual(role_profile(read, 'candidate'), read['llm'])
+                self.assertEqual(role_profile(read, 'semantic_grader')['provider'], 'experiential')
+
+    def test_a_glm_served_model_is_labelled_as_the_gateway_not_as_google_or_qwen(self):
+        from hard_harness.common import provider_for_model
+        self.assertEqual(provider_for_model('glm-5.3-flash'), 'experiential')
+        self.assertEqual(provider_for_model('zai-org/GLM-5.3-Flash'), 'experiential')
+        self.assertEqual(provider_for_model('gemini-3.5-flash'), 'google')
+        self.assertEqual(provider_for_model('qwen/qwen3.8-max:free'), 'xkiro')
 
 
 class DatasetIntegrity(unittest.TestCase):

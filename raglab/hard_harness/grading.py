@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 
 from artifacts import fingerprint, write_json
 from hard_harness.common import (OUTPUT, PLAN_PATH, LANGUAGES, CheckpointClient, deadline_reached, now,
-                                read_json, read_jsonl, soft_deadline, write_jsonl)
+                                read_json, read_jsonl, role_profile, soft_deadline, write_jsonl)
 
 GRADER_VERSION = 'semantic-reference-v1'
 
@@ -137,6 +137,10 @@ def grade_all():
                'questions_per_language':per_language,'scaled_version':bool(manifest.get('scaled_version')),
                'independent_judge':False,'expert_certified_references':False,'production_ready':False}
     client = CheckpointClient('semantic_grader',call_limit=700)
+    # A reasoning model spends completion tokens on thinking before it writes anything, so the
+    # ceiling is a plan property of the judging role rather than a constant in this file.
+    grader_profile = role_profile(plan, 'semantic_grader')
+    grade_max_tokens = int(grader_profile.get('max_tokens') or 6000)
     results, pending = [], []
     # Deterministic outcomes come first and outside any provider guard: the output contract,
     # injection markers and local refusals need no grader. In run 34026369379 a calibration
@@ -187,7 +191,7 @@ def grade_all():
                 summary['stop_reason'] = 'shard_deadline'
                 break
             batch = pending[start:start+6]
-            data, provenance = client.object(judge_messages(batch),max_tokens=6000)
+            data, provenance = client.object(judge_messages(batch),max_tokens=grade_max_tokens)
             for row in validate_judgments(data,[c['id'] for c in batch]):
                 ref, pred = references[row['id']], predictions[row['id']]
                 results.append({**row,'correct':True if row['grade']=='correct' else (None if row['grade']=='reference_issue' else False),

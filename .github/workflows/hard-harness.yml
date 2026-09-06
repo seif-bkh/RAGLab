@@ -28,6 +28,7 @@ jobs:
       predictions_run: ${{ steps.plan.outputs.predictions_run }}
       parallelism: ${{ steps.plan.outputs.parallelism }}
       candidate_key_secret: ${{ steps.plan.outputs.candidate_key_secret }}
+      grader_key_secret: ${{ steps.plan.outputs.grader_key_secret }}
       candidate_parallelism: ${{ steps.plan.outputs.candidate_parallelism }}
       author_key_secrets: ${{ steps.plan.outputs.author_key_secrets }}
       answer_shard_list: ${{ steps.plan.outputs.answer_shard_list }}
@@ -61,6 +62,14 @@ jobs:
           candidate=p.get('candidate_llm',p['llm'])
           assert candidate['provider']=='xkiro' and candidate['model']=='qwen/qwen3.8-max:free'
           assert candidate['credential_secret'] in {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'}
+          # The judging role may sit on a third provider on purpose: the answerer must not
+          # grade itself, and a free-tier ceiling that blocks grading must not force the
+          # candidate model to be swapped. Gateway slugs are approved one by one.
+          grader=p.get('grader_llm',p['llm'])
+          if grader['provider']=='experiential':
+              assert grader['model']=='glm-5.3-flash'
+              assert grader['credential_secret']=='EXPERIENTIAL_API_KEY'
+              assert grader.get('credits_acknowledged') is True, 'Experiential Labs bills tokens'
           # A free-tier key is latency-bound per worker, not rate-bound at low
           # fan-out; several shards may share it because a 429 is paced in-client.
           parallelism=int(p.get('author_parallelism', 1 if p['llm']['provider']=='google' else 2))
@@ -68,10 +77,14 @@ jobs:
           # A reference role may use another provider from the candidate, but only
           # between the two approved free profiles; nothing else is accepted.
           author=p.get('author_llm',p['llm'])
-          for name,profile in (('author_llm',author),('llm',p['llm']),('candidate_llm',candidate)):
+          for name,profile in (('author_llm',author),('llm',p['llm']),('candidate_llm',candidate),
+                               ('grader_llm',grader)):
               if profile['provider']=='xkiro':
                   assert profile['model']=='qwen/qwen3.8-max:free', (name,profile['model'])
                   assert profile['credential_secret'] in {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'}, name
+              elif profile['provider']=='experiential':
+                  assert profile['model']=='glm-5.3-flash', name
+                  assert profile['credential_secret']=='EXPERIENTIAL_API_KEY', name
               else:
                   assert profile['provider']=='google', name
                   assert p['google_fallback_authorized'] and p['google_fallback_active']
@@ -88,6 +101,7 @@ jobs:
           assert set(secrets) <= {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY','GEMINI_API_KEY','GOOGLE_API_KEY'}
           fields={'phase':p['phase'],'key_secret':key_secret,'parallelism':str(parallelism),
                   'candidate_key_secret':candidate['credential_secret'],'candidate_parallelism':'2',
+                  'grader_key_secret':grader['credential_secret'],
                   'author_key_secrets':','.join(secrets),
                   'answer_shard_list':__import__('json').dumps(list(range(derived)))}
           # Negative families (out of scope, insufficient evidence) live in the last
@@ -431,8 +445,8 @@ jobs:
       - name: Calibrated semantic comparison; never exact-string grading alone
         env:
           HARNESS_DEADLINE_MINUTES: "105"
-          HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.key_secret] }}
-          HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.key_secret }}
+          HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.grader_key_secret] }}
+          HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.grader_key_secret }}
           TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
           PYTHONUNBUFFERED: "1"
         run: python raglab/hard_harness_main.py grade
