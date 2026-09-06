@@ -178,7 +178,9 @@ def grade_all():
             summary['calibration'] = {'status': 'not_needed',
                                       'note': 'no prediction required a semantic comparison'}
         deadline = soft_deadline(plan)
-        for start in range(0,len(pending),6):
+        # Ten comparisons per request: the free tier counts requests, not content, so a
+        # smaller batch spends the same day's quota on fewer of them and resumes coarsely.
+        for start in range(0,len(pending),10):
             if deadline_reached(deadline):
                 summary['stop_reason'] = 'shard_deadline'
                 break
