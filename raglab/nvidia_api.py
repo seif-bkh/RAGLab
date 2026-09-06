@@ -78,10 +78,18 @@ def final_content(content):
     return content.strip()
 
 
-def chat_payload(model, messages, max_tokens=2048):
+def chat_payload(model, messages, max_tokens=2048, thinking=False):
     """Use each model's documented parameters, not a universal thinking flag."""
     payload = {"model": model, "messages": messages, "temperature": 0,
                "max_tokens": max_tokens, "stream": False}
+    if model.startswith("nvidia/nemotron-3"):
+        # Nemotron-3 exposes reasoning as a chat-template switch, and its card asks for
+        # temperature 1.0 / top_p 0.95 when thinking is on. A cited-JSON contract wants the opposite:
+        # greedy, no reasoning tokens, so the ceiling is spent on the answer. Off is therefore the
+        # default here rather than an assumption about what the model prefers.
+        payload["chat_template_kwargs"] = {"enable_thinking": bool(thinking)}
+        if thinking:
+            payload.update(temperature=1.0, top_p=0.95)
     if model == KIMI_MODEL:
         payload.update(reasoning_effort="low", seed=0)
     elif model.startswith("deepseek-ai/") or model.startswith("moonshotai/kimi-k2"):
@@ -203,8 +211,8 @@ class NvidiaClient:
                   f"(HTTP {error.status_code or 'network'})", flush=True)
             time.sleep(delay)
 
-    def chat(self, model, messages, *, max_tokens=2048):
-        payload = chat_payload(model, messages, max_tokens)
+    def chat(self, model, messages, *, max_tokens=2048, thinking=False):
+        payload = chat_payload(model, messages, max_tokens, thinking=thinking)
         if self.stream and model in ANSWER_MODELS:
             payload["stream"] = True
         data = self.request("chat/completions", payload)

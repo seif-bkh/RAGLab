@@ -66,6 +66,30 @@ or resumable embedding caches. Cache/index identities include model, endpoint,
 embedding task, dimensions and tokenizer/chunk settings. Same-sized vectors from
 different models are never treated as interchangeable.
 
+## Chat: ask a question, get a cited answer
+
+```bash
+./raglab/chat.sh --check                      # config, model, chunking, index size — no completion call
+./raglab/chat.sh --ingest                      # first run only: embeds docs/ + data/ into ChromaDB
+./raglab/chat.sh                               # the REPL
+./raglab/chat.sh "ما رأس مال بنك التمويل العائلي؟" -k 8 --json
+./raglab/chat.sh --show-context "quel est le délai de recours ?"
+```
+
+It answers with `nvidia/nemotron-3.5-lightning-30b-a3b` through `NVIDIA_API_KEY` (a free endpoint on
+build.nvidia.com), thinking off by default — greedy, with the reply ceiling spent on the answer instead
+of reasoning tokens; `--thinking` switches reasoning on and raises the ceiling to fit it. Retrieval, the
+verbatim-evidence check and the private/live-question refusal are this file's own machinery, unchanged:
+the answer arrives as claims carrying quotes that must really appear in the retrieved excerpts, so an
+invented number comes back as `refused/invalid_output` with the model's raw reply shown rather than as
+fluent prose.
+
+Two labels matter. This is **not** the supported answerer above: `main.py answer` and the benchmark keep
+xKiro Qwen and reject any substitution, so no score in this repo belongs to the chat model. And the chat
+indexes at the application default chunking (220/40), not the harness pin (640/40), so its retrieval
+quality is a different measurement from the frozen sweep. In `chat` commands: `:k 8`, `:show`,
+`:log chat_turns.jsonl`, `:context`, `:quit`. `--data-dir PATH` replaces the default corpus outright.
+
 ## Grounding, free pricing and credentials
 
 - The model receives only the question and retrieved source context, not gold

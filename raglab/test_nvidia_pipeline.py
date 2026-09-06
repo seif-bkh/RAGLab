@@ -781,5 +781,170 @@ class MeasurementReports(unittest.TestCase):
             list(answer_parts({'label': 'dev_model'}, [{'id': 'q1', 'answer': 'ع' * 40000}]))
 
 
+class ChatEntry(unittest.TestCase):
+    """The conversational path may change the chat model; it may not change what the benchmark
+    believes, may not reach a provider for a question it must refuse locally, and may not print a key.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        import chat
+        self.chat = chat
+
+    def test_the_chat_answers_with_nemotron_and_leaves_the_benchmark_model_alone(self):
+        import config as cfg
+        self.assertEqual(self.chat.CHAT_MODEL, 'nvidia/nemotron-3.5-lightning-30b-a3b')
+        local = self.chat.chat_config()
+        self.assertEqual((local.ANSWER_PROVIDER, local.ANSWER_MODEL), ('nvidia', self.chat.CHAT_MODEL))
+        self.assertEqual(local.ANSWER_CACHE_PATH.name, 'answers_cache_chat.json')
+        # An accidental commit is the failure mode here, so the name must match an ignore pattern.
+        import subprocess
+        self.assertEqual(subprocess.run(['git', '-C', str(Path.cwd().parent), 'check-ignore', '-q',
+                                         str(local.ANSWER_CACHE_PATH)], capture_output=True).returncode, 0)
+        self.assertEqual(cfg.ANSWER_MODEL, QWEN_MODEL)      # the shared config is untouched
+        self.assertEqual(cfg.ANSWER_PROVIDER, 'xkiro')
+
+    def test_reasoning_is_switched_per_nemotron_call_and_nothing_else(self):
+        for thinking in (False, True):
+            payload = chat_payload(self.chat.CHAT_MODEL, [{'role': 'user', 'content': 'hi'}], 4096,
+                                   thinking=thinking)
+            self.assertEqual(payload['chat_template_kwargs'], {'enable_thinking': thinking})
+            self.assertEqual(payload['temperature'], 1.0 if thinking else 0)
+        for model in (KIMI_MODEL, DEEPSEEK_MODEL):          # each keeps its own documented switch
+            self.assertNotIn('enable_thinking', json.dumps(chat_payload(model, [], 4096, thinking=True)))
+
+    def test_the_generator_wrapper_forwards_the_flag_the_shared_signature_cannot_carry(self):
+        seen = []
+
+        class Fake:
+            base_url = 'https://example.invalid/v1'
+            api_key = 'k'
+
+            def chat(self, model, messages, *, max_tokens=2048, thinking=False):
+                seen.append(thinking)
+                return {'text': '{}'}
+
+        self.chat.ReasoningSwitch(Fake(), True).chat('m', [], max_tokens=9)
+        self.chat.ReasoningSwitch(Fake(), False).chat('m', [], max_tokens=9)
+        self.assertEqual(seen, [True, False])
+        self.assertEqual(self.chat.ReasoningSwitch(Fake(), False).base_url, 'https://example.invalid/v1')
+
+    def test_a_private_or_live_question_needs_neither_retrieval_nor_a_provider_call(self):
+        local = self.chat.chat_config()
+        local.CHAT_DATA_DIRS, local.CHAT_ALLOW_INGEST = [], False
+
+        class Generator:
+            def __init__(self):
+                self.asked = []
+
+            def answer(self, question, hits, language=None, use_cache=True):
+                self.asked.append(question)
+                return {'answer': 'unreachable'}
+
+        generator = Generator()
+        with patch('retrieval.retrieve', side_effect=AssertionError('must not retrieve')):
+            result = self.chat.ask(local, None, None, generator, "what is my balance today?")
+        self.assertEqual(result['status'], 'refused')
+        self.assertEqual(result['reason'], 'private_or_live_request')
+        self.assertEqual(generator.asked, [])
+        self.assertEqual(result['model'], self.chat.CHAT_MODEL)
+
+    def test_chat_commands_are_commands_and_only_questions_are_questions(self):
+        import contextlib
+        settings = {'top_k': 5, 'show_context': False, 'log': None, 'model': 'm', 'thinking': False,
+                    'chunking': 220, 'overlap': 40}
+        buffer = io.StringIO()
+        lines = [':k 7', '  ', 'quel est le délai', ':show', ':nope', ':quit', 'never asked']
+        with contextlib.redirect_stdout(buffer):
+            asked = list(self.chat.read_questions(lines, settings))
+        self.assertEqual(asked, ['quel est le délai'])
+        self.assertEqual(settings['top_k'], 7)
+        self.assertTrue(settings['show_context'])
+        self.assertIn('unknown command', buffer.getvalue())
+
+    def test_the_default_corpus_covers_the_shipped_documents_not_only_the_samples(self):
+        import chat
+        dirs = [path.name for path in chat.data_dirs()]
+        self.assertIn('docs', dirs)                 # the four real documents
+        files = sum(len(list(path.glob('*'))) for path in chat.data_dirs())
+        self.assertGreaterEqual(files, 4)
+        self.assertEqual([path.name for path in chat.data_dirs([str(Path(chat.__file__).parent)])],
+                         ['raglab'])                # --data-dir replaces the list outright
+
+    def test_readiness_report_masks_the_key_and_names_the_fix_for_an_empty_index(self):
+        import contextlib
+        class Collection:
+            def __init__(self, count):
+                self._count = count
+
+            def count(self):
+                return self._count
+
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi_SECRETVALUE99'}):
+            with patch('store.get_collection', return_value=Collection(256)):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    ready = self.chat.check()
+            with patch('store.get_collection', return_value=Collection(0)):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    empty = self.chat.check()
+            with patch('store.get_collection', side_effect=ValueError('sqlite file is locked')):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    broken = self.chat.check()
+        text = buffer.getvalue()
+        self.assertEqual((ready, empty, broken), (0, 1, 1))   # a chat with no index is not 'ready'
+        self.assertIn('nvapi_SE', text)
+        self.assertNotIn('SECRETVALUE', text)                  # reported presence never echoes the key
+        self.assertIn('nemotron-3.5-lightning', buffer.getvalue())
+        self.assertIn('sqlite file is locked', text)           # reported, not raised out of --check
+
+    def test_the_empty_index_line_points_at_the_ingest_command(self):
+        import contextlib
+        class Collection:
+            def count(self):
+                return 0
+        buffer = io.StringIO()
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi-x'}), \
+             patch('store.get_collection', return_value=Collection()), \
+             contextlib.redirect_stdout(buffer):
+            self.chat.check()
+        self.assertIn('--ingest', buffer.getvalue())
+
+    def test_one_offline_turn_satisfies_the_citation_contract_on_this_model(self):
+        from answer import AnswerGenerator
+        local = self.chat.chat_config(cache_path=self.path / 'answers.json')
+        quote = 'Le capital minimal est fixé à vingt millions de dinars.'
+        reply = json.dumps({'answerable': True, 'claims': [
+            {'text': 'Le minimum est de vingt millions de dinars.',
+             'evidence': [{'source_id': 'S1', 'quote': quote}]}]})
+        body = {'model': local.ANSWER_MODEL, 'usage': {},
+                'choices': [{'message': {'content': reply}, 'finish_reason': 'stop'}]}
+        sent = []
+
+        class Opener:
+            def open(self, request, timeout=None):
+                sent.append(json.loads(request.data.decode()))
+                return Response(body)
+
+        client = self.chat.ReasoningSwitch(
+            NvidiaClient(api_key='nvapi-x', min_interval=0, opener=Opener()), False)
+        generator = AnswerGenerator(local, client=client, approved_models=(local.ANSWER_MODEL,))
+        hits = [{'id': 'c1', 'text': quote, 'metadata': {'document': 'loi-2016-48.pdf'}}]
+        result = generator.answer('Quel est le capital minimal ?', hits, 'fr')
+        self.assertEqual(result['status'], 'answered', result.get('raw_preview') or result.get('error'))
+        self.assertEqual(sent[0]['model'], self.chat.CHAT_MODEL)
+        self.assertEqual(sent[0]['chat_template_kwargs'], {'enable_thinking': False})
+        self.assertIn('[S1]', result['answer'])
+        printed = self.chat.format_turn({**result, 'sources': [{'source_id': 'S1', 'document':
+                                                                'loi-2016-48.pdf', 'chunk_id': 'c1',
+                                                                'text': quote}]})
+        self.assertIn(quote, printed)                # the verbatim quote is shown under the claim
+        self.assertEqual(json.loads((self.path / 'answers.json').read_text()) and 1, 1)  # cached for re-reads
+
+
 if __name__ == '__main__':
     unittest.main()
