@@ -101,7 +101,9 @@ jobs:
           except FileNotFoundError:
               pass
           order=sorted(range(target),key=lambda shard:(accepted.get(shard,0)>=per,accepted.get(shard,0),-shard))
-          fields['author_shard_order']=json.dumps([{'shard':shard} for shard in order])
+          # Plain integers, not objects: a matrix array of objects would bind matrix.shard
+          # to the whole object and every per-shard path/name would collapse to "Object".
+          fields['author_shard_order']=json.dumps(order)
           for name in ('min_interval_seconds','max_retry_delay_seconds','quota_retry_attempts'):
               if name in p['llm'].get('pacing',{}): assert float(p['llm']['pacing'][name]) > 0
           for key in ('sources_run','dataset_run','resume_run','authors_run','predictions_run'):
