@@ -128,6 +128,29 @@ def provider_for_model(name):
     return 'other'
 
 
+def _braces_unclosed(text):
+    """A reply whose object never closed was cut off; a reply that closed is merely malformed.
+
+    Those two need different handling: re-asking for valid JSON at the same length reproduces
+    the identical cut, which is how shards 4-8 spent every focused-repair round on one failure.
+    """
+    body = (text or '').strip()
+    if body.startswith('```'):
+        body = body.strip('`').strip()
+        if body[:4].lower() == 'json':
+            body = body[4:].strip()
+    if not body.startswith('{'):
+        return False
+    depth = 0
+    for character in body:
+        depth += 1 if character == '{' else -1 if character == '}' else 0
+    return depth > 0
+
+
+def _retruncatable(exc_text):
+    return 'Unterminated string' in exc_text or 'Expecting ',' delimiter' in exc_text
+
+
 class CheckpointClient:
     """Cache provider responses, including ones later rejected by a validator.
 
@@ -331,6 +354,13 @@ class CheckpointClient:
         try:
             value = parse_object(response['text'])
         except (ValueError, TypeError) as exc:
+            if _braces_unclosed(response.get('text', '')) and _retruncatable(str(exc)):
+                # Ceiling first, prose later: the model cannot finish a sentence the response
+                # budget ends mid-way, so the repair call has to be allowed to run longer.
+                escalated = min(max(max_tokens * 2, 8192), 16000)
+                if escalated > max_tokens:
+                    budget_retry = True
+                    max_tokens = escalated
             repair = [*messages, {'role': 'assistant', 'content': response['text']},
                       {'role': 'user', 'content': 'Return exactly ONE valid JSON object for the same task, no commentary or second object. '
                                                 'Repair JSON formatting without inventing new facts. Parser error: ' + str(exc)[:300]}]
@@ -341,6 +371,7 @@ class CheckpointClient:
         provenance['source_call'] = self.last_provenance
         provenance['max_tokens'] = max_tokens
         provenance['budget_retry'] = budget_retry
+        provenance['max_tokens_after_truncation'] = max_tokens
         provenance['original_request_hash'] = original_hash
         provenance['format_repaired'] = provenance['_harness_request_hash'] != original_hash
         return value, provenance

@@ -58,6 +58,32 @@ class Checkpoints(unittest.TestCase):
             self.assertEqual(candidate.model,ANSWER_MODEL)
             self.assertEqual(candidate.credential_alias,'XKIRO_API_KEY_JINKO')
 
+    def test_a_truncated_reply_is_retried_with_more_room_not_the_same_limit(self):
+        """Cut-off prose cannot be repaired by re-asking at the length that cut it off."""
+        class CuttingClient(FakeClient):
+            base_url = 'https://example.invalid/v1'
+
+            def __init__(self):
+                super().__init__(result={'text': '{}', 'seconds': 1, 'served_model': ANSWER_MODEL})
+                self.max_tokens = []
+
+            def chat(self, model, messages, *, max_tokens=None):
+                self.max_tokens.append(max_tokens)
+                if len(self.max_tokens) == 1:      # the reply stops mid-string
+                    return {'text': '{"id":"hh0701","reference_answer":"' + 'x' * 200,
+                            'seconds': 1, 'served_model': ANSWER_MODEL}
+                return {'text': '{"id":"hh0701","reference_answer":"kept"}',
+                        'seconds': 1, 'served_model': ANSWER_MODEL}
+
+        with tempfile.TemporaryDirectory() as temp:
+            client = CheckpointClient('question_author', call_limit=3, cache_root=temp, client=CuttingClient())
+            value, provenance = client.object([{'role': 'user', 'content': 'author it'}], max_tokens=1000)
+        cutting = client.client
+        self.assertEqual(value['id'], 'hh0701')
+        self.assertEqual(len(cutting.max_tokens), 2)
+        self.assertGreater(cutting.max_tokens[1], cutting.max_tokens[0])
+        self.assertTrue(provenance['budget_retry'])
+
     def test_json_mode_changes_request_identity_but_preserves_old_candidate_cache(self):
         with tempfile.TemporaryDirectory() as temp:
             fake = FakeClient(result={'text':'{"ok":true}'})
