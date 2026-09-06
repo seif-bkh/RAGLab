@@ -211,3 +211,38 @@ Readings that matter for the freeze:
   `docs/` as the runtime loads it — and are excluded from these six rows rather than counted as
   retrieval misses. That is a labelling-path fix to make, not a ranking property to tune.
 
+## End to end at 640 tokens: the first answered sample
+
+Plan revision 23 froze and answered the scaled version. What is verified, in CI, with real
+provider traffic:
+
+- **Frozen dataset** (run `34026077962`): `hard-harness-v1` at **100 questions per language, 300
+  records**, sample = 100 families drawn from a 476-family accepted pool of which 315 have gold
+  text present in `docs/`, balanced over subtype and question style, at **640/40** token chunks.
+  Answer keys are separate files with their own fingerprints; the prediction path cannot read them.
+- **Retrieval** used `nvidia/nemotron-3-embed-1b` only, and the candidate corpus guard was re-pinned
+  to that run's recomputed chunk fingerprint rather than to the old 220-token value.
+- **Answers**: 300 of 300 questions answered by `qwen/qwen3.8-max:free` through `XKIRO_API_KEY`
+  (100 requests per shard, no pause, retrieved chunk IDs recorded per answer).
+- **Grading** is the honest limit of this state: rows are settled by the deterministic contract
+  checks first, and only the remainder needs the semantic grader, which runs on a Google key whose
+  free tier is a per-minute request ceiling shared with the authoring shards. Grading therefore
+  resumes across runs from cached judgments; a pause is recorded as `paused`, never as a score.
+
+The first classification pass (94 rows) is itself informative:
+
+- **10 answers were rejected by the output contract, all for one reason**: *Evidence quote is not
+  in the cited source* — the model asserted something plausible and then paraphrased the excerpt
+  instead of quoting it, which this harness treats as an invalid answer rather than a correct one
+  with a cosmetic defect. That reason is now carried into every row and into
+  `manifest['output_contract']['reasons']`, with a truncated copy of the reply for future runs.
+- **12 supported questions were refused** (`over_refusal`) even though retrieval had handed over
+  the span: refusal rate is a property of the answer prompt and the model, not of the index.
+- 72 comparisons went to the calibrated semantic grader.
+
+Two harness defects were fixed on the way and are worth stating because they changed what a paused
+run reports: the validator's message was being discarded (300 rows reading `invalid_output` with
+nothing to act on), and grading contacted the Google grader for its calibration fixture *before*
+computing the deterministic rows, so a spent judge provider could block a score that needs no
+provider at all. Grading now runs the offline half first and only calls the model for what it
+cannot settle.
