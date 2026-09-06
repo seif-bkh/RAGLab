@@ -1073,6 +1073,15 @@ class LocalDoctor(unittest.TestCase):
         self.assertEqual(report['keys']['EXPERIENTIAL_API_KEY']['present'], True)
         self.assertEqual(report['blocking'], [])
 
+    def test_a_copied_placeholder_counts_as_missing_not_as_a_credential(self):
+        from unittest.mock import patch
+        import hard_harness.preflight as preflight
+        with patch.dict(os.environ, {'EXPERIENTIAL_API_KEY': 'xpl_paste-your-key-here'}, clear=False):
+            report = preflight.local_report(plan_path=self.plan, root=self.root, probe=False)
+        self.assertEqual(report['keys']['EXPERIENTIAL_API_KEY']['present'], False)
+        self.assertIn('placeholder', report['keys']['EXPERIENTIAL_API_KEY']['note'])
+        self.assertIn('EXPERIENTIAL_API_KEY', report['blocking'])
+
     def test_grading_does_not_demand_the_reference_provider_it_no_longer_uses(self):
         from hard_harness.preflight import PHASE_ROLES, local_report
         self.assertEqual(PHASE_ROLES['grade'], ['grader_llm'])

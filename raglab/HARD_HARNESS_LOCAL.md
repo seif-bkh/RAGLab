@@ -8,10 +8,20 @@ phase ever switches provider or model on its own — a spent quota pauses and sa
 ## 1. Set up
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r raglab/requirements-harness.txt          # pymupdf + the benchmark requirements
-cp raglab/.env.example raglab/.env                      # then fill in the three required keys
-cd raglab && python hard_harness_main.py doctor
+git clone <this repo> && cd RAGLab
+cp raglab/.env.example raglab/.env      # paste the 3 keys: XKIRO_API_KEY, EXPERIENTIAL_API_KEY, NVIDIA_API_KEY
+./raglab/local.sh setup                 # .venv at the repo root + requirements-harness.txt
+./raglab/local.sh check                 # doctor: free, and it exits non-zero if a key is short
+```
+
+That leaves you in `raglab/` with everything the phases need. The wrapper is optional - each
+subcommand is one `hard_harness_main.py` call, listed in the table below, and `./local.sh help` prints
+the same. If you would rather not use it:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate    # from the repo root
+pip install -r raglab/requirements-harness.txt
+cd raglab && cp .env.example .env && python hard_harness_main.py doctor
 ```
 
 `doctor` makes no completion call. It lists models per key (which is free), prints which profile each
@@ -34,9 +44,12 @@ carry the whole state — sources audit, 476 accepted families, the frozen 100×
 and 300 grading rows. Pull them instead of re-running anything:
 
 ```bash
-python hard_harness_main.py collect --sha $(git rev-parse HEAD) --destination results/hard_harness
-python hard_harness_main.py report          # prints the score table from the collected rows
+./raglab/local.sh restore                 # asks gh for the last harness run's sha, then collects it
+./raglab/local.sh report                  # prints the 0.780 table from those rows
 ```
+
+`restore` takes an optional sha if you want a specific run (`./local.sh restore 0d2589f…`);
+`python hard_harness_main.py collect --sha <sha> --destination results/hard_harness` is the same call.
 
 Collected checkpoints are verified by fingerprint on the way in, so a truncated publish fails loudly
 rather than scoring partial data. Grading replays its cached judgments and makes no new judge

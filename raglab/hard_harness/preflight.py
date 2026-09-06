@@ -67,6 +67,11 @@ def credential_status(alias, plan, probe=True):
         base_url = LIST_ENDPOINTS[alias][0]
     header = LIST_ENDPOINTS[alias][1]
     row = {'present': bool(key), 'masked': masked(key), 'source': 'environment'}
+    # A copied .env.example still looks 'present' to a presence check, so the template's own
+    # placeholders are reported as unfilled instead of being sent to a provider to fail with a 401.
+    if key and any(mark in key.lower() for mark in ('paste-', 'your-key', 'placeholder', 'xxxx')):
+        row.update({'present': False, 'note': 'still the placeholder from .env.example', 'probe': 'skipped'})
+        return row
     if not os.environ.get('dotenv_loaded') and os.environ.get('HARNESS_API_KEY', '').strip() \
             and os.environ.get('HARNESS_CREDENTIAL_ALIAS', '').strip() == alias:
         row['source'] = 'HARNESS_API_KEY (CI-style injection)'
