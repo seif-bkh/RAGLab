@@ -246,3 +246,37 @@ nothing to act on), and grading contacted the Google grader for its calibration 
 computing the deterministic rows, so a spent judge provider could block a score that needs no
 provider at all. Grading now runs the offline half first and only calls the model for what it
 cannot settle.
+
+## The scored sample: 300/300 answered and graded
+
+Frozen version: `hard-harness-v1` at **100 questions per language, 640-token chunks**, answers from
+**xKiro `qwen/qwen3.8-max:free`**, comparisons judged by **Experiential Labs `glm-5.3-flash`** - a
+deliberate provider split so the answerer never marks its own work, and the reason the number below
+carries two providers in its label.
+
+| language | score | correct | partial | over_refusal | output-contract rejection |
+|---|---:|---:|---:|---:|---:|
+| ar | 0.840 | 84 | 11 | 4 | 1 |
+| fr | 0.750 | 75 | 17 | 3 | 5 |
+| en | 0.750 | 75 | 16 | 5 | 4 |
+| **all 300** | **0.780** | **234** | **44** | **12** | **10** |
+
+Reading of the four buckets:
+
+- `correct` / `partial` are the grader's semantic verdicts against the frozen answer key, not string
+  equality: 44 partial answers got the fact but missed a required element.
+- `over_refusal` (12) is the model declining a question whose evidence retrieval had already handed
+  it - an answer-prompt problem, not an index problem.
+- `invalid_output` (10) all failed on one recorded reason, *Evidence quote is not in the cited
+  source*: the claim was right and the citation paraphrased, which this harness counts as invalid.
+- Arabic leads by 9 points, but the retrieval sweep showed the ranker is language-balanced, so treat
+  this as reference/prompt interaction rather than evidence that Arabic is easier.
+
+Grader mechanics worth keeping in mind: 6 of 46 batch requests needed halving because GLM covered
+the ids twice or skipped one (`judge_outcomes: {ok: 272, split: 6}`), and none ended unusable, so
+the denominator never moved. Judging is cached by request hash, which is also why the batch size is
+pinned at six.
+
+**Not covered by this number:** the dataset has no out-of-scope, insufficient-evidence or adversarial
+families yet, so refusal correctness on unanswerable questions and injection resistance are still
+unmeasured - the 12 over-refusals above are failures on *answerable* questions only.

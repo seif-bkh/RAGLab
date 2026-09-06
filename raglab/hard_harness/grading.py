@@ -191,6 +191,10 @@ def grade_all():
                 'score, and no grader is contacted for it.'}
     summary['deterministic_grades'] = dict(Counter(row['grade'] for row in results))
     judge_outcomes = {}
+    # Read inside the guard below, so it has to exist before the first batch rather than after
+    # it: run 34032472454 finished grading all 300 rows and then reported status 'blocked' with
+    # error 'judge_unusable', a KeyError on its own counter, because this was set too late.
+    summary['judge_unusable'] = 0
     try:
         for identifier, prediction in sorted(predictions.items()):
             if identifier in classified:

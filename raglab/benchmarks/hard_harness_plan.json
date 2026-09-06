@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "27-let-a-mis-covering-judge-degrade-into-split-asks",
+  "revision": "28-report-the-complete-300-row-score-without-a-keyerror-status",
   "phase": "grade",
   "languages": [
     "ar",
@@ -137,6 +137,6 @@
     "why": "The answer model must not grade itself. Google is the only other approved judge and its free-tier per-minute ceiling left 206 of 300 comparisons unscored across three resumes. The user supplied EXPERIENTIAL_API_KEY and named glm-5.3-flash, an OpenAI-compatible catalog slug on the Experiential Labs gateway (api.experientiallabs.ai/v1).",
     "contract": "Gateway docs: one Authorization: Bearer header, model named by bare slug, and the smallest body - temperature/top_p/response_format are never sent because a route that rejects them answers all_routes_failed (502), for which the adapter retries once without max_tokens. GLM-5.3-Flash thinks before it writes, so max_tokens is generous and a reply with reasoning but no answer text is refused rather than graded.",
     "billing": "Not a free tier: routed tokens are billed per token against account credits. Estimated remaining spend for 206 comparisons at ~6 per request and ~10k tokens per request is a few cents at published GLM-5.3-Flash rates ($0.15/M in, $0.50/M out).",
-    "grading_state": "Run 34030906572 graded 186 new comparisons on experiential/glm-5.3-flash in 33 requests with no quota pause, taking the sample from 94 to 208 of 300 rows (155 correct, 31 partial, 12 over_refusal, 10 rejected by the output contract; 0.745 over scored rows). It then stopped because the judge covered one batch twice-ish rather than once each: that is now isolated by halving the ask, and a comparison the judge cannot answer becomes grade=judge_unusable, excluded from every score. Cached judgments replay, so this resumes at 208 rather than re-buying them."
+    "grading_state": "Complete: 300 of 300 rows classified - 234 correct, 44 partial, 12 over_refusal, 10 output-contract rejections; 0.780 overall (ar 0.840, fr 0.750, en 0.750). This phase now only re-reports it from cache: 33 grader requests replay at no cost. The previous run graded everything and then mislabelled its own status with a KeyError on a counter initialised too late, which is fixed here."
   }
 }
