@@ -19,13 +19,22 @@ from hard_harness.common import (ROOT, WORK, OUTPUT, PLAN_PATH, LANGUAGES, Check
 
 
 def load_public_questions(directory):
+    """Read the public question files a dataset version actually froze.
+
+    Counts come from the frozen manifest, so a scaled version is validated against
+    its own size instead of a hard-coded 1,000/3,000.
+    """
     directory = Path(directory)
     manifest = read_json(directory/'manifest.json')
+    per_language = int(manifest['questions_per_language'])
+    records = int(manifest['question_records'])
+    if per_language * len(LANGUAGES) != records:
+        raise ValueError('Frozen manifest is internally inconsistent')
     rows = []
     for lang in LANGUAGES:
         name = f'questions.{lang}.jsonl'
         part = read_jsonl(directory/name)
-        if len(part) != 1000 or fingerprint(part) != manifest['public_files'][name]['fingerprint']:
+        if len(part) != per_language or fingerprint(part) != manifest['public_files'][name]['fingerprint']:
             raise ValueError('Public question manifest mismatch: ' + name)
         for row in part:
             if set(row) - {'id','family_id','language','question','context_injections'}:
@@ -33,8 +42,8 @@ def load_public_questions(directory):
             if row['language'] != lang:
                 raise ValueError('Language mismatch in public questions')
         rows.extend(part)
-    if len({r['id'] for r in rows}) != 3000:
-        raise ValueError('Candidate input must contain 3000 unique IDs')
+    if len({r['id'] for r in rows}) != records:
+        raise ValueError(f'Candidate input must contain {records} unique IDs')
     return manifest, rows
 
 
@@ -122,8 +131,11 @@ def predict_shard(shard):
     if metadata['status'] != 'retrieval_complete':
         raise ValueError('Candidate retrieval is not complete')
     rows = read_jsonl(OUTPUT/'retrieval'/f'{shard:02d}.jsonl')
-    if len(rows) != 100 or len({r['id'] for r in rows}) != 100:
-        raise ValueError('Prediction shard must contain 100 unique public inputs')
+    size, shards = int(plan.get('answer_shard_size', 100)), int(plan.get('answer_shards', 30))
+    if not 0 <= shard < shards:
+        raise ValueError('Prediction shard is outside the plan')
+    if not rows or len({r['id'] for r in rows}) != len(rows) or len(rows) > size:
+        raise ValueError(f'Prediction shard must contain 1-{size} unique public inputs')
     out = OUTPUT/f'predictions_{shard:02d}'
     out.mkdir(parents=True,exist_ok=True)
     checkpoint = WORK/'prediction_shards'/fingerprint(metadata['public_files'])[:16]/f'{shard:02d}.jsonl'
@@ -135,7 +147,7 @@ def predict_shard(shard):
         if row['id'] in by_id and by_id[row['id']]['case_hash'] != case_identity(row,plan['answer_policy']):
             raise ValueError('Changed input/context cannot reuse an old prediction')
     if len(by_id)==len(rows):
-        report={'status':'predictions_complete','shard':shard,'target':100,'completed':100,
+        report={'status':'predictions_complete','shard':shard,'target':len(rows),'completed':len(rows),
                 'reference_files_loaded':False,'dataset_public_files':metadata['public_files'],
                 'completed_checkpoint_reused':True,'new_model_calls':0,
                 'provider_models':sorted({r['provider']+'/'+r['model'] for r in by_id.values()})}
@@ -148,7 +160,7 @@ def predict_shard(shard):
     cfg.ANSWER_MODEL = client.model
     cfg.ANSWER_PROVIDER = client.provider
     generator = AnswerGenerator(cfg,client,approved_models=(client.model,))
-    report = {'status':'running','shard':shard,'target':100,'completed':len(by_id),
+    report = {'status':'running','shard':shard,'target':len(rows),'completed':len(by_id),
               'reference_files_loaded':False,'dataset_public_files':metadata['public_files'],
               'model':client.model,'provider':client.provider,'credential_alias':client.credential_alias,
               'fresh_success_only_cache_used':False}
@@ -194,7 +206,8 @@ def predict_shard(shard):
             write_json(out/'manifest.json',report)
             client.check_pause()
             print(f'[predict] shard {shard} {row["id"]}: {result["status"]}/{result["reason"]} {len(by_id)}/100',flush=True)
-        report['status'] = 'predictions_complete' if len(by_id)==100 else 'incomplete'
+        report['status'] = ('predictions_complete' if len(by_id)==len(rows)
+                            else 'deadline_checkpoint' if report.get('stop_reason') else 'incomplete')
     except Exception as exc:
         from nvidia_api import safe_error
         report.update(status='paused' if client.pause else 'blocked',error=safe_error(exc))

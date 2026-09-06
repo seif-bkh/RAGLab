@@ -105,9 +105,13 @@ def grade_all():
     if manifest['status'] != 'frozen':
         raise ValueError('Reference key is not frozen')
     references = {}
+    per_language = int(manifest['questions_per_language'])
+    expected_records = int(manifest['question_records'])
     for lang in LANGUAGES:
         filename = f'answer_key.{lang}.jsonl'
         rows = read_jsonl(reference_dir/filename)
+        if len(rows) != per_language:
+            raise ValueError('Answer key does not match the frozen dataset version: ' + filename)
         if fingerprint(rows) != manifest['reference_files'][filename]['fingerprint']:
             raise ValueError('Answer key changed after freeze')
         references.update({r['id']:r for r in rows})
@@ -124,7 +128,8 @@ def grade_all():
     out = OUTPUT/'grading'
     out.mkdir(parents=True,exist_ok=True)
     summary = {'status':'running','version':GRADER_VERSION,'created_at':now(),
-               'expected_questions':3000,'available_predictions':len(predictions),
+               'expected_questions':expected_records,'available_predictions':len(predictions),
+               'questions_per_language':per_language,'scaled_version':bool(manifest.get('scaled_version')),
                'independent_judge':False,'expert_certified_references':False,'production_ready':False}
     client = CheckpointClient('semantic_grader',call_limit=700)
     results, pending = [], []
@@ -159,7 +164,7 @@ def grade_all():
             write_jsonl(out/'judgments.jsonl',results)
             print(f'[grade] {len(results)}/{len(predictions)} predictions classified',flush=True)
         # A deadline stop is never reported as a finished comparison.
-        summary['status'] = ('complete' if len(predictions)==3000 and len(results)==len(predictions)
+        summary['status'] = ('complete' if len(predictions)==expected_records and len(results)==len(predictions)
                              and not summary.get('stop_reason')
                              else 'partial_deadline' if summary.get('stop_reason') else 'partial')
     except Exception as exc:
@@ -167,12 +172,12 @@ def grade_all():
         summary.update(status='paused' if client.pause else 'blocked',error=safe_error(exc))
     summary['client'] = client.summary()
     summary['graded_questions'] = len(results)
-    summary['ungraded_questions'] = 3000-len(results)
+    summary['ungraded_questions'] = expected_records-len(results)
     summary['by_language'] = {}
     for lang in LANGUAGES:
         subset = [r for r in results if r['language']==lang]
         scored = [r for r in subset if r['correct'] is not None]
-        summary['by_language'][lang] = {'target':1000,'observed':len(subset),'scored':len(scored),
+        summary['by_language'][lang] = {'target':per_language,'observed':len(subset),'scored':len(scored),
             'correct':sum(r['correct'] for r in scored),'grades':dict(Counter(r['grade'] for r in subset)),
             'score':sum(r['correct'] for r in scored)/len(scored) if scored else None,
             'local_guard_refusals':sum(r.get('local_guard',False) for r in subset)}

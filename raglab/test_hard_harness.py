@@ -510,6 +510,48 @@ class DeadlineCheckpoints(unittest.TestCase):
 
 
 
+class RoleProfiles(unittest.TestCase):
+    def test_authoring_and_auditing_resolve_to_different_provider_profiles(self):
+        """The user chose hybrid sourcing: Qwen drafts, another provider audits."""
+        from unittest.mock import patch
+        from hard_harness.common import role_profile
+        with tempfile.TemporaryDirectory() as temp:
+            plan = Path(temp)/'plan.json'
+            write_json(plan, {'llm': {'provider': 'google', 'model': 'gemini-3.5-flash',
+                                      'credential_secret': 'GEMINI_API_KEY',
+                                      'free_tier_project_confirmed': True},
+                              'author_llm': {'provider': 'xkiro', 'model': ANSWER_MODEL,
+                                             'credential_secret': 'XKIRO_API_KEY_JINKO'},
+                              'candidate_llm': {'provider': 'xkiro', 'model': ANSWER_MODEL,
+                                                 'credential_secret': 'XKIRO_API_KEY_JINKO'},
+                              'google_fallback_authorized': True, 'google_fallback_active': True})
+            with patch('hard_harness.common.PLAN_PATH', plan):
+                author = CheckpointClient('question_author', call_limit=1, cache_root=temp, client=FakeClient())
+                auditor = CheckpointClient('reference_audit', call_limit=1, cache_root=temp, client=FakeClient())
+                grader = CheckpointClient('semantic_grader', call_limit=1, cache_root=temp, client=FakeClient())
+                candidate = CheckpointClient('candidate', call_limit=1, cache_root=temp, client=FakeClient())
+            self.assertEqual((author.provider, author.model), ('xkiro', ANSWER_MODEL))
+            self.assertEqual(author.credential_alias, 'XKIRO_API_KEY_JINKO')
+            self.assertEqual((auditor.provider, auditor.model), ('google', 'gemini-3.5-flash'))
+            self.assertEqual((grader.provider, grader.model), ('google', 'gemini-3.5-flash'))
+            self.assertEqual((candidate.provider, candidate.model), ('xkiro', ANSWER_MODEL))
+            # A role without its own profile inherits the shared reference profile.
+            self.assertEqual(role_profile(json.loads(plan.read_text()), 'absence_audit')['provider'], 'google')
+            # The author role's pacing block is used, and only it, so the audit gets
+            # no accidental xKiro retry allowance.
+            self.assertEqual(auditor.rate_allowance, 0)
+
+    def test_an_unapproved_reference_profile_is_refused_before_any_call(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            plan = Path(temp)/'plan.json'
+            write_json(plan, {'llm': {'provider': 'openai', 'model': 'gpt-x', 'credential_secret': 'X'},
+                             'google_fallback_authorized': True, 'google_fallback_active': True})
+            with patch('hard_harness.common.PLAN_PATH', plan):
+                with self.assertRaises(HarnessPause):
+                    CheckpointClient('reference_audit', call_limit=1, cache_root=temp, client=FakeClient())
+
+
 class DatasetIntegrity(unittest.TestCase):
     def test_focused_primary_repair_keeps_stable_evidence_aliases(self):
         from hard_harness.authoring import author_messages
@@ -583,6 +625,124 @@ class DatasetIntegrity(unittest.TestCase):
             self.assertEqual(report['new_model_calls'],0)
             self.assertEqual([r['id'] for r in read_jsonl(out/'author_00/families.jsonl')],['hh0002','hh0003'])
 
+    def test_a_committed_snapshot_recovers_families_without_artifact_access(self):
+        """Actions caches are evicted and artifacts expire; the repo copy must not."""
+        from unittest.mock import patch
+        import hard_harness.authoring as authoring
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); out=root/'out'; work=root/'work'; snapshot=root/'accepted'
+            (out/'sources').mkdir(parents=True); snapshot.mkdir()
+            plan=root/'plan.json'; write_json(plan,{'author_shards':1,'llm':{'model':ANSWER_MODEL}})
+            source_hash='verified-sources'; write_json(out/'sources/manifest.json',{'gold_unit_manifest':source_hash})
+            unit={'text':'هذا نص مصدر ثابت يبين اشتراط الموافقة على تعديل العقد.'}
+            specs=[{'id':f'hh{i:04d}','category':'supported','expected_behavior':'answer',
+                    'source_unit_ids':['u'],'primary_unit_id':'u'} for i in range(1,4)]
+            rows=[]
+            for spec in specs[:2]:
+                family={'id':spec['id'],'category':'supported','fact_summary':'approval','rationale':'source',
+                        'authoring_version':authoring.AUTHOR_VERSION,
+                        'evidence':[{'unit_id':'u','quote':unit['text']}],
+                        'languages':{l:{'question':q,'reference_answer':'approval required','required_facts':['approval']}
+                                      for l,q in [('ar','هل يشترط الحصول على الموافقة؟'),('fr','Une approbation est-elle nécessaire ?'),('en','Is approval required?')]}}
+                rows.append({'family':family,'audit':{'id':spec['id'],'approved':True,'issues':[]}})
+            write_jsonl(snapshot/'author_00.jsonl',rows)
+            # A rejected row in the snapshot must never be trusted back in.
+            bad=json.loads(json.dumps(rows[0])); bad['family']['id']='hh0003'
+            bad['audit']={'id':'hh0003','approved':False,'issues':['evidence missing']}
+            write_jsonl(snapshot/'author_01.jsonl',[bad])
+            with patch.object(authoring,'OUTPUT',out),patch.object(authoring,'WORK',work), \
+                 patch.object(authoring,'PLAN_PATH',plan), \
+                 patch.object(authoring,'ACCEPTED_SNAPSHOT',snapshot), \
+                 patch.object(authoring,'make_specs',return_value=(specs,{'u':unit})), \
+                 patch.object(authoring,'CheckpointClient',side_effect=AssertionError('recovery must not call a model')):
+                report=authoring.author_shard(0,recover_only=True)
+            self.assertEqual(report['families'],2)
+            self.assertEqual([r['id'] for r in read_jsonl(out/'author_00/families.jsonl')],['hh0001','hh0002'])
+            # The recovered family is re-materialised into the local cache, so a
+            # later run does not need the snapshot at all.
+            self.assertEqual(len(list((work/'draft_families').glob('*.json'))),2)
+
+    def test_drafting_continues_when_the_audit_provider_is_spent(self):
+        """The scarce audit provider must never block the fast drafting provider."""
+        from unittest.mock import patch
+        import hard_harness.authoring as authoring
+        unit_text='هذا نص مصدر ثابت يبين اشتراط الموافقة على تعديل العقد.'
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); out=root/'out'; work=root/'work'; (out/'sources').mkdir(parents=True)
+            plan=root/'plan.json'
+            write_json(plan,{'author_shards':1,'llm':{'model':'gemini-audit','provider':'google'},
+                             'author_llm':{'model':'qwen-author','provider':'xkiro'},
+                             'authoring':{'audit_mode':'drafts_only'}})
+            source_hash='verified-sources'; write_json(out/'sources/manifest.json',{'gold_unit_manifest':source_hash})
+            specs=[{'id':f'hh{i:04d}','category':'supported','expected_behavior':'answer',
+                    'source_unit_ids':['u'],'primary_unit_id':'u'} for i in range(1,4)]
+            units={'u':{'id':'u','text':unit_text,'document':'t.docx','page':None,'quality':'test'}}
+
+            spec_id=[specs[0]['id']]
+            with patch.object(authoring,'OUTPUT',out),patch.object(authoring,'WORK',work), \
+                 patch.object(authoring,'PLAN_PATH',plan), \
+                 patch.object(authoring,'make_specs',return_value=(specs,units)), \
+                 patch.object(authoring,'CheckpointClient',side_effect=lambda role,**kw: (
+                     self._draft_client(role,spec_id,unit_text,paused_audit=True))):
+                first=authoring.author_shard(0)
+            self.assertEqual(first['audit_mode'],'drafts_only')
+            self.assertEqual(first['families'],0)                     # nothing accepted without an audit
+            self.assertEqual(first['drafted_pending_audit'],3)
+            self.assertEqual(first['unresolved_count'],0)   # drafted, not failed
+            self.assertEqual(first['audit_stop_reason'],'provider_pause')
+            self.assertEqual(len(list((work/'draft_pending').glob('*.json'))),3)
+            self.assertEqual(len(list((work/'draft_families').glob('*.json'))),0)
+            # A later run reuses the drafts (no second authoring call) and promotes
+            # every family the audit still allows.
+            calls={'author':0}
+            def audit_ok(role,**kw):
+                return self._draft_client(role,spec_id,unit_text,paused_audit=False,calls=calls)
+            with patch.object(authoring,'OUTPUT',out),patch.object(authoring,'WORK',work), \
+                 patch.object(authoring,'PLAN_PATH',plan), \
+                 patch.object(authoring,'make_specs',return_value=(specs,units)), \
+                 patch.object(authoring,'CheckpointClient',side_effect=audit_ok):
+                second=authoring.author_shard(0)
+            self.assertEqual(second['status'],'drafts_complete')
+            self.assertEqual(second['audits_promoted'],3)
+            self.assertEqual([r['id'] for r in read_jsonl(out/'author_00/families.jsonl')],
+                             ['hh0001','hh0002','hh0003'])
+            self.assertEqual(list((work/'draft_pending').glob('*.json')),[])
+            self.assertEqual(calls['author'],0)   # pending drafts are never re-drafted
+
+    def _draft_client(self, role, spec_id, unit_text, *, paused_audit, calls=None):
+        class Client:
+            def __init__(self):
+                self.pause=HarnessPause('spent',429) if (paused_audit and role=='reference_audit') else None
+                self.model='qwen-author' if role=='question_author' else 'gemini-audit'
+            def object(self, messages, *, max_tokens=0):
+                if role=='reference_audit':
+                    if paused_audit:
+                        raise self.pause
+                    payload=json.loads(messages[1]['content'])
+                    ids=[f['id'] for f in payload['families']]
+                    return ({'reviews':[{'id':i,'approved':True,'issues':[]} for i in ids]}, {})
+                if calls is not None: calls['author']=calls.get('author',0)+1
+                payload=json.loads(messages[1]['content'])
+                assigned=payload['assignments'][0]['id']
+                spec_id[0]=assigned
+                return ({'families':[{'id':assigned,'fact_summary':'approval','rationale':'source','uncertain':False,
+                                      'evidence':[{'unit_id':'U1','quote':unit_text}],
+                                      'languages':{l:{'question':q,'reference_answer':'approval required',
+                                                      'required_facts':['approval'],'forbidden_claims':[]}
+                                                   for l,q in [('ar','هل يشترط الموافقة على تعديل العقد؟'),
+                                                               ('fr','Une approbation est-elle requise pour modifier le contrat ?'),
+                                                               ('en','Is approval required to modify the contract?')]}}]}, {})
+            def check_pause(self):
+                if self.pause is not None: raise self.pause
+            def summary(self):
+                return {'role': role, 'provider': 'xkiro' if role == 'question_author' else 'google',
+                        'model': self.model, 'credential_alias': 'X', 'http_requests': 0,
+                        'logical_request_budget': {'used': 0, 'limit': 400}, 'cache_hits': 0,
+                        'rate_limit_waits': 0, 'paced_provider_retries': 0,
+                        'consecutive_transport_failures': 0,
+                        'pause': str(self.pause) if self.pause else None}
+        return Client()
+
     def test_shard_deadline_stops_before_the_next_model_call(self):
         from unittest.mock import patch
         import hard_harness.authoring as authoring
@@ -638,9 +798,9 @@ class DatasetIntegrity(unittest.TestCase):
         base = [self.family(i) for i in range(1,651)]
         base += [self.family(i,'out_of_scope') for i in range(651,851)]
         base += [self.family(i,'insufficient_information') for i in range(851,901)]
-        families = base + make_adversarial(base)
         units = {'unit':{'id':'unit','document':'test.docx','page':None,'text':'original source evidence text','quality':'test'}}
-        plan = {'counts_per_language':{'supported':650,'out_of_scope':200,'insufficient_information':50,'adversarial':100}}
+        plan = self.plan()
+        families = base + make_adversarial(base, plan)
         public, private = validate_and_split(families, units, plan)
         for lang in ('ar','fr','en'):
             self.assertEqual(len(public[lang]),1000)
@@ -703,7 +863,7 @@ class DatasetIntegrity(unittest.TestCase):
     def test_prediction_public_reader_rejects_answer_key_fields(self):
         from hard_harness.predict import load_public_questions
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp); manifest={'public_files':{}}
+            root=Path(temp); manifest={'public_files':{},'questions_per_language':1000,'question_records':3000}
             for lang in ('ar','fr','en'):
                 rows=[{'id':f'{i}.{lang}','family_id':str(i),'language':lang,'question':f'question {i}'} for i in range(1000)]
                 if lang=='en': rows[0]['reference_answer']='leaked gold'
@@ -712,6 +872,46 @@ class DatasetIntegrity(unittest.TestCase):
             write_json(root/'manifest.json',manifest)
             with self.assertRaisesRegex(ValueError,'Non-public'):
                 load_public_questions(root)
+
+    def test_a_scaled_version_is_validated_against_its_own_counts(self):
+        """Counts come from the plan, so a scaled pass cannot masquerade as the target."""
+        from hard_harness.dataset import dataset_scale, select_accepted, validate_and_split
+        units={'unit':{'id':'unit','document':'test.docx','page':None,'text':'original source evidence text','quality':'test'}}
+        base=[self.family(i) for i in range(1,301)]
+        base+=[self.family(i,'out_of_scope') for i in range(301,401)]
+        base+=[self.family(i,'insufficient_information') for i in range(401,426)]
+        plan=self.plan(scaled=True)
+        scale=dataset_scale(plan)
+        self.assertEqual((scale['per_language'],scale['answer_shards']),(475,15))
+        self.assertEqual(scale['base_families'],425)
+        chosen=select_accepted(base,scale)
+        self.assertEqual(len(chosen),425)
+        self.assertEqual({f['id'] for f in chosen},{f['id'] for f in base})
+        # A version needs every category it claims; the lowest accepted IDs win.
+        with self.assertRaisesRegex(ValueError,'still needed'):
+            select_accepted(base[:-30],scale)
+        families=chosen+[dict(f,category='adversarial') for f in []]
+        from hard_harness.dataset import make_adversarial
+        families=chosen+make_adversarial(chosen,plan)
+        public,private=validate_and_split(families,units,plan)
+        for lang in ('ar','fr','en'):
+            self.assertEqual(len(public[lang]),475)
+            self.assertEqual(len({r['id'] for r in public[lang]}),475)
+        # adversarial IDs continue after the selected base, not after 900
+        self.assertEqual({r['id'].rsplit('.',1)[0][:6] for r in private['en'] if r['category']=='adversarial'},
+                         {f'hh{i:04d}' for i in range(426,476)})
+        # A plan whose shard count disagrees with its own sizes is refused.
+        with self.assertRaisesRegex(ValueError,'answer_shards must be'):
+            dataset_scale(self.plan(scaled=True, answer_shards=30))
+
+    def plan(self, *, scaled=False, **overrides):
+        counts=({'supported':300,'out_of_scope':100,'adversarial':50,'insufficient_information':25} if scaled else
+                {'supported':650,'out_of_scope':200,'adversarial':100,'insufficient_information':50})
+        per_language=sum(counts.values())
+        plan={'counts_per_language':counts,'questions_per_language':per_language,
+              'answer_shard_size':100,'answer_shards':-(-3*per_language//100),'random_seed':20260905}
+        plan.update(overrides)
+        return plan
 
 
 if __name__ == '__main__':

@@ -83,6 +83,22 @@ def parse_object(text):
     return data
 
 
+# Reference work may legitimately use a different provider from the candidate.
+# Authoring is the high-volume side; auditing/judging must stay independent of the
+# answering model, so a role may point at its own profile in the plan.
+ROLE_PROFILE_KEYS = {'candidate': 'candidate_llm', 'question_author': 'author_llm'}
+
+
+def role_profile(plan, role):
+    """Profile for a role, falling back to the shared reference `llm` block."""
+    key = ROLE_PROFILE_KEYS.get(role)
+    return (plan.get(key) if key else None) or plan['llm']
+
+
+def profile_label(profile):
+    return f"{profile['provider']}/{profile['model']}"
+
+
 class HarnessPause(RuntimeError):
     def __init__(self, message, status_code=0):
         super().__init__(message)
@@ -93,6 +109,23 @@ class HarnessPause(RuntimeError):
 # stop and ask the user. Everything else is a transient transport/5xx event that a
 # per-case retry can ride out; a streak of them trips the breaker below instead.
 QUOTA_STATUSES = frozenset({401, 402, 403, 429})
+
+
+def provider_for_model(name):
+    """Label which provider a recorded ``served_model`` came from.
+
+    Providers were mixed on purpose because of free-tier ceilings, so every frozen
+    artefact has to say which model produced what. Older families only recorded the
+    served model, hence this derivation instead of a stored field.
+    """
+    text = str(name or '')
+    if not text or text == 'unknown':
+        return 'unlabelled'
+    if text.startswith('qwen/'):
+        return 'xkiro'
+    if text.startswith('gemini'):
+        return 'google'
+    return 'other'
 
 
 class CheckpointClient:
@@ -106,7 +139,7 @@ class CheckpointClient:
     def __init__(self, role, *, call_limit, cache_root=WORK / 'requests', client=None):
         self.role = role
         self.plan = read_json(PLAN_PATH)
-        profile = self.plan.get('candidate_llm',self.plan['llm']) if role == 'candidate' else self.plan['llm']
+        profile = role_profile(self.plan, role)
         if profile['provider'] == 'xkiro':
             if profile['model'] != ANSWER_MODEL:
                 raise HarnessPause('The xKiro harness profile must use the selected Qwen SKU')

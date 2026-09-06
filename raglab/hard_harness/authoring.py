@@ -11,8 +11,10 @@ from pathlib import Path
 from answer import normalized_quote
 from artifacts import fingerprint, write_json
 from hard_harness.common import (ROOT, OUTPUT, WORK, PLAN_PATH, LANGUAGES, CheckpointClient,
-                                 deadline_reached, now, read_json, read_jsonl, soft_deadline,
-                                 write_jsonl)
+                                 deadline_reached, now, provider_for_model, read_json, read_jsonl,
+                                 role_profile, soft_deadline, write_jsonl)
+
+ACCEPTED_SNAPSHOT = ROOT / 'benchmarks' / 'hard_harness_accepted'
 
 AUTHOR_VERSION = 'paired-author-v3-focused-families'
 TASKS = ('definition or main rule', 'conditional application', 'prohibition or exception',
@@ -297,6 +299,27 @@ def author_shard(shard, *, recover_only=False):
                 except ValueError:
                     continue
                 reusable[identifier]={'family':family,'audit':audit,'reused_from_artifact_run':plan.get('resume_run')}
+    # A committed snapshot survives Actions cache eviction and 30-day artifact
+    # expiry. The candidate never reads this path: retrieval is limited to docs/.
+    for snapshot in sorted(ACCEPTED_SNAPSHOT.glob('author_*.jsonl')) if ACCEPTED_SNAPSHOT.exists() else []:
+        identifier_shard = snapshot.stem.split('_')[-1]
+        if identifier_shard != f'{shard:02d}':
+            continue
+        for record in read_jsonl(snapshot):
+            family, audit = record.get('family'), record.get('audit')
+            identifier = (family or {}).get('id')
+            if identifier not in specs_by_id or not isinstance(family, dict):
+                continue
+            if family.get('authoring_version') not in {'paired-author-v2-span-ids', AUTHOR_VERSION}:
+                continue
+            if not isinstance(audit, dict) or audit.get('approved') is not True or audit.get('issues'):
+                continue
+            try:
+                validate_family(family, specs_by_id[identifier], units)
+            except ValueError:
+                continue
+            reusable.setdefault(identifier, {'family': family, 'audit': audit,
+                                             'reused_from': 'committed_accepted_snapshot'})
     source_fingerprint = read_json(OUTPUT/'sources/manifest.json')['gold_unit_manifest']
     completed = {}
     for spec in assigned:
@@ -316,10 +339,14 @@ def author_shard(shard, *, recover_only=False):
     rows = [completed[s['id']]['family'] for s in assigned if s['id'] in completed]
     audits = [completed[s['id']]['audit'] for s in assigned if s['id'] in completed]
     author = auditor = None
-    rejected, unresolved, unresolved_drafts = [], [], []
+    rejected, unresolved, unresolved_drafts, drafted = [], [], [], []
+    audit_mode = (plan.get('authoring') or {}).get('audit_mode', 'inline')
+    PENDING_DRAFTS = WORK / 'draft_pending'
+    PENDING_DRAFTS.mkdir(parents=True, exist_ok=True)
     summary = {'status':'running','shard':shard,'target_families':len(assigned),'families':0,
                'source_manifest':source_fingerprint,
-               'author_model':plan['llm']['model'],'auditor_model':plan['llm']['model'],
+               'author_model':role_profile(plan,'question_author')['model'],
+               'auditor_model':role_profile(plan,'reference_audit')['model'],
                'independent_judge':False,'expert_reviewed':False,'authoring_version':AUTHOR_VERSION}
     summary['families'] = len(rows)
     write_jsonl(out/'families.jsonl',rows)
@@ -348,8 +375,15 @@ def author_shard(shard, *, recover_only=False):
                 accepted = reusable[spec['id']]
                 write_json(cache_file,accepted)
             else:
+                if audit_mode == 'drafts_only' and (PENDING_DRAFTS/f'{cache_file.stem}.json').exists():
+                    # Already drafted and queued for the audit: re-drafting it would
+                    # spend a second request on a family the scarce provider has not
+                    # reached yet.
+                    drafted.append(spec['id'])
+                    continue
                 if author is None:
                     author=CheckpointClient('question_author',call_limit=400)
+                if auditor is None and audit_mode != 'drafts_only':
                     auditor=CheckpointClient('reference_audit',call_limit=400)
                 feedback, previous, accepted = '', None, None
                 source_ids=sorted(spec['source_unit_ids'])
@@ -366,6 +400,16 @@ def author_shard(shard, *, recover_only=False):
                             if ev.get('unit_id') in mapping:
                                 ev['unit_id']=mapping[ev['unit_id']]
                         value=validate_family(value,spec,units)
+                        if audit_mode == 'drafts_only':
+                            # The audit provider is the scarce one. Keep the verified
+                            # draft, spend no audit request now, and let the audit pass
+                            # below promote as many as the current allowance allows.
+                            write_json(PENDING_DRAFTS/f'{cache_file.stem}.json',
+                                       {'family': value, 'author_provenance': provenance,
+                                        'spec_id': spec['id'], 'authored_by': author.model,
+                                        'drafted_at': now()})
+                            drafted.append(spec['id'])
+                            break
                         review,review_provenance=auditor.object(audit_messages([value],batch,units),max_tokens=3000)
                         decisions=review.get('reviews',[])
                         if len(decisions)!=1 or decisions[0].get('id')!=spec['id']:
@@ -377,10 +421,16 @@ def author_shard(shard, *, recover_only=False):
                         write_json(cache_file,accepted)
                         break
                     except Exception as exc:
-                        author.check_pause();auditor.check_pause()
+                        # In drafts_only mode there is deliberately no auditor yet,
+                        # so only the drafting client can report a provider pause.
+                        author.check_pause()
+                        if auditor is not None:
+                            auditor.check_pause()
                         feedback=f'Focused repair {attempt+1} for {spec["id"]}: '+str(exc)[:3500]
                         rejected.append({'family_id':spec['id'],'attempt':attempt+1,'error':feedback})
-                if accepted is None:
+                if accepted is None and spec['id'] not in drafted:
+                    # A family whose draft is queued for the audit is waiting on the
+                    # scarce provider, not unresolved; counting it would hide progress.
                     unresolved.append({'id':spec['id'],'error':feedback})
                     unresolved_drafts.append({'id':spec['id'],'spec':spec,'last_draft':previous,
                                               'audit_feedback':feedback,'authoring_version':AUTHOR_VERSION})
@@ -396,6 +446,58 @@ def author_shard(shard, *, recover_only=False):
             write_jsonl(out/'unresolved_references.jsonl',unresolved_drafts)
             write_json(out/'manifest.json',summary)
             print(f'[author] shard {shard}: {len(rows)}/{len(assigned)} verified; unresolved={len(unresolved)}',flush=True)
+        if audit_mode == 'drafts_only' and not deadline_reached(deadline):
+            auditor = None
+            for spec in assigned:
+                if spec['id'] in completed:
+                    continue
+                key = fingerprint({'version': AUTHOR_VERSION, 'spec': spec, 'source': summary['source_manifest']})
+                path = PENDING_DRAFTS / f'{key}.json'
+                if not path.exists():
+                    continue
+                if deadline_reached(deadline):
+                    summary['audit_stop_reason'] = 'shard_deadline'
+                    break
+                if auditor is None:
+                    auditor = CheckpointClient('reference_audit', call_limit=400)
+                try:
+                    summary['audits_attempted'] = summary.get('audits_attempted', 0) + 1
+                    record = read_json(path)
+                    family = validate_family(record['family'], spec, units)
+                    review, review_provenance = auditor.object(
+                        audit_messages([family], [spec], units), max_tokens=3000)
+                    decisions = review.get('reviews', [])
+                    if len(decisions) != 1 or decisions[0].get('id') != spec['id']:
+                        raise ValueError('Auditor must cover the assigned reference')
+                    if decisions[0].get('approved') is not True or decisions[0].get('issues'):
+                        raise ValueError('Reference audit rejected: ' + str(decisions))
+                    accepted = {'family': {**family, 'author_provenance': record.get('author_provenance'),
+                                           'audit_provenance': review_provenance}, 'audit': decisions[0]}
+                    write_json(WORK / 'draft_families' / f'{key}.json', accepted)
+                    path.unlink()
+                    completed[spec['id']] = accepted
+                    rows = [completed[s['id']]['family'] for s in assigned if s['id'] in completed]
+                    audits = [completed[s['id']]['audit'] for s in assigned if s['id'] in completed]
+                    summary['audits_promoted'] = summary.get('audits_promoted', 0) + 1
+                    write_jsonl(out/'families.jsonl', rows)
+                    write_jsonl(out/'reference_audit.jsonl', audits)
+                    write_json(out/'manifest.json', {**summary, 'families': len(rows)})
+                except Exception as exc:
+                    from nvidia_api import safe_error as _safe
+                    # A refused draft is re-drafted later rather than re-audited
+                    # forever; a paused auditor means the scarce provider is spent.
+                    if auditor is not None and auditor.pause is not None:
+                        summary['audit_stop_reason'] = 'provider_pause'
+                        summary['audit_pause'] = _safe(exc)
+                        break
+                    rejected.append({'family_id': spec['id'], 'stage': 'deferred_audit',
+                                     'error': _safe(exc)[:3500]})
+                    moved = PENDING_DRAFTS.with_name('draft_rejected') / f'{key}.{now().replace(":", "")}.json'
+                    moved.parent.mkdir(parents=True, exist_ok=True)
+                    path.replace(moved)
+                    write_jsonl(out/'rejected_drafts.jsonl', rejected)
+        summary['drafted_pending_audit'] = len(drafted)
+        summary['audit_mode'] = audit_mode
         summary['status']=('drafts_complete' if len(rows)==len(assigned)
                            else 'partial_deadline' if summary.get('stop_reason') else 'needs_reference_review')
     except Exception as exc:
@@ -413,4 +515,118 @@ def author_shard(shard, *, recover_only=False):
     write_jsonl(out/'rejected_drafts.jsonl',rejected)
     write_jsonl(out/'unresolved_references.jsonl',unresolved_drafts)
     write_json(out/'manifest.json',summary)
+    return summary
+
+
+# Local bookkeeping keys and the raw provider payload are not part of a family's
+# meaning; committing them would only bloat the snapshot and leak request hashes.
+_PROVENANCE_KEEP = ('served_model', 'recovered_from', 'provider', 'model', 'credential_alias')
+_PROVENANCE_ROLE = ('provider', 'model', 'credential_alias', 'role', 'cache_replayed')
+
+
+def _lean_provenance(value):
+    """Keep the labels that matter (who wrote this) and drop the bookkeeping."""
+    if not isinstance(value, dict):
+        return None
+    kept = {key: value[key] for key in _PROVENANCE_KEEP if value.get(key) is not None}
+    source = value.get('source_call')
+    if isinstance(source, dict):
+        for key in _PROVENANCE_ROLE:
+            if source.get(key) is not None and kept.get(key) is None:
+                kept[key] = source[key]
+    return kept or None
+
+
+def _clean(family):
+    family = dict(family)
+    for key in ('author_provenance', 'audit_provenance'):
+        lean = _lean_provenance(family.get(key))
+        if lean is None:
+            family.pop(key, None)
+        else:
+            family[key] = lean
+    return family
+
+
+def audit_independence():
+    """Count accepted families whose audit came from a different model than the draft."""
+    independent = shared = unknown = cross_provider = same_provider = 0
+    for path in sorted(ACCEPTED_SNAPSHOT.glob('author_*.jsonl')):
+        for record in read_jsonl(path):
+            family = record['family']
+            author_call = family.get('author_provenance') or {}
+            audit_call = family.get('audit_provenance') or {}
+            author = author_call.get('served_model')
+            auditor = audit_call.get('served_model')
+            if auditor is None or author is None:
+                unknown += 1
+            elif author == auditor:
+                shared += 1
+            else:
+                independent += 1
+            # A different model on the same provider is a weaker guarantee than a
+            # different provider, so both counts are reported.
+            if provider_for_model(author) != provider_for_model(auditor):
+                cross_provider += 1
+            else:
+                same_provider += 1
+    return {'cross_model_audited': independent, 'same_model_audited': shared, 'unlabelled': unknown,
+            'cross_provider_audited': cross_provider, 'same_provider_audited': same_provider,
+            'note': 'A same-model audit is a second pass by the author model, not provider-independent validation.'}
+
+
+def shard_workload(target=None):
+    """Authoring shard numbers ordered by least progress first.
+
+    Negative families (out of scope, insufficient evidence) live in the last shards,
+    and none of them had been reached, so running shards in ID order would spend every
+    run on the category that is already furthest along.
+    """
+    plan = read_json(PLAN_PATH) if PLAN_PATH.exists() else {}
+    target = int(plan.get('author_shards', 9) if target is None else target)
+    counts, manifest_path = {}, ACCEPTED_SNAPSHOT / 'manifest.json'
+    if manifest_path.exists():
+        counts = {int(k): int(v) for k, v in read_json(manifest_path).get('shards', {}).items()}
+    size = 900 // target
+    return sorted(range(target), key=lambda shard: (counts.get(shard, 0) >= size, counts.get(shard, 0), -shard))
+
+
+def accepted_snapshot(shards, *, destination=ACCEPTED_SNAPSHOT):
+    """Merge verified shard output into committed per-shard snapshots.
+
+    Only families that validate against the current spec/source and carry a passing
+    audit are written. Nothing is invented to reach a count, and a family never
+    moves between shards silently: each row keeps the shard that produced it.
+    """
+    specs, units = make_specs()
+    by_id = {spec['id']: spec for spec in specs}
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    written = {}
+    for shard in shards:
+        root = OUTPUT / f'author_{shard:02d}'
+        families_path, audit_path = root / 'families.jsonl', root / 'reference_audit.jsonl'
+        if not families_path.exists() or not audit_path.exists():
+            continue
+        reviewed = {row['id']: row for row in read_jsonl(audit_path)}
+        rows = []
+        for family in read_jsonl(families_path):
+            audit = reviewed.get(family.get('id'), {})
+            spec = by_id.get(family.get('id'))
+            if spec is None or audit.get('approved') is not True or audit.get('issues'):
+                continue
+            try:
+                validate_family(family, spec, units)
+            except ValueError:
+                continue
+            rows.append({'family': _clean(family), 'audit': audit})
+        write_jsonl(destination / f'author_{shard:02d}.jsonl', rows)
+        written[shard] = len(rows)
+    summary = {'status': 'snapshot_written', 'shards': written, 'families': sum(written.values()),
+               'audit_independence': audit_independence(),
+               'source_manifest': read_json(OUTPUT / 'sources/manifest.json')['gold_unit_manifest'],
+               'timestamp': now(),
+               'note': 'Verified accepted families. Model-authored/audited, not expert-certified. '
+                       'The candidate never reads this path; retrieval is limited to docs/ chunks.'}
+    write_json(destination / 'manifest.json', summary)
     return summary

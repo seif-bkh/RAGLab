@@ -1,81 +1,75 @@
 # Large-harness progress — 6 September 2026
 
-**The final 3,000-question dataset and answer comparison are not complete yet.**
+**No frozen dataset and no answer-comparison scores exist yet.** Nothing in this file
+is a result; it is the verified state of the pipeline that produces them.
 
 ## Verified retained work
 
-- The latest collected checkpoint, run **34001048769**, contains **468 audited
-  base families / 1,404 language-specific question/reference pairs** (of the 900
-  base families plus 100 derived adversarial families that the plan requires).
-  Shards 0–3 hold 100 each, shard 4 holds 56, shard 5 holds 8, shard 6 holds 4;
-  shards 7–8 are still empty. 432 base families remain.
-- All four source documents and all 36 PDF pages are accounted for; 230 reference
-  units are available. Source-page review is assistant/model-assisted, not a
-  human banking/legal expert certification. Runtime extraction is unchanged.
-- Reference authoring stopped on a Google HTTP 429, not on a Qwen/xKiro event.
-  The free tier advertises 20 requests per minute for `gemini-3.5-flash`, yet the
-  pause arrived while the shard was issuing roughly 4 requests per minute, so the
-  usable project budget is thinner than the documented figure. Every completed
-  source/author response stays checkpointed and is reused, never regenerated.
+- **469 accepted base families / 1,407 language-specific question–reference pairs** of
+  the 900 base families the plan enumerates (plus 100 adversarial families derived
+  later). Shards 0–3 hold 100 each, shard 4 holds 56, shard 5 holds 8, shard 6 holds 5,
+  shards 7–8 are empty. 431 families remain, and each accepted family was re-validated
+  against the extracted source text — nothing was counted from a manifest alone.
+- **Every one of those 469 families is category `supported`.** The negatives — 200
+  out-of-scope families (`hh0651`–`hh0850`) and 50 insufficient-evidence families
+  (`hh0851`–`hh0900`) — have not been reached at all, and they are where the answer-only
+  agent's refusal behaviour is actually tested. Authoring therefore queues the
+  least-progressed shards first (`author_shard_order`), which puts 6–8 ahead of 0–3.
+- **0 of 469 accepted families were audited by a different provider than the one that
+  drafted them.** They carry a second pass by the same model, which is a useful check but
+  is not independent validation. That count is recorded in
+  `benchmarks/hard_harness_accepted/manifest.json`, copied into the frozen dataset
+  manifest as `audit_independence`, and printed in the report caveats; it is not hidden
+  and not presented as provider-independent.
+- All four source documents and all 36 PDF pages are accounted for; 230 reference units
+  are available. Source-page review is model-assisted, not a human banking/legal
+  certification.
 
-## What changed to resume it
+## Recovery no longer depends on Actions storage
 
-- `hard_harness/google_client.py` now distinguishes a *rate* limit from a *quota*
-  limit. A 429 that states a bounded wait ("Please retry in 14.15s") is paced: the
-  request sleeps for the advertised time, the process-wide interval shared by the
-  author and auditor clients doubles, and the request is retried up to
-  `quota_retry_attempts` times. An unlabelled 429, a wait longer than
-  `max_retry_delay_seconds`, or a repeated refusal still raises, which pauses the
-  fleet and asks the user. No model, project or billing state is changed silently.
-- A lone transport/5xx failure no longer stops a shard. Only a streak of
-  `transport_failure_streak` consecutive failures does, so one 503 "high demand"
-  blip cannot discard minutes of work while an outage still halts the run.
-- Every shard step gets `HARNESS_DEADLINE_MINUTES` from the workflow (45 for
-  authoring, 32 for answering, 105 for grading). A shard that reaches its deadline
-  publishes `status: partial_deadline`, keeps all accepted families, and resumes in
-  the next run instead of being killed at the job timeout — and a deadline stop is
-  not written as a `paused` signal, so it never gates the other shards.
-- `author_parallelism` now comes from the plan (4). Each worker is latency-bound at
-  roughly 1.5–2 calls per minute, so four workers stay near 6–8 requests per minute
-  in aggregate, and the adaptive floor absorbs the surplus if Google disagrees.
+`benchmarks/hard_harness_accepted/` is the committed per-shard snapshot of accepted
+families (469 rows, ~2.3 MB, bookkeeping hashes stripped, `served_model` kept).
+`author_shard` recovers from it before it opens a model client, so a run cannot lose
+minutes of work to an evicted cache or an expired artifact; a rejected or unverifiable
+row is never trusted back in, and recovery issues zero model calls (asserted by test).
 
-## Resume
+## Provider reality, measured on this repo
 
-The unfinished reference author/auditor profile uses **gemini-3.5-flash**, whose
-official model pricing lists a free tier, with the plan's `pacing` block governing
-intervals and quota waits. The user confirmed that the Google credential is on a
-free-tier project. Existing accepted Qwen and Gemini 3.1 Flash-Lite records keep
-their provenance; they are not regenerated.
+- The reference audit runs on Google's free tier. It advertises 20 requests/minute for
+  `gemini-3.5-flash`, but measured behaviour is far thinner: **four concurrent shards
+  were rejected with `RESOURCE_EXHAUSTED … limit: 20` at roughly 4 requests/minute in
+  aggregate, while a single worker kept working.** The ceiling is shared per project, so
+  fanning out buys nothing; `author_parallelism` is 2 and a shared per-process
+  `rate_limit_event_budget` (12 events) stops a job from grinding a hard limit.
+- Per the user's decision, providers are mixed: **xKiro Qwen `qwen/qwen3.8-max:free`
+  drafts, Google `gemini-3.5-flash` audits/repairs/grades**. Because the auditor is the
+  scarce side, authoring is now two-pass (`authoring.audit_mode: drafts_only`): each run
+  drafts everything still missing on the fast provider, then promotes as many pending
+  drafts as the audit allowance permits. A drafted family waiting for an audit is neither
+  lost nor re-drafted, and it is never counted as accepted until an audit approves it.
+- A quota event pauses and asks the user; nothing switches model, provider, project or
+  billing silently.
 
-### Measured quota behaviour, run 34002128822 (this session)
+## Scaled version first
 
-Four shards ran concurrently on the plan's `author_parallelism: 4`. Shards 0–3
-recovered 100 accepted families each with zero model calls, proving the resume
-path. Every shard that tried new authoring (4, 5, 7) was then rejected by Google
-after ~5 requests with `RESOURCE_EXHAUSTED` on
-`generate_content_free_tier_requests, limit: 20` and advertised waits of
-3.9–38.9 seconds — while the whole fleet was only issuing about 4 requests per
-minute. No family was accepted, so the total stays 468/900. Shard 6, which passed
-its gate before the first pause artifact existed, kept working, so the ceiling is
-shared and bursty rather than per-worker.
+Per the user's decision, the first pass is a **scaled dataset version: 475 paired
+scenarios per language (1,425 records)** at the same 65/20/10/5 proportions as the
+1,000-per-language target, frozen separately, scored, and then extended. Counts come
+from the plan everywhere: `dataset_scale` derives `counts_per_language`,
+`questions_per_language` and the answer-shard count, `select_accepted` takes the lowest
+accepted family ID per category (so a later run extends the same version), and the
+compile step refuses to freeze a version it cannot fill rather than padding with
+duplicates or placeholders. `full_target_questions_per_language: 1000` stays in the plan.
 
-Consequences accepted in this commit: `quota_retry_attempts` is 2 (was 4), a new
-`rate_limit_event_budget` of 12 lets one shared counter stop a job from grinding a
-hard limit, and `author_parallelism` must stay at 1 until the provider question
-below is settled. The plan's `quota_policy` requires asking the user before any
-provider/credential switch, so authoring does not silently move to another model.
-
-Candidate answering remains **xKiro `qwen/qwen3.8-max:free`** with native
-`nvidia/nemotron-3-embed-1b` retrieval. After authoring, the compiler must repair
-or flag exact duplicates and ambiguous negatives before freezing the separate
-question and answer-key files. Only then may the 3,000 candidate answers and the
-comparison run.
-
-
-Progress is recoverable without Actions artifact access
-(`.blob.core.windows.net` is unreachable from this sandbox):
+## To reproduce / continue
 
 ```bash
 cd raglab
-python3 hard_harness_main.py collect --sha <run head sha> --destination /tmp/collect
+python3 hard_harness_main.py collect --sha <head_sha> --destination /tmp/collectN   # via the Checks API
+python3 hard_harness_main.py snapshot          # accepted shard output -> committed snapshot
+python3 hard_harness_main.py author --shard N  # drafts, then audits what the allowance allows
+python3 -m unittest test_hard_harness test_nvidia_pipeline   # 120 tests
 ```
+
+`gh run download` and `gh run view --log` fail from this environment (Azure blob `EOF`);
+`collect` reads the check runs each job publishes instead.

@@ -29,6 +29,9 @@ jobs:
       parallelism: ${{ steps.plan.outputs.parallelism }}
       candidate_key_secret: ${{ steps.plan.outputs.candidate_key_secret }}
       candidate_parallelism: ${{ steps.plan.outputs.candidate_parallelism }}
+      author_key_secrets: ${{ steps.plan.outputs.author_key_secrets }}
+      answer_shard_list: ${{ steps.plan.outputs.answer_shard_list }}
+      author_shard_order: ${{ steps.plan.outputs.author_shard_order }}
     steps:
       - uses: actions/checkout@v4
       - id: plan
@@ -62,8 +65,43 @@ jobs:
           # fan-out; several shards may share it because a 429 is paced in-client.
           parallelism=int(p.get('author_parallelism', 1 if p['llm']['provider']=='google' else 2))
           assert 1 <= parallelism <= 4
+          # A reference role may use another provider from the candidate, but only
+          # between the two approved free profiles; nothing else is accepted.
+          author=p.get('author_llm',p['llm'])
+          for name,profile in (('author_llm',author),('llm',p['llm']),('candidate_llm',candidate)):
+              if profile['provider']=='xkiro':
+                  assert profile['model']=='qwen/qwen3.8-max:free', (name,profile['model'])
+                  assert profile['credential_secret'] in {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'}, name
+              else:
+                  assert profile['provider']=='google', name
+                  assert p['google_fallback_authorized'] and p['google_fallback_active']
+                  assert profile.get('free_tier_project_confirmed') is True, name
+                  assert profile['model'] in {'gemini-3.1-flash-lite','gemini-3.5-flash'}, name
+          counts=p['counts_per_language']
+          assert sum(counts.values())==int(p['questions_per_language'])
+          base=counts['supported']+counts['out_of_scope']+counts['insufficient_information']
+          derived=-(-3*int(p['questions_per_language'])//int(p['answer_shard_size']))
+          assert int(p['answer_shards'])==derived, f'answer_shards must be {derived}'
+          # The authoring step needs one named secret per provider it may use, so a
+          # role cannot borrow another role's credential.
+          secrets=sorted({candidate['credential_secret'],p['llm']['credential_secret'],author['credential_secret']})
+          assert set(secrets) <= {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY','GEMINI_API_KEY','GOOGLE_API_KEY'}
           fields={'phase':p['phase'],'key_secret':key_secret,'parallelism':str(parallelism),
-                  'candidate_key_secret':candidate['credential_secret'],'candidate_parallelism':'2'}
+                  'candidate_key_secret':candidate['credential_secret'],'candidate_parallelism':'2',
+                  'author_key_secrets':','.join(secrets),
+                  'answer_shard_list':__import__('json').dumps(list(range(derived)))}
+          # Negative families (out of scope, insufficient evidence) live in the last
+          # shards and none of them had been reached, so least-progressed shards are
+          # queued first instead of spending every run on supported families.
+          target=int(p['author_shards']); per=-(-900//target)
+          accepted={}
+          try:
+              accepted={int(k):int(v) for k,v in json.load(open(
+                  'raglab/benchmarks/hard_harness_accepted/manifest.json')).get('shards',{}).items()}
+          except FileNotFoundError:
+              pass
+          order=sorted(range(target),key=lambda shard:(accepted.get(shard,0)>=per,accepted.get(shard,0),-shard))
+          fields['author_shard_order']=json.dumps([{'shard':shard} for shard in order])
           for name in ('min_interval_seconds','max_retry_delay_seconds','quota_retry_attempts'):
               if name in p['llm'].get('pacing',{}): assert float(p['llm']['pacing'][name]) > 0
           for key in ('sources_run','dataset_run','resume_run','authors_run','predictions_run'):
@@ -123,7 +161,9 @@ jobs:
       fail-fast: false
       max-parallel: ${{ fromJSON(needs.plan.outputs.parallelism) }}
       matrix:
-        shard: [0,1,2,3,4,5,6,7,8]
+        # Least-progressed first (plan output), so a bounded run works on what is
+        # missing rather than on what is already nearly finished.
+        shard: ${{ fromJSON(needs.plan.outputs.author_shard_order) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -160,6 +200,10 @@ jobs:
           HARNESS_DEADLINE_MINUTES: "45"
           HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.key_secret] }}
           HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.key_secret }}
+          XKIRO_API_KEY_JINKO: ${{ secrets.XKIRO_API_KEY_JINKO }}
+          XKIRO_API_KEY: ${{ secrets.XKIRO_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           PYTHONUNBUFFERED: "1"
           TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
         run: |
@@ -295,7 +339,9 @@ jobs:
       fail-fast: false
       max-parallel: ${{ fromJSON(needs.plan.outputs.candidate_parallelism) }}
       matrix:
-        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
+        # Sized from the frozen dataset version, so a scaled pass never spawns 30
+        # workers that each fail to find their shard file.
+        shard: ${{ fromJSON(needs.plan.outputs.answer_shard_list) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -371,7 +417,7 @@ jobs:
           PREDICTIONS_RUN: ${{ needs.plan.outputs.predictions_run || github.run_id }}
         run: |
           gh run download "$DATASET_RUN" --repo "$GITHUB_REPOSITORY" --name hard-harness-answer-keys --dir raglab/results/hard_harness/dataset/references
-          for SHARD in $(seq 0 29); do
+          for SHARD in $(echo '${{ needs.plan.outputs.answer_shard_list }}' | tr -d '[] ' | tr ',' ' '); do
             DIR=$(printf 'raglab/results/hard_harness/predictions_%02d' "$SHARD")
             gh run download "$PREDICTIONS_RUN" --repo "$GITHUB_REPOSITORY" --name "hard-harness-predictions-$SHARD" --dir "$DIR"
           done
