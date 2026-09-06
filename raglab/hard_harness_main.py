@@ -77,8 +77,8 @@ def main(argv=None):
             'arm_status': {arm: state.get('status') for arm, state in manifest['arm_status'].items()},
             'questions': manifest['questions'], 'families': manifest['families'],
             'headline': {arm: {metric: report[arm]['overall'].get(metric) for metric in
-                               ('answer_ready_rate', 'evidence_available_rate', 'recall@1', 'recall@3',
-                                'semantic_only_recall', 'partial_only_rate')}
+                               ('answer_ready_rate', 'context_answer_ready_rate', 'evidence_available_rate',
+                                'recall@1', 'recall@3', 'semantic_only_recall', 'partial_only_rate')}
                          for arm in manifest['arms']},
             'abstention_auc': {arm: report[arm].get('abstention', {}).get('auc') for arm in manifest['arms']},
             'agreement': report.get('agreement', {})}, ensure_ascii=False, indent=2))

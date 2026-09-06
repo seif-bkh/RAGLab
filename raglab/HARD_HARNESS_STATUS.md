@@ -50,6 +50,38 @@ row is never trusted back in, and recovery issues zero model calls (asserted by 
 - A quota event pauses and asks the user; nothing switches model, provider, project or
   billing silently.
 
+## LLM-free retrieval judgement (measured on CI, 6 September)
+
+Verified numbers from run 34005544576, measured on the pinned candidate corpus
+(`pinned_corpus_agreement.match: true`, tokenizer `cl100k_base`, 836 chunks, 4 documents,
+1,407 questions from 469 accepted families, embedding model
+`nvidia/nemotron-3-embed-1b` at 2048 dimensions, 0 embedding API calls because the cache
+was restored, and no generative call of any kind):
+
+| | whole span in one top-5 chunk | ≥80% of the span | semantic-only queries (145) | abstain AUC |
+|---|---:|---:|---:|---:|
+| lexical (BM25) | 2.7% | 9.5% | 0.0% | 0.558 |
+| nvidia embeddings | 10.0% | 37.3% | **62.8%** | 0.679 |
+
+- The embedding arm retrieves Arabic evidence for French and English questions at
+  essentially the same rate as for Arabic ones (9.8% / 9.8% / 10.2% answer-ready), while the
+  lexical arm collapses to 0.2% cross-lingually. On queries sharing no content word with
+  their evidence, embeddings find the span 62.8% of the time and lexical finds it never.
+  That is the cross-lingual claim this lab cares about, and it needed no answer model.
+- **The chunker, not the retriever, is the current ceiling:** only 5 of 230 audited source
+  units (2.2%) fit inside a single 220-token chunk, and 217 are split or absent, which is
+  why whole-span answer-readiness sits near 10% even though ranking is doing its job. The
+  answer prompt joins the top-k, so the report now also prints the rate at which every gold
+  span is present in the *assembled* context — the number that actually bounds an answerer.
+- A similarity threshold is not yet a good abstention rule on this corpus: the best
+  threshold that wrongly rejects at most 5% of answerable queries catches only 24% of
+  queries whose supporting document was deleted (AUC 0.68).
+- The two rankers agree on the top chunk for only 13.7% of queries, and the embedding arm
+  alone found evidence the lexical arm missed on 61 queries versus 8 the other way.
+
+`--chunk-tokens` / `--chunk-overlap` grade a chunking change against the same labels with
+zero model calls; locally 420-token chunks moved lexical answer-readiness 17.4% → 21.8%.
+
 ## LLM-free retrieval judgement (available now)
 
 `python3 hard_harness_main.py judge --arms lexical,vector` scores retrieval without any

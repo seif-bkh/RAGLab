@@ -94,6 +94,20 @@ class Corpus:
             self.by_document[chunk.source].append(position)
         self.by_document = dict(self.by_document)
 
+    def joined(self, positions):
+        """The prompt's view: the retrieved chunks concatenated in rank order."""
+        return ' '.join(self.texts[position] for position in positions)
+
+    def spans_in_context(self, spans, positions):
+        """True when the assembled top-k carries every gold span, split across chunks or not.
+
+        The answerer reads the joined context, not one chunk at a time, so this is its real
+        ceiling; the per-chunk figure above is what a strict single-citation rule would allow.
+        """
+        context = self.joined(positions)
+        present = [span for span in spans if span and span in context]
+        return bool(present), len(present), len([span for span in spans if span])
+
     def contains(self, spans):
         """Chunks holding a gold span in full, plus chunks holding almost all of it.
 
@@ -222,6 +236,9 @@ def judge_families(families, corpus: Corpus, *, rank_scores, top_k=5, allowed=No
                                                               None),
                                                            next((r + 1 for r, i in enumerate(order) if i in partial),
                                                                  None)) if rank], default=None),
+                'context_has_span': corpus.spans_in_context(spans, top)[0],
+                'context_spans_present': corpus.spans_in_context(spans, top)[1],
+                'context_spans_total': corpus.spans_in_context(spans, top)[2],
                 'shared_content_tokens': len(query_content & gold_content) if gold_content else 0,
                 'semantic_only': bool(gold_content) and not (query_content & gold_content),
             })
@@ -331,6 +348,9 @@ def _block(rows, *, top_k):
         # generous reading. Report both instead of choosing the flattering one.
         'evidence_available_rate': round(sum(1 for row in rows if row['available_rank'] and
                                             row['available_rank'] <= top_k) / len(rows), 4),
+        # What the answerer could actually see: the answer prompt joins the top-k chunks,
+        # so a span split across two retrieved chunks still reaches it whole.
+        'context_answer_ready_rate': round(sum(1 for row in rows if row.get('context_has_span')) / len(rows), 4),
         'semantic_only_queries': len(semantic),
         'semantic_only_recall': recall_of(semantic, top_k),
         'mean_top_score': round(statistics.mean(row['top_scores'][0] for row in rows if row['top_scores']), 4)
@@ -617,6 +637,9 @@ def _arm_lines(arm, summary):
              f"- queries sharing no content word with their evidence: {overall.get('semantic_only_queries')} "
              f"(answer-ready {_percent(overall.get('semantic_only_recall'))}) — the slice where an embedding has to "
              f"carry the retrieval on meaning alone",
+             f"- as the answer prompt actually receives it (top-{k} chunks joined): "
+             f"{_percent(overall.get('context_answer_ready_rate'))} of queries have every gold span present — the "
+             f"ceiling that bounds an answer model, since a span absent from the joined context cannot be cited",
              f"- chunking, not retrieval: spans split across a boundary with no whole-span chunk: "
              f"{_percent(overall.get('partial_only_rate'))}; no evidence at all in the top-{k}: "
              f"{_percent(overall.get('no_evidence_rate'))}"]
