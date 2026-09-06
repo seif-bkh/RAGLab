@@ -552,6 +552,125 @@ class RoleProfiles(unittest.TestCase):
                     CheckpointClient('reference_audit', call_limit=1, cache_root=temp, client=FakeClient())
 
 
+class RetrievalJudge(unittest.TestCase):
+    """The LLM-free arm: labels are span containment, so nothing here is model-judged."""
+
+    class Chunk:
+        def __init__(self, text, source='doc-a.pdf', language='ar'):
+            self.text, self.source, self.language = text, source, language
+
+    def corpus(self, *texts):
+        from hard_harness.retrieval_judge import Corpus
+        return Corpus([self.Chunk(text) for text in texts])
+
+    def family(self, quote, *, question='what must the bank obtain first?', languages=None):
+        return {'id': 'hh0001', 'category': 'supported', 'evidence': [{'unit_id': 'u', 'quote': quote}],
+                'languages': languages or {lang: {'question': question} for lang in ('ar', 'fr', 'en')}}
+
+    def test_evidence_is_found_by_containment_not_by_a_similarity_vote(self):
+        from hard_harness.retrieval_judge import Corpus, judge_families
+        corpus = self.corpus('The bank must obtain written consent before amending the contract.',
+                            'Fees are published in the tariff schedule each January.')
+        family = self.family('bank must obtain written consent before amending')
+        rows = judge_families([family], corpus,
+                              rank_scores=lambda fid, lang, q, allowed=None: [1.0, 0.0])
+        self.assertEqual(len(rows), 3)                     # one row per language
+        self.assertEqual(rows[0]['gold_chunks'], [0])
+        self.assertEqual(rows[0]['first_gold_rank'], 1)
+        self.assertTrue(rows[0]['best_is_gold'])
+        # A rank-1 answer is not credited to the chunk that merely shares a word.
+        rows = judge_families([family], corpus, rank_scores=lambda fid, lang, q, allowed=None: [0.0, 1.0])
+        # The evidence is still reported at its true rank rather than hidden because a
+        # better-scoring chunk was wrong: rank 2, outside a top-1 answer window.
+        self.assertEqual(rows[0]['first_gold_rank'], 2)
+        self.assertEqual(rows[0]['best_is_gold'], False)
+
+    def test_a_boundary_split_span_is_reported_as_partial_not_as_a_retrieval_miss(self):
+        from hard_harness.retrieval_judge import judge_families
+        corpus = self.corpus('alpha beta gamma delta', 'unrelated epsilon zeta eta theta')
+        family = self.family('alpha beta gamma delta epsilon')     # 4 of 5 tokens in chunk 0
+        rows = judge_families([family], corpus, rank_scores=lambda fid, lang, q, allowed=None: [1.0, 0.0])
+        self.assertEqual(rows[0]['gold_chunks'], [])
+        self.assertEqual(rows[0]['partial_chunks'], [0])
+        self.assertEqual(rows[0]['first_partial_rank'], 1)
+        summary = __import__('hard_harness.retrieval_judge', fromlist=['summarise']).summarise(rows, top_k=1)
+        self.assertEqual(summary['overall']['recall@1'], 0.0)          # strict containment: not met
+        self.assertEqual(summary['overall']['partial_only_rate'], 1.0)  # boundary problem
+        self.assertEqual(summary['overall']['evidence_available_rate'], 1.0)
+        self.assertEqual(summary['overall']['no_evidence_rate'], 0.0)
+
+    def test_misses_stay_in_the_average(self):
+        from hard_harness.retrieval_judge import judge_families, summarise
+        corpus = self.corpus('the answer lives here in full words', 'first distractor text here',
+                            'second distractor text here', 'third distractor text here')
+        family = self.family('the answer lives here in full words')
+        rows = judge_families([family], corpus, rank_scores=lambda fid, lang, q, allowed=None: [0.0, 3.0, 2.0, 1.0])
+        self.assertEqual(rows[0]['first_gold_rank'], 4)
+        summary = summarise(rows, top_k=3)
+        self.assertEqual(summary['overall']['recall@3'], 0.0)
+        self.assertEqual(summary['overall']['mrr'], 0.25)               # 1/4, not dropped
+        self.assertEqual(summary['overall']['ndcg@3'], 0.0)            # a dropped miss would inflate this
+        self.assertEqual(summary['overall']['median_rank'], 4)
+
+    def test_the_semantic_only_slice_is_the_one_a_lexical_ranker_cannot_win(self):
+        from hard_harness.retrieval_judge import judge_families, summarise
+        corpus = self.corpus('البنك ملزم بالحصول على موافقة كتابية قبل التعديل', 'نص آخر لا علاقة له')
+        family = self.family('البنك ملزم بالحصول على موافقة كتابية قبل التعديل',
+                             languages={'ar': {'question': 'هل يلزم الحصول على موافقة كتابية قبل التعديل؟'},
+                                        'fr': {'question': 'Quelle est la procédure requise ?'},
+                                        'en': {'question': 'Which procedure is required?'}})
+        rows = judge_families([family], corpus, rank_scores=lambda fid, lang, q, allowed=None: [1.0, 0.0])
+        by_language = {row['language']: row for row in rows}
+        self.assertFalse(by_language['ar']['semantic_only'])       # shares wording with the evidence
+        self.assertTrue(by_language['en']['semantic_only'])        # no shared content word at all
+        summary = summarise(rows, top_k=1)
+        self.assertEqual(summary['overall']['semantic_only_queries'], 2)
+        self.assertEqual(summary['by_language']['en']['semantic_only_queries'], 1)
+
+    def test_absent_evidence_separates_and_the_threshold_is_bounded_on_the_answerable_side(self):
+        from hard_harness.retrieval_judge import auc, threshold_at_fpr
+        self.assertEqual(auc([5, 6, 7, 8], [1, 2, 3, 4]), 1.0)
+        self.assertEqual(auc([1, 2, 3, 4], [5, 6, 7, 8]), 0.0)
+        self.assertIsNone(auc([1], []))
+        picked = threshold_at_fpr([10, 9, 8, 7, 6, 5, 4, 3, 2, 1], [0.5] * 10, fpr=0.0)
+        self.assertEqual(picked['answerable_rejected'], 0.0)   # a hard bound is honoured
+        self.assertEqual(picked['unanswerable_caught'], 1.0)    # every absent query falls below it
+        self.assertLessEqual(picked['score'], 1)
+        # A loose budget lets absent evidence leak in rather than rejecting answerable work.
+        loose = threshold_at_fpr([10, 9, 8, 7, 6, 5, 4, 3, 2, 1], [8, 7, 6, 5, 4, 3, 2, 1, 0.5, 0.4], fpr=0.4)
+        self.assertLessEqual(loose['answerable_rejected'], 0.4)
+
+    def test_an_unreachable_embedding_arm_is_named_instead_of_replaced(self):
+        from unittest.mock import patch
+        import hard_harness.retrieval_judge as judge
+        families = [self.family('alpha beta gamma delta epsilon zeta')]
+        corpus = self.corpus('alpha beta gamma delta epsilon zeta', 'other text entirely here now')
+        with tempfile.TemporaryDirectory() as temp:
+            with patch('embedder.build_embedder', side_effect=RuntimeError('NVIDIA_API_KEY is not configured')):
+                with self.assertRaisesRegex(ValueError, 'No arm could be built'):
+                    judge.evaluate(arms=('vector',), out=Path(temp) / 'only', families=families, corpus=corpus)
+                manifest = judge.evaluate(arms=('lexical', 'vector'), out=Path(temp) / 'both',
+                                          families=families, corpus=corpus)
+            self.assertEqual(manifest['arms'], ['lexical'])
+            self.assertEqual(manifest['arm_status']['vector']['status'], 'unavailable')
+            self.assertIn('NVIDIA_API_KEY', manifest['arm_status']['vector']['error'])
+            self.assertTrue((Path(temp) / 'both' / 'REPORT.md').exists())
+            self.assertTrue((Path(temp) / 'both' / 'lexical_rows.jsonl').exists())
+
+    def test_reference_answers_are_never_read_into_a_retrieval_metric(self):
+        from hard_harness.retrieval_judge import Corpus, judge_families
+        family = self.family('bank must obtain written consent',
+                             languages={'en': {'question': 'What must the bank obtain?',
+                                               'reference_answer': 'GOLD-ONLY-TOKEN-918',
+                                               'required_facts': ['GOLD-ONLY-TOKEN-918']},
+                                        'ar': {'question': 'ماذا يجب؟', 'reference_answer': 'GOLD-ONLY-TOKEN-918'},
+                                        'fr': {'question': 'Que faut-il ?', 'reference_answer': 'GOLD-ONLY-TOKEN-918'}})
+        corpus = Corpus([self.Chunk('The bank must obtain written consent before amending the contract.')])
+        rows = judge_families([family], corpus, rank_scores=lambda fid, lang, q, allowed=None: [1.0])
+        self.assertNotIn('GOLD-ONLY-TOKEN-918', json.dumps(rows, ensure_ascii=False))
+        self.assertTrue(all('reference_answer' not in row and 'required_facts' not in row for row in rows))
+
+
 class DatasetIntegrity(unittest.TestCase):
     def test_focused_primary_repair_keeps_stable_evidence_aliases(self):
         from hard_harness.authoring import author_messages

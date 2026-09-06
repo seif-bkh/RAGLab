@@ -50,6 +50,25 @@ row is never trusted back in, and recovery issues zero model calls (asserted by 
 - A quota event pauses and asks the user; nothing switches model, provider, project or
   billing silently.
 
+## LLM-free retrieval judgement (available now)
+
+`python3 hard_harness_main.py judge --arms lexical,vector` scores retrieval without any
+generative model: the label is exact source-span containment inside a retrieved chunk,
+taken from the accepted snapshot families, so no answer key is read and no model judges
+anything. It reports answer-readiness at top-k, recall@1/3/k, MRR, nDCG, the strict
+ceiling an answer model is bounded by, a separate slice for queries sharing no content
+word with their evidence, `partial_only_rate` as a chunking diagnostic, an abstention AUC
+built by deleting the supporting document from the searchable set, a threshold chosen with
+a bounded false-rejection rate, a family-clustered bootstrap interval, and the agreement
+between the lexical and embedding arms (the anti-circularity check). `.github/workflows/
+retrieval-judge.yml` runs it on every chunking, corpus or snapshot change.
+
+The lexical arm measured locally on 469 families / 1,407 questions: answer-ready 17.4%
+overall, 46.3% for Arabic and ~3% for French/English, with 455 questions sharing no
+content word with their evidence. Those numbers are what a cross-lingual embedding has to
+improve on, and the report states plainly that this says nothing about whether answers
+would be correct, faithful or properly refused.
+
 ## Scaled version first
 
 Per the user's decision, the first pass is a **scaled dataset version: 475 paired

@@ -1,0 +1,82 @@
+name: Retrieval quality without an answer model
+
+# Embeddings-only judgement: the label is exact source-span containment, so this runs on
+# every chunking/corpus change without a generative model, without a judge, and without
+# waiting for the graded answer harness to clear its provider ceilings.
+on:
+  push:
+    branches: ["arena/01a071ba-raglab", "arena/01a0741e-raglab"]
+    paths:
+      - "raglab/hard_harness/retrieval_judge.py"
+      - "raglab/hard_harness_main.py"
+      - "raglab/chunker.py"
+      - "raglab/loader.py"
+      - "raglab/store.py"
+      - "raglab/embedder.py"
+      - "raglab/nvidia_api.py"
+      - "raglab/config.py"
+      - "raglab/benchmarks/hard_harness_accepted/**"
+      - "docs/**"
+  pull_request:
+    paths:
+      - "raglab/hard_harness/retrieval_judge.py"
+      - "raglab/chunker.py"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+
+concurrency:
+  group: retrieval-judge-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  judge:
+    name: Judge retrieval from embeddings and lexical overlap
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -r raglab/requirements-harness.txt
+      - run: python -m compileall -q raglab && cd raglab && python -m unittest -q test_hard_harness
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/hard_harness/
+          key: retrieval-judge-v1-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: retrieval-judge-v1-${{ github.ref_name }}-
+      - name: Judge both arms (lexical BM25 and nvidia embeddings)
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
+          NVIDIA_EMBEDDING_CACHE_FILE: .cache/hard_harness/embeddings_cache_nvidia.json
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -o pipefail
+          cd raglab && python hard_harness_main.py judge --arms lexical,vector --top-k 5 \
+            | tee results/hard_harness/retrieval_judge/summary.json
+      - name: Keep embeddings and tokenizer for the next run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/hard_harness/
+          key: retrieval-judge-v1-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Show the report
+        if: always()
+        run: |
+          if [ -f raglab/results/hard_harness/retrieval_judge/REPORT.md ]; then
+            cat raglab/results/hard_harness/retrieval_judge/REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No report was written; the judge did not reach the reporting step.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: retrieval-judge
+          path: raglab/results/hard_harness/retrieval_judge/
+          if-no-files-found: warn
+          retention-days: 30

@@ -23,6 +23,12 @@ def main(argv=None):
     sub.add_parser('grade')
     sub.add_parser('report')
     sub.add_parser('snapshot')
+    judge = sub.add_parser('judge')
+    judge.add_argument('--arms', default='lexical,vector',
+                       help="comma list of lexical,vector; no model judges anything in either arm")
+    judge.add_argument('--top-k', type=int, default=5)
+    judge.add_argument('--fpr', type=float, default=0.05)
+    judge.add_argument('--out', default=None)
     pub = sub.add_parser('publish'); pub.add_argument('--phase', required=True)
     get = sub.add_parser('collect'); get.add_argument('--repo', default='seif-bkh/RAGLab')
     get.add_argument('--sha', required=True); get.add_argument('--destination', default=str(OUTPUT))
@@ -48,6 +54,22 @@ def main(argv=None):
         print(json.dumps({k: report[k] for k in ('status', 'graded_questions', 'ungraded_questions',
                                                 'by_language') if k in report},
                          ensure_ascii=False, indent=2))
+        return 0
+    if args.command == 'judge':
+        from hard_harness.retrieval_judge import evaluate
+        manifest = evaluate(arms=tuple(name.strip() for name in args.arms.split(',') if name.strip()),
+                            top_k=args.top_k, fpr=args.fpr, out=args.out)
+        report = manifest['report']
+        print(json.dumps({
+            'status': manifest['status'], 'arms': manifest['arms'],
+            'arm_status': {arm: state.get('status') for arm, state in manifest['arm_status'].items()},
+            'questions': manifest['questions'], 'families': manifest['families'],
+            'headline': {arm: {metric: report[arm]['overall'].get(metric) for metric in
+                               ('answer_ready_rate', 'evidence_available_rate', 'recall@1', 'recall@3',
+                                'semantic_only_recall', 'partial_only_rate')}
+                         for arm in manifest['arms']},
+            'abstention_auc': {arm: report[arm].get('abstention', {}).get('auc') for arm in manifest['arms']},
+            'agreement': report.get('agreement', {})}, ensure_ascii=False, indent=2))
         return 0
     if args.command == 'collect':
         from hard_harness.publishing import collect
