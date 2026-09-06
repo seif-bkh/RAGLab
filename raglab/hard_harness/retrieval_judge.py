@@ -57,6 +57,18 @@ def content_tokens(text):
     return [t for t in tokens(text) if t not in STOPWORDS]
 
 
+def runtime_label_space(normalize, documents):
+    """The text a label has to exist inside, judged on the document rather than on chunks.
+
+    Chunk joins repeat overlap words, so a span crossing a boundary would look absent from the
+    corpus; that is a chunking property and belongs to the recall metric, not to the question of
+    whether the label is real. Dataset compilation uses it too, so the frozen sample and the
+    judged sample are the same families.
+    """
+    return normalize('\n'.join(document['text'] if isinstance(document, dict) else document.text
+                               for document in documents))
+
+
 def select_sample(families, findable, *, per_language=None):
     """Pick a deterministic, spread-balanced subset of families.
 

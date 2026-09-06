@@ -148,7 +148,7 @@ def _braces_unclosed(text):
 
 
 def _retruncatable(exc_text):
-    return 'Unterminated string' in exc_text or 'Expecting ',' delimiter' in exc_text
+    return "Unterminated string" in exc_text or "Expecting ',' delimiter" in exc_text
 
 
 class CheckpointClient:

@@ -890,6 +890,29 @@ class DatasetIntegrity(unittest.TestCase):
                 'fact_summary':f'fact {number}','rationale':'test-only fixture, not a real benchmark case',
                 'languages':languages,'evidence':[{'unit_id':'unit','quote':'original source evidence text'}] if category=='supported' else []}
 
+    def test_the_frozen_dataset_can_hold_the_judged_sample_instead_of_the_lowest_ids(self):
+        """The expensive half of the run should score the same cases the judge scored."""
+        from types import SimpleNamespace
+        from hard_harness.dataset import select_accepted
+        from hard_harness.retrieval_judge import normalize, runtime_label_space, select_sample
+        counts = {'supported': 2, 'out_of_scope': 0, 'adversarial': 0, 'insufficient_information': 0}
+        scale = {'counts': counts, 'base_families': 2, 'adversarial': 0}
+        families = [self.family(number) for number in (1, 2, 3, 4)]
+        self.assertEqual([f['id'] for f in select_accepted(families, scale)], ['hh0001', 'hh0002'])
+        chosen = select_accepted(families, scale, preferred=['hh0004', 'hh0001'])
+        self.assertEqual([f['id'] for f in chosen], ['hh0004', 'hh0001'])
+
+        # The label space is document text, and loader documents are dicts, not objects.
+        space = runtime_label_space(normalize, [{'text': 'alpha beta'}, SimpleNamespace(text='gamma')])
+        self.assertEqual(space, normalize('alpha beta\ngamma'))
+        # So the same sample the judge used is what gets frozen, when the plan asks for one.
+        for family in families:
+            family.update({'subtype': f'sub {family["id"][-1]}', 'question_style': 'formal',
+                           'evidence': [{'unit_id': 'u', 'quote': 'alpha beta'}]})
+        sampled, info = select_sample(families, {'hh0001', 'hh0003'}, per_language=2)
+        self.assertEqual(info['per_language'], 2)
+        self.assertEqual({f['id'] for f in sampled}, {'hh0001', 'hh0003'})
+
     def test_reference_recovery_exports_later_cached_ids_before_retrying_a_gap(self):
         from unittest.mock import patch
         import hard_harness.authoring as authoring

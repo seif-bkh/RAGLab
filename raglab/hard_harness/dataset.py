@@ -56,14 +56,21 @@ def dataset_scale(plan):
             'full_target': int(plan.get('full_target_questions_per_language', per_language))}
 
 
-def select_accepted(base, scale):
+def select_accepted(base, scale, preferred=()):
     """Deterministically pick the families a dataset version will contain.
 
     Lowest accepted IDs win, per category, so a later run can extend the same
     version by adding higher IDs without renumbering anything already frozen.
     """
     chosen, taken = [], {key: 0 for key in scale['counts']}
-    for family in sorted(base, key=lambda f: f['id']):
+    # A plan sample overrides the ID order, but the order stays a property of the plan rather
+    # than of the run: the same plan freezes the same families.
+    rank = {identifier: index for index, identifier in enumerate(preferred)}
+
+    def ordering(family):
+        return (rank.get(family['id'], len(rank)), family['id'])
+
+    for family in sorted(base, key=ordering):
         category = family['category']
         if taken.get(category, 1e9) >= scale['counts'][category]:
             continue
@@ -225,7 +232,22 @@ def compile_dataset():
     if len({r['id'] for r in base_all}) != len(base_all):
         raise ValueError('Two author shards accepted the same family ID')
     scale = dataset_scale(plan)
-    base = select_accepted(base_all, scale)
+    # The answer model is the expensive part, so the frozen version reuses the judge's sample:
+    # families whose gold text is actually in docs/, spread over subtype and question style.
+    # Only ids, subtype, style and evidence quotes are consulted - never a reference answer.
+    limit = int(plan.get('dataset_limit_per_language') or 0)
+    preferred, sample_info = [], {'status': 'full_pool', 'families': len(base_all)}
+    if limit:
+        from hard_harness.retrieval_judge import gold_spans, normalize, runtime_label_space, select_sample
+        from loader import load_all
+        label_space = runtime_label_space(normalize, load_all(ROOT.parent / 'docs'))
+        findable = {row.get('id') for row in base_all
+                    if any(span and span in label_space
+                           for span in gold_spans(row.get('family', row)))}
+        sampled, sample_info = select_sample([row.get('family', row) for row in base_all],
+                                             findable, per_language=limit)
+        preferred = [family['id'] for family in sampled]
+    base = select_accepted(base_all, scale, preferred=preferred)
     snapshot_manifest_path = ROOT / 'benchmarks' / 'hard_harness_accepted' / 'manifest.json'
     snapshot_summary = read_json(snapshot_manifest_path) if snapshot_manifest_path.exists() else {}
     independence = snapshot_summary.get('audit_independence') or {}
@@ -292,8 +314,22 @@ def compile_dataset():
         manifest['reference_files'][rname] = {'count':len(private[lang]), 'fingerprint': fingerprint(private[lang])}
     manifest['dataset_id'] = fingerprint({'version':plan['version'],'public_files':manifest['public_files'],
         'reference_files':manifest['reference_files'],'gold_sources':sources['gold_unit_manifest'],
-        'runtime_sources':plan['source_runtime_manifest']})
+        'runtime_sources':plan['source_runtime_manifest'],
+        'chunking':plan.get('chunking') or {}, 'sample':sample_info})
     manifest['runtime_source_manifest'] = plan['source_runtime_manifest']
+    manifest['sample'] = sample_info
+    manifest['chunking'] = plan.get('chunking') or {}
+    # Record what the corpus actually is now, so a later reader can see this version was frozen
+    # at the plan's chunk size and compare the guard against a recomputed value.
+    from dataclasses import asdict
+    from chunker import chunk_all
+    from loader import load_all
+    from hard_harness.predict import runtime_config
+    _cfg = runtime_config()
+    manifest['recomputed_runtime_chunk_manifest'] = fingerprint(
+        [asdict(_chunk) for _chunk in chunk_all(load_all(ROOT.parent / 'docs'), _cfg)])
+    manifest['runtime_chunk_disagrees_with_plan'] = (
+        manifest['recomputed_runtime_chunk_manifest'] != plan['source_runtime_manifest'])
     manifest['unique_question_texts'] = {lang:len({normalized_quote(q['question']) for q in public[lang]}) for lang in LANGUAGES}
     manifest['evidence_units_covered'] = len({e['unit_id'] for f in families for e in f.get('evidence',[])})
     manifest['evidence_groups'] = len({r['fact_group'] for r in private['en']})

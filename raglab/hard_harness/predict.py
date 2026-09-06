@@ -60,7 +60,17 @@ def runtime_config():
     cfg.ANSWER_CACHE_PATH = WORK/'unused_candidate_success_cache.json'
     cfg.QUERY_TRANSLATION_ENABLED = False
     cfg.QUERY_VARIANT_STRATEGY = 'original'
-    policy = read_json(PLAN_PATH)['answer_policy']
+    plan = read_json(PLAN_PATH)
+    # Chunking is a dataset-version property, not a runtime knob: the sweep that chose 640
+    # tokens is recorded in the plan, and the candidate corpus and the judge corpus have to be
+    # built from the same value or they measure different indexes.
+    chunking = plan.get('chunking') or {}
+    if chunking.get('chunk_size_tokens'):
+        cfg.CHUNK_SIZE_TOKENS = int(chunking['chunk_size_tokens'])
+    if chunking.get('chunk_overlap_tokens') is not None:
+        cfg.CHUNK_OVERLAP_TOKENS = int(chunking['chunk_overlap_tokens'])
+    cfg.CHUNKING_SOURCE = 'plan.chunking' if chunking else 'config default'
+    policy = plan['answer_policy']
     if policy.get('translation') is not False:
         raise ValueError('Hard-harness candidate profile cannot enable a translation model')
     cfg.ANSWER_TOP_K = policy['top_k']

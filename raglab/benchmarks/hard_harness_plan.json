@@ -1,20 +1,20 @@
 {
   "version": "hard-harness-v1",
-  "revision": "17-json-safe-author-prompt-and-a-stop-guard-on-unparsable-output",
-  "phase": "author",
+  "revision": "18-freeze-640-token-chunks-on-a-100-per-language-sample",
+  "phase": "compile",
   "languages": [
     "ar",
     "fr",
     "en"
   ],
   "families": 1000,
-  "questions_per_language": 475,
+  "questions_per_language": 100,
   "paired_languages": true,
   "counts_per_language": {
-    "supported": 300,
-    "out_of_scope": 100,
-    "adversarial": 50,
-    "insufficient_information": 25
+    "supported": 100,
+    "out_of_scope": 0,
+    "adversarial": 0,
+    "insufficient_information": 0
   },
   "supported_document_allocation": {
     "Guide_Interne_Operations_Bancaires_Islamiques.docx": 300,
@@ -59,7 +59,7 @@
     "translation": false
   },
   "author_shards": 9,
-  "answer_shards": 15,
+  "answer_shards": 3,
   "answer_shard_size": 100,
   "random_seed": 20260905,
   "source_runtime_manifest": "807785db25fb798499e67f12f59589f6db33792e88cb00cf104752853046e60e",
@@ -68,11 +68,16 @@
   "candidate_llm": {
     "provider": "xkiro",
     "model": "qwen/qwen3.8-max:free",
-    "credential_secret": "XKIRO_API_KEY_JINKO",
+    "credential_secret": "XKIRO_API_KEY",
+    "credential_aliases": [
+      "XKIRO_API_KEY",
+      "XKIRO_API_KEY_JINKO"
+    ],
     "pacing": {
       "max_retry_delay_seconds": 120.0,
       "quota_retry_attempts": 3
-    }
+    },
+    "note": "User approved answering on qwen via XKIRO_API_KEY with the JINKO key as the alternate credential; the harness gate still refuses any non-Qwen candidate model, so a Google answer would need a plan change, not a silent fallback."
   },
   "google_scope": "Unfinished reference authoring and auditing only; restore candidate_llm for answering unless the user explicitly approves a further switch.",
   "transport_failure_streak": 6,
@@ -90,7 +95,7 @@
     "role": "drafts the paired family; the same model as the candidate, so authoring alone is not validation"
   },
   "full_target_questions_per_language": 1000,
-  "scale_note": "First pass is a scaled dataset version: 475 paired scenarios per language (1,425 records) with the same 65/20/10/5 category proportions as the 1,000-per-language target. Authoring still enumerates the identical 900 base specs, so every already-accepted family keeps its cache key; the compiler selects the lowest accepted ID per category. The frozen manifest records scaled_version, how many families were accepted, and which were selected, and the full target stays questions_per_language 1000.",
+  "scale_note": "Frozen version is the scaled retry: 100 supported families per language (300 questions) sampled deterministically from the accepted pool, preferring families whose gold text exists in docs/ and balancing subtype and question style, at 640-token chunks. The 1,000-per-language target and the 200 out-of-scope / 50 insufficient-evidence / 50 adversarial categories stay open: no negative family has ever been authored, so nothing here measures refusal behaviour end to end.",
   "authoring": {
     "audit_mode": "drafts_only",
     "why": "Authoring runs on xKiro Qwen; the reference audit runs on Google, whose free tier measured ~1-2 usable requests/minute. Drafting everything first means a run is never blocked by the scarce provider, and each run still promotes as many audits as the current allowance permits.",
@@ -98,5 +103,15 @@
   },
   "audit_independence_note": "Accepted families 0-469 were audited by the same model that drafted them (cross_provider_audited 0). Role profiles now separate the providers, so families authored from this revision on are drafted by xKiro Qwen and audited by Google; the snapshot manifest and the frozen dataset manifest carry the counts and the report prints them as a caveat. A same-model audit is not described as independent anywhere.",
   "negative_priority_note": "All 469 accepted families are supported ones. The 200 out-of-scope and 50 insufficient-evidence families sit in shards 6-8, which were never reached, so the author matrix is ordered least-progressed-first and the scaled freeze is refused until those categories are filled.",
-  "shard_order_note": "The plan job orders the author matrix least-progressed-first from the committed snapshot manifest, so the untouched negative families in shards 6-8 are authored before the supported shards that already have 100 each. Values are plain integers: object matrix entries bound matrix.shard to the whole object and failed every shard in setup (run 34003466393)."
+  "shard_order_note": "The plan job orders the author matrix least-progressed-first from the committed snapshot manifest, so the untouched negative families in shards 6-8 are authored before the supported shards that already have 100 each. Values are plain integers: object matrix entries bound matrix.shard to the whole object and failed every shard in setup (run 34003466393).",
+  "chunking": {
+    "chunk_size_tokens": 640,
+    "chunk_overlap_tokens": 40,
+    "why": "Measured on the same 100x3 sample with no answer model: at 640-token chunks the embedding arm put the full gold span in the top 5 for 82.3% of questions (68.3% at rank 1, abstention AUC 0.798, 96.3% recall on queries sharing no content word), against 11.3% at the pinned 220 where 37% of queries have no chunk holding any part of their evidence. Overlap is unchanged.",
+    "app_default_untouched": true,
+    "note": "config.CHUNK_SIZE_TOKENS stays 220 for the main application; this pin is a hard-harness dataset-version property applied by predict.runtime_config() to every corpus in the harness."
+  },
+  "dataset_limit_per_language": 100,
+  "authors_run": "34017059277",
+  "provider_mix_note": "Answering is xKiro Qwen only. Reference-side roles may run on Google under the existing free-tier pacing; every published count is labelled with the provider that produced it, so a mixed-provider run is never reported as a Qwen-only number."
 }
