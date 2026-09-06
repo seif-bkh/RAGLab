@@ -35,6 +35,14 @@ concurrency:
   group: retrieval-judge-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Scaled retry: 100 families per language (one question each in ar/en/fr, 300 questions),
+  # drawn from the accepted pool in a deterministic round-robin over (subtype, question style)
+  # and only from families whose gold text exists verbatim in the corpus, so a retrieval miss
+  # here is a ranking miss and not the transcription defect found in the full pool.
+  # Set to "0" to judge every accepted family.
+  HARD_HARNESS_JUDGE_LIMIT_PER_LANGUAGE: "100"
+
 jobs:
   judge:
     name: Judge retrieval from embeddings and lexical overlap

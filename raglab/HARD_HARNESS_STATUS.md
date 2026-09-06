@@ -129,3 +129,29 @@ python3 -m unittest test_hard_harness test_nvidia_pipeline   # 120 tests
 
 `gh run download` and `gh run view --log` fail from this environment (Azure blob `EOF`);
 `collect` reads the check runs each job publishes instead.
+
+## Scaled retry: 100 families per language, no model in the loop
+
+The judge now takes `--limit-per-language N` (CI default 100, env
+`HARD_HARNESS_JUDGE_LIMIT_PER_LANGUAGE`, `0` for the whole pool). One family carries one
+question in each of Arabic, English and French, so 100 families is 100 questions per language,
+300 queries in total.
+
+The sample is chosen deterministically, with no random seed:
+
+1. families whose gold quote does not exist verbatim in the runtime corpus are ranked last, and
+   with 242 of 469 findable the 100 picked are all findable — a miss in this run is a ranking
+   miss, not the transcription defect;
+2. within that pool the pick round-robins over `(subtype, question_style)`, so the 100 are not
+   100 formally-worded definitions: 15-20 per subtype, 19-30 per question style.
+
+`manifest['sample']` records the pool, how many were findable, and the per-bucket counts;
+`REPORT.md` states the scope and warns that full-pool numbers are not comparable to sampled ones.
+
+Measured locally (lexical arm, fallback token estimator — CI with `cl100k_base` is authoritative,
+which is why the same sample is judged in CI at 220/420/640 chunks): answer-ready 32.3% at
+pinned chunking, 35.0% at 420, 35.7% at 640, versus 17.4% overall on the unsampled full pool —
+the gap is the label defect removed, not a better ranker. Arabic questions in that sample reach
+0.94 recall@5 with the evidence at median rank 1, because the corpus is Arabic and BM25 shares
+words with Arabic queries only; the English and French variants of the same families are the
+embedding arm's job, and that is the number worth reading out of CI.

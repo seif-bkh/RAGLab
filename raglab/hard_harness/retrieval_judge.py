@@ -57,6 +57,65 @@ def content_tokens(text):
     return [t for t in tokens(text) if t not in STOPWORDS]
 
 
+def select_sample(families, findable, *, per_language=None):
+    """Pick a deterministic, spread-balanced subset of families.
+
+    One family carries one question in each language, so 100 families means 100 Arabic, 100
+    English and 100 French questions. Two rules shape the choice:
+
+    * families whose gold text is not in the corpus at all are used last, because scoring a
+      retriever on a label it can never be handed measures the labelling path, not the ranker;
+    * the rest are taken round-robin over (subtype, question_style), so a small sample is not
+      100 definitions asked formally, and needs no random seed to be reproduced.
+    """
+    families = sorted(families, key=lambda item: item['id'])
+    if not per_language or per_language >= len(families):
+        return families, {'status': 'all_families', 'families': len(families), 'per_language': None,
+                          'requested': None, 'pool': len(families),
+                          'pool_with_label_in_corpus': len(findable)}
+
+    def layout(pool):
+        buckets = {}
+        for family in pool:
+            key = (str(family.get('subtype') or '?'), str(family.get('question_style') or '?'))
+            buckets.setdefault(key, []).append(family)
+        return [(key, buckets[key]) for key in sorted(buckets)]
+
+    def drain(buckets, want, taken):
+        cursors = [0] * len(buckets)
+        while len(taken) < want and any(cursors[index] < len(bucket)
+                                       for index, (_, bucket) in enumerate(buckets)):
+            for index, (_, bucket) in enumerate(buckets):
+                if cursors[index] < len(bucket):
+                    taken.append(bucket[cursors[index]])
+                    cursors[index] += 1
+                    if len(taken) >= want:
+                        break
+        return taken
+
+    primary = [family for family in families if family['id'] in findable]
+    rest = [family for family in families if family['id'] not in findable]
+    picked = drain(layout(primary), per_language, [])
+    backfilled = max(0, per_language - len(picked))
+    if backfilled:
+        picked = drain(layout(rest), per_language, picked)
+    picked.sort(key=lambda item: item['id'])
+    chosen = {family['id'] for family in picked}
+    info = {'status': 'sampled', 'requested': int(per_language), 'per_language': len(picked),
+            'families': len(picked), 'questions': 3 * len(picked),
+            'pool': len(families), 'pool_with_label_in_corpus': len(primary),
+            'from_findable_pool': len(picked) - backfilled, 'backfilled_from_unfindable': backfilled,
+            'by_subtype': {key: sum(1 for family in picked if str(family.get('subtype') or '?') == key)
+                           for key in sorted({str(f.get('subtype') or '?') for f in picked})},
+            'by_question_style': {key: sum(1 for family in picked
+                                           if str(family.get('question_style') or '?') == key)
+                                  for key in sorted({str(f.get('question_style') or '?') for f in picked})},
+            'note': 'Deterministic round-robin over (subtype, question_style) among families whose '
+                    'gold text exists verbatim in the runtime corpus; no random seed is involved, so '
+                    'anyone re-running the same snapshot gets the same ' + str(len(chosen)) + ' families.'}
+    return picked, info
+
+
 def gold_spans(family):
     """Exact source strings the question was built from — the whole label set."""
     return [normalize(event.get('quote')) for event in family.get('evidence', []) if event.get('quote')]
@@ -502,7 +561,7 @@ def question_texts(families):
 
 
 def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, corpus=None, cfg=None,
-             fpr=0.05, chunk_tokens=None, chunk_overlap=None):
+             fpr=0.05, chunk_tokens=None, chunk_overlap=None, limit_per_language=None):
     """Run the requested arms over the accepted families and write a report.
 
     The embedding arm needs the embedding provider. If it cannot be reached the arm is
@@ -525,13 +584,18 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
             cfg.CHUNK_OVERLAP_TOKENS = int(chunk_overlap)
         corpus = Corpus(chunk_all(load_all(ROOT.parent / 'docs'), cfg))
     families = accepted_families() if families is None else list(families)
-    queries = question_texts(families)
     # Does each family's gold text exist in the candidate corpus at all? The references were
     # built from a separate extraction pass, so a wording difference there would otherwise be
     # reported forever as retrieval failing to find something that is not present.
     corpus_text = corpus.full_text()
     findable = {family['id'] for family in families
                 if any(span and span in corpus_text for span in gold_spans(family))}
+    # Sampling happens after that check, or the sample would be chosen blind to which labels
+    # the corpus can even contain.
+    families, sample = select_sample(families, findable, per_language=limit_per_language)
+    chosen = {family['id'] for family in families}
+    findable = {item for item in findable if item in chosen}
+    queries = question_texts(families)
     indices, arm_status = {}, {}
     if 'lexical' in arms:
         lexical = LexicalIndex(corpus)
@@ -586,6 +650,7 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
             write_jsonl(out / f'{arm}_absent.jsonl', absent)
             summary = summarise(rows, top_k=top_k, abstain=abstain)
             summary['arm'] = arm_status[arm]
+            summary['sample'] = sample
             write_json(out / f'{arm}_summary.json', summary)
             report[arm] = summary
         except Exception as exc:      # noqa: BLE001 - a failed arm is reported, not swallowed
@@ -610,6 +675,7 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
                                          'enable it'}
     manifest = {'status': 'judged', 'created_at': now(), 'arms': sorted(indices), 'arm_status': arm_status,
                 'top_k': top_k, 'fpr': fpr, 'questions': len(queries), 'families': len(families),
+                'sample': sample,
                 'chunk_size_tokens': getattr(cfg, 'CHUNK_SIZE_TOKENS', None),
                 'chunk_overlap_tokens': getattr(cfg, 'CHUNK_OVERLAP_TOKENS', None),
                 'chunks': len(corpus.chunks), 'documents': sorted(corpus.by_document),
@@ -694,7 +760,13 @@ def markdown(manifest):
              f"built with tokenizer `{manifest.get('tokenizer')}`; agreement with the pinned candidate corpus: "
              f"{manifest.get('pinned_corpus_agreement', {}).get('match', 'unknown')}. If that is not True these "
              f"rates describe a different chunking than the answer harness will see.", '',
-             f"Arms: {', '.join(manifest['arms'])}. "]
+             f"Arms: {', '.join(manifest['arms'])}. ",
+             ('Scope: ' + str(manifest['sample']['per_language']) + ' families per language '
+              + '(' + str(manifest['sample']['questions']) + ' questions) sampled from ' + str(manifest['sample']['pool'])
+              + ' accepted, preferring labels the corpus contains; the sample is deterministic and '
+              + 'round-robin over (subtype, question style), not over difficulty.'
+              if manifest.get('sample', {}).get('status') == 'sampled'
+              else 'Scope: all ' + str(manifest['families']) + ' accepted families.')]
     for arm in manifest['arms']:
         status = (manifest.get('arm_status') or {}).get(arm, {})
         if status.get('status') != 'ok':
@@ -714,12 +786,28 @@ def markdown(manifest):
                   'this from being the index grading its own taste. Where they disagree, neither number above can '
                   'be trusted alone, and that is precisely where a model or a human reader is required.']
     integrity = manifest.get('label_integrity') or {}
+    sample = manifest.get('sample') or {}
     if integrity.get('families'):
-        lines += ['', '## Can these labels be retrieved at all?', '',
-                  f"- {integrity['labels_present_in_corpus']} of {integrity['families']} accepted families "
-                  f"({integrity['present_rate']:.1%}) have gold text that exists verbatim in the runtime corpus; "
-                  f"**{integrity['labels_absent']} do not**, so they are unanswerable from this index whatever "
-                  f"retrieval does. Recall above is also reported over the findable subset only.", '']
+        if sample.get('status') == 'sampled':
+            pool = int(sample.get('pool') or 0)
+            pool_findable = int(sample.get('pool_with_label_in_corpus') or 0)
+            lines += ['', '## Can these labels be retrieved at all?', '',
+                      f"- {pool_findable} of {pool} accepted families "
+                      f"({(pool_findable / pool if pool else 0):.1%}) have gold text that exists verbatim "
+                      f"in the runtime corpus; "
+                      f"**{pool - pool_findable} do not**, so they are unanswerable from this index whatever "
+                      f"retrieval does.",
+                      f"- This run judged **{sample['per_language']} sampled families**, all drawn from the "
+                      f"findable subset, so every rate above measures ranking and nothing here charges a "
+                      f"labelling mismatch to the retriever. The {pool - pool_findable} unfindable families are "
+                      f"excluded rather than counted as misses: a full-pool run is a different measurement and "
+                      f"its numbers are not comparable to these.", '']
+        else:
+            lines += ['', '## Can these labels be retrieved at all?', '',
+                      f"- {integrity['labels_present_in_corpus']} of {integrity['families']} accepted families "
+                      f"({integrity['present_rate']:.1%}) have gold text that exists verbatim in the runtime corpus; "
+                      f"**{integrity['labels_absent']} do not**, so they are unanswerable from this index whatever "
+                      f"retrieval does. Recall above is also reported over the findable subset only.", '']
     coverage = manifest.get('unit_coverage') or {}
     if coverage.get('units'):
         lines += ['', '## Chunking, measured without any query at all', '',

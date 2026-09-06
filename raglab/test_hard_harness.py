@@ -737,6 +737,47 @@ class RetrievalJudge(unittest.TestCase):
         self.assertEqual(overall['answer_ready_rate_label_findable'], 1.0)
         self.assertIn('unanswerable from this index whatever', report)
 
+    def test_a_small_retry_samples_labels_the_corpus_can_actually_return(self):
+        """A 100-question retry must not spend its budget on labels missing from the corpus."""
+        from types import SimpleNamespace
+        import hard_harness.retrieval_judge as judge
+        from hard_harness.retrieval_judge import select_sample
+        corpus = self.corpus('alpha beta gamma delta epsilon zeta', 'theta iota kappa lambda mu nu')
+
+        def case(number, quote, subtype, style):
+            family = self.family(quote, question=f'question {number}?')
+            family.update({'id': f'hh{number:04d}', 'subtype': subtype, 'question_style': style})
+            return family
+
+        # Four families whose quote is in the corpus, two whose quote is not.
+        families = [case(n, 'alpha beta gamma delta epsilon zeta', f'sub {n % 3}', f'style {n % 2}')
+                    for n in range(1, 5)]
+        families += [case(n, 'xi pi rho sigma tau upsilon', 'sub 0', 'style 0') for n in range(5, 7)]
+        findable = {family['id'] for family in families
+                    if any(span and span in corpus.full_text() for span in judge.gold_spans(family))}
+        self.assertEqual(len(findable), 4)
+
+        picked, info = select_sample(families, findable, per_language=3)
+        self.assertEqual({family['id'] for family in picked} - findable, set())
+        self.assertEqual((info['from_findable_pool'], info['backfilled_from_unfindable']), (3, 0))
+        # Round-robin over (subtype, question_style) rather than the first three by id.
+        self.assertGreater(len({family['subtype'] for family in picked}), 1)
+        self.assertEqual([family['id'] for family in picked],
+                         [family['id'] for family in select_sample(families, findable,
+                                                                   per_language=3)[0]])
+        # Only when the findable pool runs short does the sample reach into it, and it says so.
+        _, wide = select_sample(families, findable, per_language=5)
+        self.assertEqual((wide['from_findable_pool'], wide['backfilled_from_unfindable']), (4, 1))
+
+        with tempfile.TemporaryDirectory() as temp:
+            manifest = judge.evaluate(arms=('lexical',), out=Path(temp), families=families, corpus=corpus,
+                                      cfg=SimpleNamespace(NVIDIA_EMBEDDING_MODEL='none'), limit_per_language=2)
+            report = (Path(temp) / 'REPORT.md').read_text()
+        self.assertEqual(manifest['sample']['status'], 'sampled')
+        self.assertEqual(manifest['families'], 2)
+        self.assertEqual(manifest['report']['lexical']['overall']['queries'], 6)   # 2 families x 3 languages
+        self.assertIn('Scope: 2 families per language (6 questions)', report)
+
     def test_reference_answers_are_never_read_into_a_retrieval_metric(self):
         from hard_harness.retrieval_judge import Corpus, judge_families
         family = self.family('bank must obtain written consent',
