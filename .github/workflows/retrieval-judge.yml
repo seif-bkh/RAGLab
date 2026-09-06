@@ -91,5 +91,6 @@ jobs:
         # the readable one. The per-query rows stay in the artifact, not in the checks.
         env: {GH_TOKEN: "${{ github.token }}"}
         run: |
-          cd raglab/results/hard_harness/retrieval_judge && rm -f *_rows.jsonl *_absent.jsonl
+          rm -f raglab/results/hard_harness/retrieval_judge/*_rows.jsonl \
+                raglab/results/hard_harness/retrieval_judge/*_absent.jsonl
           python raglab/hard_harness_main.py publish --phase retrieval_judge
