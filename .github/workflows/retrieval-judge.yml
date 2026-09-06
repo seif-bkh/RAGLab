@@ -9,6 +9,7 @@ on:
     paths:
       - "raglab/hard_harness/retrieval_judge.py"
       - "raglab/hard_harness_main.py"
+      - ".github/workflows/retrieval-judge.yml"
       - "raglab/chunker.py"
       - "raglab/loader.py"
       - "raglab/store.py"
@@ -20,6 +21,7 @@ on:
   pull_request:
     paths:
       - "raglab/hard_harness/retrieval_judge.py"
+      - ".github/workflows/retrieval-judge.yml"
       - "raglab/chunker.py"
       - "docs/**"
   workflow_dispatch:
@@ -83,3 +85,11 @@ jobs:
           path: raglab/results/hard_harness/retrieval_judge/
           if-no-files-found: warn
           retention-days: 30
+      - name: Publish the report as checkpoints
+        if: always()
+        # Artifacts expire and this sandbox cannot fetch them; the check-run channel is
+        # the readable one. The per-query rows stay in the artifact, not in the checks.
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          cd raglab/results/hard_harness/retrieval_judge && rm -f *_rows.jsonl *_absent.jsonl
+          python raglab/hard_harness_main.py publish --phase retrieval_judge
