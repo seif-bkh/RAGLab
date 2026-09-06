@@ -67,6 +67,16 @@ identify the exact earlier artifacts; ordinary code changes do not spend API quo
   versioned provider/model/key profile and confirmation that the project uses the
   free tier. No billing settings are changed, no credentials are sent to another
   provider, and mixed results are never called a Qwen-only score.
+- A rate limit is not a quota. `llm.pacing` decides how the Google free tier is
+  used: `min_interval_seconds` between request starts (shared by every client in
+  the process), and a 429 that advertises a bounded wait is paced and retried up to
+  `quota_retry_attempts` times while the shared interval doubles. An unlabelled 429,
+  a wait above `max_retry_delay_seconds`, or a transport-failure streak of
+  `transport_failure_streak` still pauses the fleet for an explicit user decision.
+- `shard_deadline_minutes` (overridden per job by `HARNESS_DEADLINE_MINUTES`) makes
+  each shard stop, publish and resume rather than be killed mid-call. A deadline
+  stop is recorded as `partial_deadline`, never as `paused`, so it cannot gate the
+  other shards, and it never counts as a completed shard.
 
 ## Commands
 

@@ -66,6 +66,63 @@ or resumable embedding caches. Cache/index identities include model, endpoint,
 embedding task, dimensions and tokenizer/chunk settings. Same-sized vectors from
 different models are never treated as interchangeable.
 
+## Chat: ask a question, get a cited answer
+
+```bash
+./raglab/chat.sh --check                      # config, model, chunking, index size — no completion call
+./raglab/chat.sh --ingest                      # first run only: embeds docs/ + data/ into ChromaDB
+./raglab/chat.sh                               # the REPL
+./raglab/chat.sh "ما رأس مال بنك التمويل العائلي؟" -k 8 --json
+./raglab/chat.sh --show-context "quel est le délai de recours ?"
+```
+
+It answers with `nvidia/nemotron-3.5-lightning-30b-a3b` through `NVIDIA_API_KEY` (a free endpoint on
+build.nvidia.com), thinking off by default — greedy, with the reply ceiling spent on the answer instead
+of reasoning tokens; `--thinking` switches reasoning on and raises the ceiling to fit it. Retrieval, the
+verbatim-evidence check and the private/live-question refusal are this file's own machinery, unchanged:
+the answer arrives as claims carrying quotes that must really appear in the retrieved excerpts, so an
+invented number comes back as `refused/invalid_output` with the model's raw reply shown rather than as
+fluent prose.
+
+A refusal is printed with the excerpts the model was handed, so it is diagnosable rather than
+mysterious. `I cannot answer this from the supplied documents` is true whether the corpus is silent,
+retrieval missed, or the question asks for personal or live data — so the chat says which of those it
+has evidence for, previews the excerpts it supplied, and names what would likely change the outcome. Two
+settings follow from measurements in this repo: the chat indexes at the **pinned 640/40** chunking
+(read from `benchmarks/hard_harness_plan.json`, `--chunk-tokens` overrides) because the retrieval sweep
+measured 82% whole-document recall there against 11% at the application's 220 default; and the context
+ceiling is sized from `-k` (5 × 680 tokens), because `build_sources` drops an entire excerpt rather than
+truncating it, so a fixed 3000-token ceiling would quietly answer from 4 of 5 hits. Retrieval runs in
+its own collection (`raglab_chat`) so the app's index and the chat's never argue over one store.
+
+Two labels matter. This is **not** the supported answerer above: `main.py answer` and the benchmark keep
+xKiro Qwen and reject any substitution, so no score in this repo belongs to the chat model. And its
+questions are not the harness's: the frozen sample and its numbers stay the harness's, while this path is
+for reading the documents. In `chat` commands: `:k 8`, `:show`, `:lang ar|fr|en|auto`,
+`:mode vector|rrf|blend`, `:log chat_turns.jsonl`, `:context`, `:quit`. `--data-dir PATH` replaces the
+default corpus outright.
+
+### Why an English question gets refused here, measured
+
+The language hint a refusal prints is not folklore. Scoring the same corpus with BM25 over the pinned
+640-token chunks (lexical only, no model, no API call): `i don't have a bank account and i have zero
+money, can i buy a gamer pc worth 4K TND?` peaks at 9.48 on a passage of `Madkhal_Sayrafa_Islamiya`
+stating that a certain development bank `لا يتعامل مع الافراد` — does not deal with individuals at all;
+`what are the procedures of buying a vehicle?` peaks at 9.54 on an unrelated preamble. Asked in Arabic,
+`ما هي شروط وإجراءات تمويل شراء سيارة او اجهزة اعلامية بالمرابحة؟` peaks at 14.72/14.42 on
+`Guide_Interne_Operations_Bancaires_Islamiques` chunks #003 and #005, the ones carrying
+`يجوز تمويل شراء عقار او سيارة او سلع...` and the rule that no final sale contract may be concluded
+before the bank holds the goods. French lands in between, on the French product sheet rather than the
+Arabic guide.
+
+That is the vocabulary gap, which the embedding arm alone is asked to bridge — and two honest limits on
+reading it as a verdict. Lexical overlap is not entailment: a zero-overlap English question can still
+retrieve correctly, which is what the harness's 82% whole-document recall at 640 tokens measured for its
+own English questions (formal, source-anchored ones, not conversational phrasing). And a refusal can be
+*right* regardless of retrieval: no document in `docs/` states whether a person with no account and no
+income may buy anything, so the model abstaining on that framing is the citation contract working, not a
+miss. `:show` or `--show-context` prints what was supplied, which is how the two cases are told apart.
+
 ## Grounding, free pricing and credentials
 
 - The model receives only the question and retrieved source context, not gold

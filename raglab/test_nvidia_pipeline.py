@@ -1,7 +1,9 @@
 """Offline contract, provenance, safety, and regression tests; no API access."""
+import inspect
 import io
 import json
 import os
+import re
 import tempfile
 import unittest
 import urllib.error
@@ -779,6 +781,391 @@ class MeasurementReports(unittest.TestCase):
         from publish_nvidia_report import answer_parts
         with self.assertRaisesRegex(ValueError, 'too large'):
             list(answer_parts({'label': 'dev_model'}, [{'id': 'q1', 'answer': 'ع' * 40000}]))
+
+
+PROJECT = Path(__file__).resolve().parent
+cfg_CHUNK = int(os.environ.get('CHUNK_SIZE_TOKENS', '220'))
+
+
+class ChatEntry(unittest.TestCase):
+    """The conversational path may change the chat model; it may not change what the benchmark
+    believes, may not reach a provider for a question it must refuse locally, and may not print a key.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        import chat
+        self.chat = chat
+
+    def test_the_chat_answers_with_nemotron_and_leaves_the_benchmark_model_alone(self):
+        import config as cfg
+        self.assertEqual(self.chat.CHAT_MODEL, 'nvidia/nemotron-3.5-lightning-30b-a3b')
+        local = self.chat.chat_config()
+        self.assertEqual((local.ANSWER_PROVIDER, local.ANSWER_MODEL), ('nvidia', self.chat.CHAT_MODEL))
+        self.assertEqual(local.ANSWER_CACHE_PATH.name, 'answers_cache_chat.json')
+        # An accidental commit is the failure mode here, so the name must match an ignore pattern.
+        import subprocess
+        self.assertEqual(subprocess.run(['git', '-C', str(Path.cwd().parent), 'check-ignore', '-q',
+                                         str(local.ANSWER_CACHE_PATH)], capture_output=True).returncode, 0)
+        self.assertEqual(cfg.ANSWER_MODEL, QWEN_MODEL)      # the shared config is untouched
+        self.assertEqual(cfg.ANSWER_PROVIDER, 'xkiro')
+
+    def test_reasoning_is_switched_per_nemotron_call_and_nothing_else(self):
+        for thinking in (False, True):
+            payload = chat_payload(self.chat.CHAT_MODEL, [{'role': 'user', 'content': 'hi'}], 4096,
+                                   thinking=thinking)
+            self.assertEqual(payload['chat_template_kwargs'], {'enable_thinking': thinking})
+            self.assertEqual(payload['temperature'], 1.0 if thinking else 0)
+        for model in (KIMI_MODEL, DEEPSEEK_MODEL):          # each keeps its own documented switch
+            self.assertNotIn('enable_thinking', json.dumps(chat_payload(model, [], 4096, thinking=True)))
+
+    def test_the_generator_wrapper_forwards_the_flag_the_shared_signature_cannot_carry(self):
+        seen = []
+
+        class Fake:
+            base_url = 'https://example.invalid/v1'
+            api_key = 'k'
+
+            def chat(self, model, messages, *, max_tokens=2048, thinking=False):
+                seen.append(thinking)
+                return {'text': '{}'}
+
+        self.chat.ReasoningSwitch(Fake(), True).chat('m', [], max_tokens=9)
+        self.chat.ReasoningSwitch(Fake(), False).chat('m', [], max_tokens=9)
+        self.assertEqual(seen, [True, False])
+        self.assertEqual(self.chat.ReasoningSwitch(Fake(), False).base_url, 'https://example.invalid/v1')
+
+    def test_a_private_or_live_question_needs_neither_retrieval_nor_a_provider_call(self):
+        local = self.chat.chat_config()
+        local.CHAT_DATA_DIRS, local.CHAT_ALLOW_INGEST = [], False
+
+        class Generator:
+            def __init__(self):
+                self.asked = []
+
+            def answer(self, question, hits, language=None, use_cache=True):
+                self.asked.append(question)
+                return {'answer': 'unreachable'}
+
+        generator = Generator()
+        with patch('retrieval.retrieve', side_effect=AssertionError('must not retrieve')):
+            result = self.chat.ask(local, None, None, generator, "what is my balance today?")
+        self.assertEqual(result['status'], 'refused')
+        self.assertEqual(result['reason'], 'private_or_live_request')
+        self.assertEqual(generator.asked, [])
+        self.assertEqual(result['model'], self.chat.CHAT_MODEL)
+
+    def test_chat_commands_are_commands_and_only_questions_are_questions(self):
+        import contextlib
+        settings = {'top_k': 5, 'show_context': False, 'log': None, 'model': 'm', 'thinking': False,
+                    'chunking': 220, 'overlap': 40}
+        buffer = io.StringIO()
+        lines = [':k 7', '  ', 'quel est le délai', ':show', ':nope', ':quit', 'never asked']
+        with contextlib.redirect_stdout(buffer):
+            asked = list(self.chat.read_questions(lines, settings))
+        self.assertEqual(asked, ['quel est le délai'])
+        self.assertEqual(settings['top_k'], 7)
+        self.assertTrue(settings['show_context'])
+        self.assertIn('unknown command', buffer.getvalue())
+
+    def test_the_default_corpus_covers_the_shipped_documents_not_only_the_samples(self):
+        import chat
+        dirs = [path.name for path in chat.data_dirs()]
+        self.assertIn('docs', dirs)                 # the four real documents
+        files = sum(len(list(path.glob('*'))) for path in chat.data_dirs())
+        self.assertGreaterEqual(files, 4)
+        self.assertEqual([path.name for path in chat.data_dirs([str(Path(chat.__file__).parent)])],
+                         ['raglab'])                # --data-dir replaces the list outright
+
+    def test_readiness_report_masks_the_key_and_names_the_fix_for_an_empty_index(self):
+        import contextlib
+        class Collection:
+            def __init__(self, count):
+                self._count = count
+
+            def count(self):
+                return self._count
+
+            def get(self, include=None, limit=None):
+                return {'metadatas': [{'chunk_fp': 'fp-current'}] if self._count else []}
+
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi_SECRETVALUE99'}), \
+             patch('store.chunk_fp', return_value='fp-current'), \
+             patch('store.collection_languages', return_value=['ar', 'fr']):
+            with patch('store.get_collection', return_value=Collection(256)):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    ready = self.chat.check()
+            with patch('store.get_collection', return_value=Collection(0)):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    empty = self.chat.check()
+            with patch('store.get_collection', side_effect=ValueError('sqlite file is locked')):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    broken = self.chat.check()
+        text = buffer.getvalue()
+        self.assertEqual((ready, empty, broken), (0, 1, 1))   # a chat with no index is not 'ready'
+        self.assertIn('nvapi_SE', text)
+        self.assertNotIn('SECRETVALUE', text)                  # reported presence never echoes the key
+        self.assertIn('nemotron-3.5-lightning', buffer.getvalue())
+        self.assertIn('sqlite file is locked', text)           # reported, not raised out of --check
+
+    def test_the_empty_index_line_points_at_the_ingest_command(self):
+        import contextlib
+        class Collection:
+            def count(self):
+                return 0
+        buffer = io.StringIO()
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi-x'}), \
+             patch('store.get_collection', return_value=Collection()), \
+             contextlib.redirect_stdout(buffer):
+            self.chat.check()
+        self.assertIn('--ingest', buffer.getvalue())
+
+    def test_the_chat_indexes_at_the_pinned_chunking_not_the_app_default(self):
+        import chat
+        size, overlap, source = chat.plan_chunking(PROJECT / 'benchmarks' / 'hard_harness_plan.json')
+        self.assertEqual((size, overlap), (640, 40))          # the measured pin, not 220
+        self.assertIn('hard_harness_plan.json', source)
+        missing = chat.plan_chunking(PROJECT / 'benchmarks' / 'nope.json')
+        self.assertEqual(missing[0], cfg_CHUNK)               # documented fallback
+        self.assertIn('default', missing[2])
+        local = chat.chat_config()
+        self.assertEqual((local.CHUNK_SIZE_TOKENS, local.CHUNK_OVERLAP_TOKENS), (640, 40))
+        # A separate collection, so the app's index and the chat's index cannot argue over one store.
+        self.assertEqual(local.CHROMA_COLLECTION_NAME, 'raglab_chat')
+
+    def test_the_context_ceiling_sizes_from_k_so_a_hit_is_not_quietly_dropped(self):
+        import chat
+        self.assertEqual(chat.context_budget(5, 640, 40), 5 * 680)
+        self.assertEqual(chat.context_budget(1, 220, 40), 3000)   # never below the app floor
+        local = chat.chat_config(top_k=5)
+        self.assertGreaterEqual(local.ANSWER_CONTEXT_TOKENS, 5 * (640 + 40))
+
+    def test_the_chats_config_object_is_a_config_object_not_just_its_constants(self):
+        """The crash that made this test: the chat's settings are a copy of config, and a copy of only
+        the UPPERCASE names satisfies every read except the ones that *call* something on cfg — so
+        store.py's chunk tagging raised AttributeError mid-ingest, while its embedding-space guard
+        (gated on hasattr) had already been skipped silently. Anything passed as `cfg` must carry the
+        module's callables too, for every module the chat hands it to.
+        """
+        import chat
+        local = chat.chat_config()
+        self.assertEqual(local.active_embedding_model(), EMBED_MODEL)
+        for module_name in ('store', 'retrieval', 'chunker', 'answer'):
+            module = __import__(module_name)
+            source = inspect.getsource(module)
+            for attr in sorted(set(re.findall(r'\bcfg\.([A-Za-z_][A-Za-z0-9_]*)', source))):
+                self.assertTrue(hasattr(local, attr),
+                                f'{module_name}.py reads cfg.{attr}, which the chat config lacks')
+
+    def test_a_missing_callable_is_refused_instead_of_skipping_the_space_check(self):
+        import chat
+        from types import SimpleNamespace as NS
+        broken = NS(**{key: value for key, value in vars(chat.cfg).items()
+                       if key.isupper() and not callable(value)})
+        self.assertFalse(hasattr(broken, 'active_embedding_model'))
+        # store.ensure_fresh_chunks gates its embedding-space check on exactly that hasattr, so a
+        # bare-constants namespace must never reach it.
+        with self.assertRaises(ValueError) as raised:
+            chat.checked_config(broken)
+        self.assertIn('active_embedding_model', str(raised.exception))
+
+    def test_a_stale_index_stops_the_chat_with_the_rebuild_command(self):
+        class Collection:
+            def count(self):
+                return 127
+
+            def get(self, include=None, limit=None):
+                return {'metadatas': [{'chunk_fp': 'built-with-220'}]}
+
+        local = self.chat.chat_config(top_k=5)
+        local.CHAT_DATA_DIRS, local.CHAT_ALLOW_INGEST = [], True
+        with patch('store.get_collection', return_value=Collection()), \
+             patch('store.ensure_fresh_chunks',
+                   side_effect=RuntimeError('[store] collection is STALE')):
+            with self.assertRaises(ValueError) as raised:
+                self.chat.open_collection(local, SimpleNamespace(batch_size=16))
+        self.assertIn('--reset --ingest', str(raised.exception))
+
+    def test_retrieval_is_checked_against_the_chats_settings_not_the_modules(self):
+        # retrieve() enforces the chunking fingerprint from the cfg it is handed: passing the module
+        # config here let a 220-token index pass a 640-token chat's own settings silently.
+        seen = {}
+
+        def fake_retrieve(cfg_arg, embedder, collection, text, **kwargs):
+            seen['cfg'] = cfg_arg
+            seen.update(kwargs)
+            return [], [{'label': 'en(original)', 'lang': 'en', 'text': text}]
+
+        class Generator:
+            def answer(self, question, hits, language=None, use_cache=True):
+                return {'status': 'refused', 'reason': 'no_context', 'answer': 'no', 'sources': [],
+                        'model': language and 'm'}
+
+        local = self.chat.chat_config(top_k=9)
+        with patch('retrieval.retrieve', side_effect=fake_retrieve), \
+             patch('retrieval.expand_neighbors', side_effect=lambda c, h, radius=0: h):
+            self.chat.ask(local, None, None, Generator(), 'what is the minimum capital?',
+                          mode='rrf', language='fr', lang_filter='ar')
+        self.assertIs(seen['cfg'], local)
+        self.assertEqual(seen['top_k'], 9)
+        self.assertEqual((seen['mode'], seen['lang_filter'], seen['language']), ('rrf', 'ar', 'fr'))
+
+    def test_a_refusal_shows_what_was_read_and_which_failure_it_was(self):
+        result = {'status': 'refused', 'reason': 'insufficient_evidence', 'answer': 'cannot answer',
+                  'question': 'can i buy a pc', 'retrieved': 5, 'context_tokens': 3400,
+                  'question_language_mismatch': True,
+                  'sources': [{'source_id': 'S1', 'document': 'Guide.docx', 'chunk_id': 'a',
+                               'heading': 'المرابحة', 'text': 'تمويل شراء سيارة جديدة ' + 'x' * 400}]}
+        text = self.chat.format_turn(result)
+        self.assertIn('abstained, which is the contract', text)
+        self.assertIn('Guide.docx', text)                        # the excerpt the model was handed
+        self.assertIn('cross-lingual', text)                      # the language mismatch, named
+        self.assertIn('-k 12', text)
+        self.assertNotIn('x' * 250, text)                          # previewed, not dumped
+        other = self.chat.format_turn({**result, 'reason': 'no_context', 'retrieved': 0, 'sources': []})
+        self.assertIn('index is empty', other)
+        guard = self.chat.format_turn({**result, 'reason': 'private_or_live_request', 'sources': []})
+        self.assertIn('before any model call', guard)
+
+    def test_an_arrow_key_cannot_become_part_of_a_question(self):
+        """Without readline, input() hands over the raw CSI bytes of a cursor key and they end up
+        embedded, matched against Arabic legal prose and quoted back. So the question that gets answered
+        is not the question that was typed - unless control bytes are stripped at the edge."""
+        self.assertEqual(self.chat.sanitize('\x1b[C what is murabaha\x1b[?2004h'), 'what is murabaha')
+        self.assertEqual(self.chat.sanitize('\x1b]0;window title\x07next'), 'next')
+        self.assertEqual(self.chat.sanitize('\x1b[C\x1b[D'), '')
+        # Stripping control bytes must not touch the text a user actually means:
+        self.assertEqual(self.chat.sanitize('  ما هي المرابحة؟  '), 'ما هي المرابحة؟')
+        self.assertEqual(self.chat.sanitize('keep (parens), commas? and 12.5%'),
+                         'keep (parens), commas? and 12.5%')
+
+    def test_a_pasted_prompt_is_a_question_and_an_escaped_command_is_a_command(self):
+        import contextlib
+        settings = {'top_k': 5, 'show_context': False, 'log': None, 'model': 'm', 'thinking': False,
+                    'chunking': 640, 'overlap': 40, 'mode': 'vector', 'language': None}
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            asked = list(self.chat.read_questions(['> how do I finance a PC?', '\x1b[C:k 9', ':k'],
+                                                 settings))
+        self.assertEqual(asked, ['how do I finance a PC?'])
+        self.assertEqual(settings['top_k'], 9)          # the escape-prefixed command still ran
+        self.assertIn('usage: :k 5', buffer.getvalue())
+
+    def test_an_excerpt_without_a_heading_can_still_be_found_in_the_document(self):
+        result = {'status': 'refused', 'reason': 'insufficient_evidence', 'answer': 'cannot answer',
+                  'question': 'q', 'retrieved': 1, 'context_tokens': 3400,
+                  'sources': [{'source_id': 'S1', 'document': 'Loi_2016-48.pdf', 'heading': '',
+                               'chunk_id': 'Loi_2016-48.pdf::chunk_067', 'text': 'نص القانون' * 20}]}
+        text = self.chat.format_turn(result)
+        self.assertIn('Loi_2016-48.pdf::chunk_067', text)   # an empty heading is not an anonymous chunk
+
+    def test_the_repl_understands_language_and_mode_commands(self):
+        import contextlib
+        settings = {'top_k': 5, 'show_context': False, 'log': None, 'model': 'm', 'thinking': False,
+                    'chunking': 640, 'overlap': 40, 'mode': 'vector', 'language': None}
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            asked = list(self.chat.read_questions([':lang ar', ':mode', ':mode hybrid', ':mode rrf',
+                                                   ':lang xx', 'ما هو'], settings))
+        self.assertEqual(asked, ['ما هو'])
+        self.assertEqual((settings['language'], settings['mode']), ('ar', 'rrf'))
+        printed = buffer.getvalue()
+        self.assertIn('unmeasured', printed)          # an unmeasured arm is allowed but labelled
+        self.assertIn('usage: :mode', printed)
+        self.assertIn(':mode takes vector, rrf or blend', printed)
+        self.assertIn(':lang takes ar, fr, en or auto', printed)
+        self.assertNotIn('xx\n> ', printed)           # a bad value is never asked as a question
+
+    def test_check_reports_and_ingest_builds_and_together_do_both(self):
+        # The reported loop: --check printed "run ./raglab/chat.sh --ingest --check", and that command
+        # reported and exited before building anything. Check-with-ingest now builds, then reports.
+        calls = []
+
+        class FakeCollection:
+            def __init__(self, count):
+                self._count = count
+
+            def count(self):
+                return self._count
+
+        class Embedder:
+            provider_name, model, batch_size, api_calls, cache_hits = 'nvidia', 'emb', 16, 3, 0
+
+            def embed_texts(self, texts):
+                return [[0.0] * 4 for _ in texts]
+
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi-x'}), \
+             patch('embedder.build_embedder', return_value=Embedder()), \
+             patch('chat.open_collection', side_effect=lambda *a, **k: calls.append(k) or FakeCollection(127)), \
+             patch('chat.build_generator', side_effect=AssertionError('must not build a client')), \
+             patch('chat.check', return_value=0) as reported, \
+             patch('store.collection_languages', return_value=['ar', 'fr', 'en']):
+            self.assertEqual(self.chat.main(['--check', '--ingest']), 0)
+        self.assertEqual(len(calls), 1)                    # it built
+        # The report is printed once, after the build: the state a user acts on has to be the state the
+        # index is actually in, and open_collection already printed the cost before embedding.
+        self.assertEqual(reported.call_count, 1)
+
+        calls.clear()
+        with patch('chat.check', return_value=1) as reported:
+            self.assertEqual(self.chat.main(['--check']), 1)
+        self.assertEqual(calls, [])
+        self.assertEqual(reported.call_count, 1)           # report only: no index, no embedding
+
+    def test_the_not_ready_line_offers_a_command_that_really_builds(self):
+        import contextlib
+
+        class Collection:
+            def count(self):
+                return 0
+
+            def get(self, include=None, limit=None):
+                return {'metadatas': []}
+
+        buffer = io.StringIO()
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi-x'}), \
+             patch('store.get_collection', return_value=Collection()), \
+             contextlib.redirect_stdout(buffer):
+            self.chat.check()
+        text = buffer.getvalue()
+        self.assertIn('./raglab/chat.sh --ingest', text)
+        self.assertNotIn('--ingest --check\n', text)        # the command that only re-reported itself
+
+    def test_one_offline_turn_satisfies_the_citation_contract_on_this_model(self):
+        from answer import AnswerGenerator
+        local = self.chat.chat_config(cache_path=self.path / 'answers.json')
+        quote = 'Le capital minimal est fixé à vingt millions de dinars.'
+        reply = json.dumps({'answerable': True, 'claims': [
+            {'text': 'Le minimum est de vingt millions de dinars.',
+             'evidence': [{'source_id': 'S1', 'quote': quote}]}]})
+        body = {'model': local.ANSWER_MODEL, 'usage': {},
+                'choices': [{'message': {'content': reply}, 'finish_reason': 'stop'}]}
+        sent = []
+
+        class Opener:
+            def open(self, request, timeout=None):
+                sent.append(json.loads(request.data.decode()))
+                return Response(body)
+
+        client = self.chat.ReasoningSwitch(
+            NvidiaClient(api_key='nvapi-x', min_interval=0, opener=Opener()), False)
+        generator = AnswerGenerator(local, client=client, approved_models=(local.ANSWER_MODEL,))
+        hits = [{'id': 'c1', 'text': quote, 'metadata': {'document': 'loi-2016-48.pdf'}}]
+        result = generator.answer('Quel est le capital minimal ?', hits, 'fr')
+        self.assertEqual(result['status'], 'answered', result.get('raw_preview') or result.get('error'))
+        self.assertEqual(sent[0]['model'], self.chat.CHAT_MODEL)
+        self.assertEqual(sent[0]['chat_template_kwargs'], {'enable_thinking': False})
+        self.assertIn('[S1]', result['answer'])
+        printed = self.chat.format_turn({**result, 'sources': [{'source_id': 'S1', 'document':
+                                                                'loi-2016-48.pdf', 'chunk_id': 'c1',
+                                                                'text': quote}]})
+        self.assertIn(quote, printed)                # the verbatim quote is shown under the claim
+        self.assertEqual(json.loads((self.path / 'answers.json').read_text()) and 1, 1)  # cached for re-reads
 
 
 if __name__ == '__main__':
