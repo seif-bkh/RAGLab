@@ -590,7 +590,9 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
             # chunk text re-inserts overlap between pieces of a span, so a span split by a
             # small chunk size would look 'unanswerable' here and be sampled out of one run
             # and into the next. The document as loaded is the stable answer.
-            label_space = '\n'.join(document.text for document in documents)
+            label_space = '\n'.join(
+                document['text'] if isinstance(document, dict) else document.text
+                for document in documents)
             label_basis = 'document text as loader.load_all returns it (chunk-independent)'
     families = accepted_families() if families is None else list(families)
     # Does each family's gold text exist in the candidate corpus at all? The references were

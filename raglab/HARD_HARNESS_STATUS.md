@@ -179,3 +179,13 @@ the gap is the label defect removed, not a better ranker. Arabic questions in th
 0.94 recall@5 with the evidence at median rank 1, because the corpus is Arabic and BM25 shares
 words with Arabic queries only; the English and French variants of the same families are the
 embedding arm's job, and that is the number worth reading out of CI.
+
+### Corrected sweep (findability judged on the document)
+
+Judge run `34024960494` failed on a `dict`/attribute bug in that change and was fixed in the
+following commit; the re-run of the same matrix is the authoritative 100-per-language number.
+The label pool is now chunk-independent — **313 of 469 accepted families (66.7%)** have gold text
+that exists in `docs/` as the runtime loader reads it, at every chunk size, so the three rows
+below score one identical 100x3 question set instead of 179 / 222 / 287 families. Locally
+(fallback estimator) the balanced sample reads 24.7% / 31.3% / 32.7% whole-span at 220 / 420 / 640
+with the lexical arm; CI with `cl100k_base` and both arms decides the chunking question.
