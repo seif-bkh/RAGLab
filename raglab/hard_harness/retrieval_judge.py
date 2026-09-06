@@ -561,7 +561,8 @@ def question_texts(families):
 
 
 def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, corpus=None, cfg=None,
-             fpr=0.05, chunk_tokens=None, chunk_overlap=None, limit_per_language=None):
+             fpr=0.05, chunk_tokens=None, chunk_overlap=None, limit_per_language=None,
+             label_space=None, label_basis='the chunk corpus as supplied by the caller'):
     """Run the requested arms over the accepted families and write a report.
 
     The embedding arm needs the embedding provider. If it cannot be reached the arm is
@@ -582,12 +583,21 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
             cfg.CHUNK_SIZE_TOKENS = int(chunk_tokens)
         if chunk_overlap is not None:
             cfg.CHUNK_OVERLAP_TOKENS = int(chunk_overlap)
-        corpus = Corpus(chunk_all(load_all(ROOT.parent / 'docs'), cfg))
+        documents = load_all(ROOT.parent / 'docs')
+        corpus = Corpus(chunk_all(documents, cfg))
+        if label_space is None:
+            # Which labels exist at all must not depend on where the chunker cut: joined
+            # chunk text re-inserts overlap between pieces of a span, so a span split by a
+            # small chunk size would look 'unanswerable' here and be sampled out of one run
+            # and into the next. The document as loaded is the stable answer.
+            label_space = '\n'.join(document.text for document in documents)
+            label_basis = 'document text as loader.load_all returns it (chunk-independent)'
     families = accepted_families() if families is None else list(families)
     # Does each family's gold text exist in the candidate corpus at all? The references were
     # built from a separate extraction pass, so a wording difference there would otherwise be
     # reported forever as retrieval failing to find something that is not present.
-    corpus_text = corpus.full_text()
+    label_space = normalize(label_space) if label_space else corpus.full_text()
+    corpus_text = label_space
     findable = {family['id'] for family in families
                 if any(span and span in corpus_text for span in gold_spans(family))}
     # Sampling happens after that check, or the sample would be chosen blind to which labels
@@ -666,6 +676,7 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
     label_integrity = {'families': len(families), 'labels_present_in_corpus': len(findable),
                        'labels_absent': len(families) - len(findable),
                        'present_rate': round(len(findable) / len(families), 4) if families else None,
+                       'label_space': label_basis,
                        'note': 'Absent means the accepted reference quotes source text that the runtime '
                                'extraction of docs/ does not contain verbatim; no retriever can hand that over, '
                                'and it points at two extraction paths disagreeing, not at ranking.'}

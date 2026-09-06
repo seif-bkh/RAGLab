@@ -148,6 +148,30 @@ The sample is chosen deterministically, with no random seed:
 `manifest['sample']` records the pool, how many were findable, and the per-bucket counts;
 `REPORT.md` states the scope and warns that full-pool numbers are not comparable to sampled ones.
 
+The label-match test was then decoupled from chunking (findability is judged against the
+document as `loader.load_all` returns it, not against joined chunk text, whose repeated overlap
+words made long spans look absent), so the three chunk sizes below now sample from one identical
+question set; the first sweep had 179/222/287 findable per chunking, which is why the 220 row of
+an earlier collection is not directly comparable.
+
+CI numbers for this retry (`cl100k_base`, run `2cff1bc`, top_k=5, 300 queries, every label
+findable; whole = full gold span inside one retrieved chunk, joined = present in the assembled
+top-5, sem = the 179-189 queries sharing no content word with their evidence):
+
+| chunks | arm | whole | joined | no evidence | sem recall | abstain AUC | recall@1 | MRR | ar / fr / en whole |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 220 (pinned) | lexical | 5.7% | 6.3% | 29.0% | 0.0% | 0.566 | 2.7% | 0.046 | 17 / 0 / 0 |
+| 220 (pinned) | vector | 23.3% | 26.7% | 29.0% | 52.2% | 0.725 | 10.0% | 0.161 | 24 / 23 / 23 |
+| 420 | lexical | 26.7% | 26.7% | 1.0% | 0.0% | 0.601 | 14.7% | 0.211 | 72 / 6 / 2 |
+| 420 | **vector** | **87.3%** | 88.0% | 1.0% | **91.1%** | **0.840** | **70.7%** | 0.779 | 88 / 87 / 87 |
+| 640 | lexical | 32.3% | 32.3% | 0.0% | 0.0% | 0.592 | 21.7% | 0.281 | 85 / 7 / 5 |
+| 640 | **vector** | **95.7%** | 95.7% | 0.0% | 94.7% | 0.809 | 79.3% | 0.871 | 96 / 95 / 96 |
+
+Against the full pool the same arm measured 10.0% / 42.4% / 56.9% whole-span at 220 / 420 / 640,
+so roughly half of what looked like retrieval failure was the label defect and the rest was
+chunk size. The embedding arm is at cross-lingual parity on the clean sample (87-88% in all three
+languages at 420) where BM25 is 72% Arabic and 2-6% elsewhere, because the corpus is Arabic.
+
 Measured locally (lexical arm, fallback token estimator — CI with `cl100k_base` is authoritative,
 which is why the same sample is judged in CI at 220/420/640 chunks): answer-ready 32.3% at
 pinned chunking, 35.0% at 420, 35.7% at 640, versus 17.4% overall on the unsampled full pool —

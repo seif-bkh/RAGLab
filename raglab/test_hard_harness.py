@@ -804,6 +804,31 @@ class RetrievalJudge(unittest.TestCase):
         self.assertEqual(manifest['report']['lexical']['overall']['queries'], 6)   # 2 families x 3 languages
         self.assertIn('Scope: 2 families per language (6 questions)', report)
 
+    def test_a_label_split_across_chunks_is_still_a_label_the_corpus_contains(self):
+        """'Exists in the corpus' and 'fits in one chunk' are two different questions."""
+        from types import SimpleNamespace
+        import hard_harness.retrieval_judge as judge
+        sentence = 'the bank must obtain written consent'
+        # An overlap repeats a word, so the joined chunk text is not the document text.
+        corpus = self.corpus('the bank must obtain', 'obtain written consent')
+        family = self.family(sentence)
+        self.assertNotIn(sentence, corpus.full_text())
+        with tempfile.TemporaryDirectory() as temp:
+            against_document = judge.evaluate(
+                arms=('lexical',), out=Path(temp) / 'doc', families=[family], corpus=corpus,
+                cfg=SimpleNamespace(NVIDIA_EMBEDDING_MODEL='none'), label_space=sentence)
+            against_chunks = judge.evaluate(
+                arms=('lexical',), out=Path(temp) / 'chunks', families=[family], corpus=corpus,
+                cfg=SimpleNamespace(NVIDIA_EMBEDDING_MODEL='none'))
+        # Judged against what the corpus actually holds, the label is present, and the ranker
+        # is charged with not retrieving it whole - which is a ranking result, not a defect.
+        self.assertEqual(against_document['label_integrity']['labels_present_in_corpus'], 1)
+        self.assertEqual(against_document['report']['lexical']['overall']['answer_ready_rate'], 0.0)
+        # Judged against joined chunks the same family would be sampled out of a run entirely,
+        # so a chunk-size sweep would silently compare three different question sets.
+        self.assertEqual(against_chunks['label_integrity']['labels_present_in_corpus'], 0)
+        self.assertEqual(against_chunks['sample']['pool_with_label_in_corpus'], 0)
+
     def test_reference_answers_are_never_read_into_a_retrieval_metric(self):
         from hard_harness.retrieval_judge import Corpus, judge_families
         family = self.family('bank must obtain written consent',
