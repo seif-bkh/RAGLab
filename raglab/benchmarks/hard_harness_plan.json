@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "24-restore-the-six-per-batch-grader-requests-so-cached-judgments-replay",
+  "revision": "25-continue-semantic-grading-from-the-94-classified-rows",
   "phase": "grade",
   "languages": [
     "ar",
@@ -120,5 +120,5 @@
   "predictions_run": "34026369379",
   "grading_resume_note": "Run 34026369379 answered 300/300 questions on qwen/qwen3.8-max:free at 640-token chunks and graded 82 before Google free tier returned HTTP 429 (limit: 20/min on gemini-3.5-flash). Every grader response is cached, so this phase resumes from the 82 rather than re-spending them; the pause is recorded as provider_pause, never as an answer score.",
   "answer_contract_note": "Run 34028010045 paused in the grader calibration before classifying anything. Re-grading the SAME 300 cached predictions costs no answer-model calls and will now report why each reply was rejected by the output contract, because the validator message and a truncated copy of the reply travel into the grading row. This phase is diagnostic; it is not a score.",
-  "grading_state_note": "Run 34029250378 graded only 6 semantic comparisons because the batch size was changed, and the grader cache keys on request contents: 72 judgments from the previous run could no longer be replayed and had to be paid for. Batch size is back to six so a resume starts where the last run stopped (94 rows classified), and the cache-key coupling is now written down next to the loop."
+  "grading_state_note": "94 of 300 rows classified so far (69 correct, 3 partial, 12 over_refusal, 10 rejected by the output contract), score 0.734 over the scored subset: ar 0.833, fr 0.688, en 0.688. This is a partial measurement of a resumable phase, not the dataset score: 206 comparisons still need the grader, and every completed one is cached and replayed rather than re-requested. Nothing here is reported as final until graded_questions equals 300 with status complete."
 }
