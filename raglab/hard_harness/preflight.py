@@ -31,6 +31,58 @@ ROLE_LABEL = {'llm': 'reference/audit', 'author_llm': 'author', 'candidate_llm':
               'grader_llm': 'judge'}
 
 
+def read_env_file(path):
+    """Parse raglab/.env by hand. Not a second loader - a witness. The phases get their values from
+    config.py's load_dotenv, and a value that exists in the file yet never reaches the environment is
+    the failure mode that costs a whole session to spot (no dotenv installed, a name typed in lower
+    case, an empty assignment). So doctor reads the file itself and compares, instead of calling every
+    absent key 'missing'.
+    """
+    from pathlib import Path
+    values = {}
+    path = Path(path)
+    if not path.exists():
+        return values
+    for line in path.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        name, _, value = line.partition('=')
+        name = name.strip()[len('export '):].strip() if name.strip().startswith('export ') else name.strip()
+        value = value.strip()
+        if len(value) > 1 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        else:                                            # a key may contain '#', so only ' #' ends it
+            value = value.split(' #', 1)[0].strip()
+        if name:
+            values[name] = value
+    return values
+
+
+def load_project_env(env_path=None, apply_load=True):
+    """Run the load every phase runs, and report what it did. Importing config is what reads .env; the
+    report says so, rather than trusting that some other module happened to import it first."""
+    import importlib.util
+    from pathlib import Path
+    env_path = Path(env_path) if env_path else Path(__file__).resolve().parents[1] / '.env'
+    state = {'path': str(env_path), 'exists': env_path.exists(), 'dotenv_installed':
+             importlib.util.find_spec('dotenv') is not None, 'loaded': False, 'added': [], 'error': None,
+             'assignments': read_env_file(env_path)}
+    if not apply_load:
+        state['loaded'] = 'not attempted'
+        return state
+    before = set(os.environ)
+    try:
+        import config                                                      # noqa: F401
+    except Exception as exc:                                               # noqa: BLE001
+        state['error'] = f'{type(exc).__name__}: {exc}'
+        return state
+    state['loaded'] = True
+    state['added'] = sorted(name for name in os.environ if name not in before
+                            and name.endswith(('_API_KEY', '_KEY', '_ALIAS')))
+    return state
+
+
 def masked(value):
     """The gateway's own rule: never echo more than the first eight characters of a key."""
     text = str(value or '')
@@ -58,7 +110,7 @@ def _listing(base_url, key, header, timeout=10.0):
     return 'ok', (f'{len(slugs)} models listed' if slugs else 'no model rows'), slugs
 
 
-def credential_status(alias, plan, probe=True):
+def credential_status(alias, plan, probe=True, env_values=None):
     key = os.environ.get(alias, '').strip()
     if alias == 'EXPERIENTIAL_API_KEY':
         from hard_harness.experiential_client import gateway_base_url
@@ -66,7 +118,16 @@ def credential_status(alias, plan, probe=True):
     else:
         base_url = LIST_ENDPOINTS[alias][0]
     header = LIST_ENDPOINTS[alias][1]
-    row = {'present': bool(key), 'masked': masked(key), 'source': 'environment'}
+    row = {'present': bool(key), 'masked': masked(key), 'source': 'environment',
+           'in_env_file': alias in (env_values or {})}
+    if not row['present'] and row['in_env_file']:
+        row['note'] = ('named in raglab/.env but empty there' if not (env_values or {}).get(alias)
+                       else 'named in raglab/.env but never loaded - python-dotenv missing?')
+    elif not row['present']:
+        near = [name for name in (env_values or {}) if name.lower() == alias.lower()
+                or alias.lower().rstrip('_KEY') in name.lower()]
+        if near:
+            row['note'] = f'raglab/.env has {", ".join(sorted(near))}, which is not spelled {alias}'
     # A copied .env.example still looks 'present' to a presence check, so the template's own
     # placeholders are reported as unfilled instead of being sent to a provider to fail with a 401.
     if key and any(mark in key.lower() for mark in ('paste-', 'your-key', 'placeholder', 'xxxx')):
@@ -122,16 +183,18 @@ def state_status():
     return found
 
 
-def local_report(plan_path=None, root=None, probe=True):
+def local_report(plan_path=None, root=None, probe=True, env_path=None, load_env=True):
     from pathlib import Path
     plan_path = Path(plan_path or PLAN_PATH)
+    env = load_project_env(env_path, apply_load=load_env)
     plan = json.loads(plan_path.read_text())
     phase = plan.get('phase')
     profiles = {name: plan.get(name) or plan.get('llm') or {} for name in
                 ('llm', 'author_llm', 'candidate_llm', 'grader_llm')}
     aliases = sorted({profile.get('credential_secret') for profile in profiles.values() if profile}
                      | set(LIST_ENDPOINTS))
-    keys = {alias: credential_status(alias, plan, probe=probe) for alias in aliases if alias}
+    keys = {alias: credential_status(alias, plan, probe=probe, env_values=env['assignments'])
+            for alias in aliases if alias}
     needed = {(profiles.get(role) or {}).get('credential_secret') for role in PHASE_ROLES.get(phase, [])}
     missing = sorted(alias for alias in needed if alias and not keys.get(alias, {}).get('present'))
     report = {
@@ -141,7 +204,7 @@ def local_report(plan_path=None, root=None, probe=True):
                             'label': ROLE_LABEL.get(role, role)}
                      for role, profile in profiles.items()},
         'chunking': plan.get('chunking') or {}, 'dataset_limit_per_language': plan.get('dataset_limit_per_language'),
-        'keys': keys, 'blocking': missing,
+        'keys': keys, 'blocking': missing, 'env': env,
         'tokenizer': tokenizer_status(), 'corpus': corpus_status(root),
         'local_state': state_status(),
     }
@@ -160,8 +223,22 @@ def format_report(report):
              f"- Tokenizer: {report['tokenizer']['identity']} "
              f"(comparable with CI: {report['tokenizer']['comparable_with_ci']})",
              '', '## Credentials (checked by listing models, which spends nothing)', '']
+    env = report['env']
+    if not env['exists']:
+        lines.append(f"- `raglab/.env`: **not found** at {env['path']} - copy .env.example to it. "
+                     "Values set in your shell count too, and win.")
+    else:
+        loaded = 'read by config.py' if env['loaded'] is True else (
+            'not read: ' + (env['error'] or 'unknown'))
+        lines.append(f"- `raglab/.env`: {len(env['assignments'])} assignment(s) "
+                     f"({', '.join(sorted(env['assignments'])) or 'none'}); python-dotenv "
+                     f"{'installed' if env['dotenv_installed'] else 'NOT installed -> the file is ignored'}; "
+                     f"{loaded}"
+                     + (f"; it put {', '.join(env['added'])} in the environment" if env['added'] else ''))
     for alias, row in sorted(report['keys'].items()):
         state = 'missing' if not row['present'] else f"{row['probe']}: {row.get('detail', '')}".strip(': ')
+        if row.get('note'):
+            state += f" - {row['note']}"
         lines.append(f"- **{alias}** — {state}"
                      + (f" ({row['masked']})" if row['present'] else '')
                      + (f"; source {row['source']}" if row.get('source') != 'environment' else ''))
@@ -179,7 +256,19 @@ def format_report(report):
               "`python hard_harness_main.py collect --sha <run-head-sha> --destination results/hard_harness`",
               '']
     if report['blocking']:
-        lines += [f"- **Blocked:** add {', '.join(report['blocking'])} to `raglab/.env`.", '']
+        lines += [f"- **Blocked:** add {', '.join(report['blocking'])} to `raglab/.env`."
+                  + ('' if env['dotenv_installed'] else
+                     ' python-dotenv is missing, so the file itself is ignored: `pip install python-dotenv`'
+                     ' or re-run `./local.sh setup`.'), '']
+        shadowed = [alias for alias in report['blocking']
+                    if env['assignments'].get(alias) and env['dotenv_installed']]
+        if shadowed:
+            lines += [f"- Note: values already exported in your shell win over `raglab/.env`, so a stale "
+                      f"export can also explain {', '.join(shadowed)} being unread.", '']
+    elif report['summary'] == 'ready':
+        lines += ['- **Ready.** Nothing above costs anything yet. To reproduce the published score: '
+                  '`./local.sh restore && ./local.sh report` - that reads CI\'s checkpoints and makes no '
+                  'provider request at all.', '']
     if not report['tokenizer']['comparable_with_ci']:
         lines += [f"- **Warning:** {report['tokenizer']['fix']}. Without it, chunk boundaries differ "
                   "from CI and every recall number means something else.", '']

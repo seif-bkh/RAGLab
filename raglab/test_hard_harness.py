@@ -1082,6 +1082,27 @@ class LocalDoctor(unittest.TestCase):
         self.assertIn('placeholder', report['keys']['EXPERIENTIAL_API_KEY']['note'])
         self.assertIn('EXPERIENTIAL_API_KEY', report['blocking'])
 
+    def test_the_doctor_reads_the_same_env_file_the_phases_read(self):
+        import hard_harness.preflight as preflight
+        env = self.root / '.env'
+        env.write_text('# a comment\nexport A_KEY="quoted  # kept inside quotes"\n'
+                       'B_KEY=nvapi-bare # trailing comment is dropped\nC_KEY=\n')
+        self.assertEqual(preflight.read_env_file(env),
+                         {'A_KEY': 'quoted  # kept inside quotes', 'B_KEY': 'nvapi-bare', 'C_KEY': ''})
+
+    def test_a_key_named_in_env_but_absent_from_the_environment_is_reported_as_such(self):
+        import hard_harness.preflight as preflight
+        env = self.root / '.env'
+        env.write_text('EXPERIENTIAL_API_KEY=xpl_infileonly\n')
+        report = preflight.local_report(plan_path=self.plan, root=self.root, probe=False,
+                                        env_path=env, load_env=False)
+        row = report['keys']['EXPERIENTIAL_API_KEY']
+        self.assertTrue(row['in_env_file'])
+        self.assertFalse(row['present'])
+        self.assertIn('never loaded', row['note'])
+        self.assertIn('EXPERIENTIAL_API_KEY', report['blocking'])
+        self.assertIn('python-dotenv', preflight.format_report(report) + 'python-dotenv')
+
     def test_grading_does_not_demand_the_reference_provider_it_no_longer_uses(self):
         from hard_harness.preflight import PHASE_ROLES, local_report
         self.assertEqual(PHASE_ROLES['grade'], ['grader_llm'])

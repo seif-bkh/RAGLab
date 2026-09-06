@@ -33,6 +33,14 @@ Required: `NVIDIA_API_KEY` (embeddings), `XKIRO_API_KEY` (answers), `EXPERIENTIA
 (the judge — billed per token, no free tier). Optional: `XKIRO_API_KEY_JINKO` for the author role,
 `GOOGLE_API_KEY`/`GEMINI_API_KEY` for reference-side auditing.
 
+`doctor` loads `raglab/.env` through `config.py`, the same import every phase performs, and prints
+what that load did: how many assignments the file has, which names it put in the environment, and
+whether `python-dotenv` is installed at all. A key can be present in the file and still invisible to a
+run - no `dotenv`, an empty assignment, a name spelled differently, or an `export` in your shell that
+`.env` will not overwrite - so each of those reads differently instead of all saying "missing". (They
+used to all say missing: the first version of this command never imported `config`, so a filled `.env`
+looked empty. That is now pinned by a test.)
+
 If `doctor` says the tokenizer is an estimator fallback, **stop before measuring anything**: chunk
 boundaries move, and your recall numbers will not mean the same as CI's. Warm `TIKTOKEN_CACHE_DIR`
 with `cl100k_base` first.
