@@ -51,6 +51,16 @@ jobs:
           path: .cache/hard_harness/
           key: retrieval-judge-v1-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: retrieval-judge-v1-${{ github.ref_name }}-
+      - name: Fetch the audited source units for the chunking diagnostic
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          RUN=$(python -c "import json;print(json.load(open('raglab/benchmarks/hard_harness_plan.json')).get('sources_run',''))")
+          if [ -n "$RUN" ]; then
+            gh run download "$RUN" --repo "$GITHUB_REPOSITORY" --name hard-harness-sources \
+              --dir raglab/results/hard_harness || echo 'Sources checkpoint unavailable; the report will say the chunking diagnostic did not run.'
+          else
+            echo 'No sources run recorded in the plan; skipping the chunking diagnostic.'
+          fi
       - name: Judge both arms (lexical BM25 and nvidia embeddings)
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}

@@ -29,6 +29,9 @@ def main(argv=None):
     judge.add_argument('--top-k', type=int, default=5)
     judge.add_argument('--fpr', type=float, default=0.05)
     judge.add_argument('--out', default=None)
+    judge.add_argument('--chunk-tokens', type=int, default=None,
+                       help='override CHUNK_SIZE_TOKENS for a chunking comparison run')
+    judge.add_argument('--chunk-overlap', type=int, default=None, help='override CHUNK_OVERLAP_TOKENS')
     pub = sub.add_parser('publish'); pub.add_argument('--phase', required=True)
     get = sub.add_parser('collect'); get.add_argument('--repo', default='seif-bkh/RAGLab')
     get.add_argument('--sha', required=True); get.add_argument('--destination', default=str(OUTPUT))
@@ -58,14 +61,17 @@ def main(argv=None):
     if args.command == 'judge':
         from hard_harness.retrieval_judge import evaluate
         manifest = evaluate(arms=tuple(name.strip() for name in args.arms.split(',') if name.strip()),
-                            top_k=args.top_k, fpr=args.fpr, out=args.out)
+                            top_k=args.top_k, fpr=args.fpr, out=args.out,
+                            chunk_tokens=args.chunk_tokens, chunk_overlap=args.chunk_overlap)
         report = manifest['report']
         _out = Path(args.out) if args.out else OUTPUT / 'retrieval_judge'
         _out.mkdir(parents=True, exist_ok=True)
         write_json(_out / 'summary.json', {key: manifest[key] for key in
                                            ('status', 'created_at', 'arms', 'arm_status', 'top_k', 'fpr',
                                             'questions', 'families', 'chunks', 'documents', 'corpus_fingerprint',
-                                            'tokenizer', 'embedding_model', 'caveats') if key in manifest})
+                                            'tokenizer', 'embedding_model', 'chunk_size_tokens',
+                                            'chunk_overlap_tokens', 'unit_coverage', 'caveats')
+                                           if key in manifest})
         print(json.dumps({
             'status': manifest['status'], 'arms': manifest['arms'],
             'arm_status': {arm: state.get('status') for arm, state in manifest['arm_status'].items()},

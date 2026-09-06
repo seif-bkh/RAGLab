@@ -411,6 +411,40 @@ def _tokenizer_identity():
         return f'unavailable: {type(exc).__name__}'
 
 
+def unit_coverage(corpus, unit_texts):
+    """How much of a source unit fits inside a single chunk — measured with no queries at all.
+
+    A low whole-unit rate means the *chunker* is splitting evidence that the references were
+    built from, which no retrieval setting can fix. Reporting it separately keeps a boundary
+    problem from being read as a retrieval failure.
+    """
+    counts = Counter()
+    for text in unit_texts:
+        span = normalize(text)
+        if not span:
+            continue
+        span_tokens = set(tokens(span))
+        if any(len(span) > 20 and span in text_norm for text_norm in corpus.texts):
+            counts['whole_unit_in_one_chunk'] += 1
+        elif span_tokens and any(len(span_tokens & chunk_tokens) / len(span_tokens) >= MIN_PARTIAL_COVERAGE
+                                 for chunk_tokens in corpus.token_sets):
+            counts['most_of_it'] += 1
+        else:
+            counts['split_or_absent'] += 1
+    total = sum(counts.values())
+    return {'units': total, **{key: counts.get(key, 0) for key in
+                               ('whole_unit_in_one_chunk', 'most_of_it', 'split_or_absent')},
+            'whole_unit_rate': round(counts.get('whole_unit_in_one_chunk', 0) / total, 4) if total else None,
+            'note': 'A unit split across chunks is retrievable but never quotable in full from one chunk.'}
+
+
+def gold_unit_texts():
+    path = OUTPUT / 'sources' / 'gold_units.json'
+    if not path.exists():
+        return None
+    return [unit.get('text', '') for unit in read_json(path) if unit.get('eligible_for_reference')]
+
+
 def question_texts(families):
     """(family_id, language, question) for every query this corpus can produce."""
     keys = []
@@ -423,7 +457,7 @@ def question_texts(families):
 
 
 def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, corpus=None, cfg=None,
-             fpr=0.05):
+             fpr=0.05, chunk_tokens=None, chunk_overlap=None):
     """Run the requested arms over the accepted families and write a report.
 
     The embedding arm needs the embedding provider. If it cannot be reached the arm is
@@ -438,6 +472,12 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
     if corpus is None:
         from chunker import chunk_all
         from loader import load_all
+        # Chunking is a knob worth measuring against: whole-span evidence depends on it,
+        # so a comparison run may override it while the manifest records what was used.
+        if chunk_tokens:
+            cfg.CHUNK_SIZE_TOKENS = int(chunk_tokens)
+        if chunk_overlap is not None:
+            cfg.CHUNK_OVERLAP_TOKENS = int(chunk_overlap)
         corpus = Corpus(chunk_all(load_all(ROOT.parent / 'docs'), cfg))
     families = accepted_families() if families is None else list(families)
     queries = question_texts(families)
@@ -469,6 +509,10 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
             arm_status['vector'] = {'status': 'unavailable', 'error': safe_error(exc)}
     if not indices:
         raise ValueError('No arm could be built; nothing was substituted')
+    coverage = unit_coverage(corpus, gold_unit_texts()) if gold_unit_texts() else {
+        'status': 'unavailable', 'note': 'results/hard_harness/sources/gold_units.json was not present, '
+                                         'so the chunking diagnostic could not run; download the sources '
+                                         'checkpoint to enable it'}
     report = {}
     for arm, score in indices.items():
         rows = judge_families(families, corpus, rank_scores=score, top_k=top_k)
@@ -494,12 +538,15 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
         report['agreement'] = pair
     manifest = {'status': 'judged', 'created_at': now(), 'arms': sorted(indices), 'arm_status': arm_status,
                 'top_k': top_k, 'fpr': fpr, 'questions': len(queries), 'families': len(families),
+                'chunk_size_tokens': getattr(cfg, 'CHUNK_SIZE_TOKENS', None),
+                'chunk_overlap_tokens': getattr(cfg, 'CHUNK_OVERLAP_TOKENS', None),
                 'chunks': len(corpus.chunks), 'documents': sorted(corpus.by_document),
                 'corpus_fingerprint': fingerprint([chunk.text for chunk in corpus.chunks]),
                 'tokenizer': _tokenizer_identity(),
                 'label_source': str(SNAPSHOT.relative_to(ROOT.parent)),
                 'embedding_model': getattr(cfg, 'NVIDIA_EMBEDDING_MODEL', None),
                 'judged_by': 'exact source-span containment; no model judged anything',
+                'unit_coverage': coverage,
                 'caveats': CAVEATS, 'report': report}
     write_json(out / 'manifest.json', manifest)
     (out / 'REPORT.md').write_text(markdown(manifest), encoding='utf-8')
@@ -587,5 +634,12 @@ def markdown(manifest):
                   '> A lexical ranker that never saw the embedding model reaching the same conclusion is what keeps '
                   'this from being the index grading its own taste. Where they disagree, neither number above can '
                   'be trusted alone, and that is precisely where a model or a human reader is required.']
+    coverage = manifest.get('unit_coverage') or {}
+    if coverage.get('units'):
+        lines += ['', '## Chunking, measured without any query at all', '',
+                  f"- {coverage['whole_unit_rate']:.1%} of the {coverage['units']} audited source units fit inside "
+                  f"one chunk ({coverage['most_of_it']} fit mostly, {coverage['split_or_absent']} are split or "
+                  f"absent). This is a property of the chunker, not of ranking, and it bounds every recall number "
+                  f"above: a span no chunk holds in full cannot be handed over whole."]
     lines += ['', '## What this report does not say', ''] + [f'- {item}' for item in manifest['caveats']]
     return '\n'.join(lines) + '\n'

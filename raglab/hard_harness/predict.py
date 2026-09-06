@@ -48,7 +48,11 @@ def load_public_questions(directory):
 
 
 def runtime_config():
+    # Constants alone are not enough: the embedder factory asks config for the active
+    # model by name, so the callables have to travel with the snapshot too. Without
+    # this, build_embedder() fails on the candidate's own retrieval path.
     cfg = SimpleNamespace(**{k:getattr(config,k) for k in dir(config) if k.isupper()})
+    cfg.active_embedding_model = config.active_embedding_model
     cfg.NVIDIA_EMBEDDING_CACHE_PATH = WORK/'runtime_embeddings_cache.json'
     cfg.EMBEDDING_CACHE_PATH = cfg.NVIDIA_EMBEDDING_CACHE_PATH
     cfg.CHROMA_DIR = WORK/'runtime_chroma'
