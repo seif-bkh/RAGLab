@@ -159,6 +159,13 @@ class CheckpointClient:
         # rest of the fleet. Only a sustained streak is treated as provider trouble.
         self.transport_failures = 0
         self.transport_failure_streak = max(2, int(self.plan.get('transport_failure_streak', 4)))
+        # Providers that pace their own minute-window limit (see google_client) are
+        # not given a second allowance here; the gateway path needs this one.
+        pacing = profile.get('pacing') or {}
+        self.rate_allowance = max(0, int(pacing.get('quota_retry_attempts', 0)))
+        self.rate_cap = float(pacing.get('max_retry_delay_seconds', 240.0))
+        self.rate_retries = 0
+        self.paces_rate_limits = bool(getattr(self.client, 'paces_rate_limits', False))
         self.rate_limit_waits = 0
         self.events = []
         self.last_provenance = None
@@ -166,6 +173,39 @@ class CheckpointClient:
     @property
     def calls(self):
         return self.client.calls
+
+    def _rate_wait(self, exc):
+        """Seconds to wait before re-issuing a provider-side refusal, if allowed.
+
+        A free gateway answers with 429/5xx "temporarily at capacity" blips that are
+        not quota exhaustion. Only a bounded, provider-advertised or transport-style
+        wait is honoured; auth/billing codes and a spent allowance fall through to
+        the pause path so the user is prompted instead of a silent provider switch.
+        """
+        status = getattr(exc, 'status_code', 0)
+        if status not in {429, 500, 502, 503, 504}:
+            return None
+        if self.paces_rate_limits or self.rate_retries >= self.rate_allowance:
+            return None
+        advertised = getattr(exc, 'retry_after', None)
+        if advertised is None:
+            advertised = 15.0 * (2 ** self.rate_retries)
+        if advertised > self.rate_cap:
+            return None
+        return min(float(advertised), self.rate_cap)
+
+    def _call_with_pacing(self, model, messages, max_tokens):
+        while True:
+            try:
+                return self.client.chat(model, messages, max_tokens=max_tokens)
+            except Exception as exc:
+                wait = self._rate_wait(exc)
+                if wait is None:
+                    raise
+                self.rate_retries += 1
+                self.rate_limit_waits += 1
+                time.sleep(wait)
+
 
     def chat(self, model, messages, *, max_tokens=4096):
         if model != self.model:
@@ -195,7 +235,7 @@ class CheckpointClient:
                 raise NvidiaAPIError(str(self.pause), self.pause.status_code)
             prior = self.client.calls
             try:
-                response = self.client.chat(model, messages, max_tokens=max_tokens)
+                response = self._call_with_pacing(model, messages, max_tokens)
             except Exception as exc:
                 status = getattr(exc, 'status_code', 0)
                 record = {'request_hash': key, 'role': self.role, 'provider': self.provider,
@@ -232,6 +272,7 @@ class CheckpointClient:
                       'http_attempts': self.client.calls - prior}
             write_json(path, record)
             self.transport_failures = 0
+            self.rate_retries = 0
             self.rate_limit_waits += int(response.pop('rate_limit_waits', 0) or 0)
             self.last_provenance = {k:record.get(k) for k in ('request_hash','role','provider','model','credential_alias','timestamp')}
             self.last_provenance['cache_replayed'] = False
@@ -280,5 +321,6 @@ class CheckpointClient:
                 'credential_alias': self.credential_alias, 'http_requests': self.calls,
                 'logical_request_budget': dict(self.budget), 'cache_hits': self.cached_calls,
                 'rate_limit_waits': self.rate_limit_waits,
+                'paced_provider_retries': self.rate_retries,
                 'consecutive_transport_failures': self.transport_failures,
                 'pause': str(self.pause) if self.pause else None}

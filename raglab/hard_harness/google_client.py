@@ -21,10 +21,12 @@ _LAST_REQUEST = {}
 # Free-tier ceilings are per project/minute, so every client in this process must
 # share one pacing state. A run may not quietly outrun the quota it was given.
 _PACE_INTERVAL = {}
+_RATE_LIMIT_EVENTS = {}
 PACING_KEYS = {'min_interval_seconds', 'max_retry_delay_seconds', 'quota_retry_attempts',
-               'rate_limit_floor_seconds'}
+               'rate_limit_floor_seconds', 'rate_limit_event_budget'}
 DEFAULT_PACING = {'min_interval_seconds': 8.0, 'max_retry_delay_seconds': 240.0,
-                  'quota_retry_attempts': 4, 'rate_limit_floor_seconds': 20.0}
+                  'quota_retry_attempts': 2, 'rate_limit_floor_seconds': 20.0,
+                  'rate_limit_event_budget': 12}
 _RETRY_TEXT = re.compile(r'retry in\s+([0-9]+(?:\.[0-9]+)?)\s*s', re.I)
 
 
@@ -53,7 +55,10 @@ def resolve_pacing(pacing):
         raise ValueError('Google quota retries must stay between 1 and 8')
     if floor < min_interval:
         raise ValueError('The rate-limit floor cannot be shorter than normal pacing')
-    return min_interval, cap, attempts, floor
+    budget = int(values['rate_limit_event_budget'])
+    if not 1 <= budget <= 200:
+        raise ValueError('The rate-limit event budget must stay between 1 and 200')
+    return min_interval, cap, attempts, floor, budget
 
 
 def _shared_interval(base_url, floor):
@@ -67,6 +72,23 @@ def _bump_interval(base_url, floor, cap=120.0):
         current = max(floor, _PACE_INTERVAL.get(base_url, floor))
         _PACE_INTERVAL[base_url] = min(cap, max(current * 2.0, floor))
         return _PACE_INTERVAL[base_url]
+
+
+def _rate_limit_events(base_url):
+    with _PACE_LOCK:
+        return _RATE_LIMIT_EVENTS.get(base_url, 0)
+
+
+def _note_rate_limit_event(base_url):
+    """Count waits across every client in the process.
+
+    A shard that keeps being told 'retry later' is facing a hard ceiling, not a
+    burst. Burning request allowance to prove it wastes the very quota the run
+    needs, so one shared budget stops the job and lets the user decide instead.
+    """
+    with _PACE_LOCK:
+        _RATE_LIMIT_EVENTS[base_url] = _RATE_LIMIT_EVENTS.get(base_url, 0) + 1
+        return _RATE_LIMIT_EVENTS[base_url]
 
 
 def _relax_interval(base_url, floor):
@@ -109,12 +131,17 @@ def google_payload(messages, max_tokens):
 
 
 class GoogleHarnessClient:
+    # This adapter owns free-tier pacing, so the checkpoint layer must not add a
+    # second retry allowance on top of it.
+    paces_rate_limits = True
+
     def __init__(self, model, key, *, free_project_confirmed, budget, opener=None, pacing=None):
         if model not in ALLOWED_FREE_TIER_MODELS or free_project_confirmed is not True:
             raise ValueError('Google fallback requires an explicitly approved free-tier model/project in the harness plan')
         if not key:
             raise NvidiaAPIError('The selected Google harness credential is missing',401)
-        self.min_interval, self.max_retry_delay, self.quota_attempts, self.rate_limit_floor = resolve_pacing(pacing)
+        (self.min_interval, self.max_retry_delay, self.quota_attempts, self.rate_limit_floor,
+         self.rate_limit_budget) = resolve_pacing(pacing)
         self.model, self.api_key = model, key
         self.base_url = BASE_URL
         self.timeout, self.attempts = 120, 3
@@ -193,9 +220,11 @@ class GoogleHarnessClient:
                 # advertised wait can be a daily quota, so it must stop and ask the
                 # user instead of looping; no model or project is switched silently.
                 throttled += 1
-                if wait is None or wait > self.max_retry_delay or throttled > self.quota_attempts:
+                if (wait is None or wait > self.max_retry_delay or throttled > self.quota_attempts
+                        or _rate_limit_events(self.base_url) >= self.rate_limit_budget):
                     raise error
                 self.rate_limit_events += 1
+                _note_rate_limit_event(self.base_url)
                 delay = max(wait, _bump_interval(self.base_url,self.rate_limit_floor))
                 time.sleep(min(delay,self.max_retry_delay))
                 continue

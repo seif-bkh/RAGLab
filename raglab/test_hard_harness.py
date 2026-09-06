@@ -231,10 +231,9 @@ class FreeTierPacing(unittest.TestCase):
         import hard_harness.google_client as gc
         self.gc = gc
         self.saved = dict(gc._PACE_INTERVAL), dict(gc._LAST_REQUEST)
-        patcher = patch.object(gc, '_PACE_INTERVAL', {})
-        patcher.start(); self.addCleanup(patcher.stop)
-        patcher = patch.object(gc, '_LAST_REQUEST', {})
-        patcher.start(); self.addCleanup(patcher.stop)
+        for name in ('_PACE_INTERVAL', '_LAST_REQUEST', '_RATE_LIMIT_EVENTS'):
+            patcher = patch.object(gc, name, {})
+            patcher.start(); self.addCleanup(patcher.stop)
 
     def response(self, body='{"ok":true}', model='gemini-3.5-flash'):
         gc = self.gc
@@ -313,10 +312,36 @@ class FreeTierPacing(unittest.TestCase):
         self.assertEqual(client.calls, 3)
         self.assertEqual(client.rate_limit_events, 2)
 
+    def test_one_shared_event_budget_stops_grinding_a_hard_limit(self):
+        from unittest.mock import patch
+        calls = []
+        def opener(*args, **kwargs):
+            calls.append(1)
+            raise self.http_error(429, 'Please retry in 30s')
+        # Four families would each retry; the shared budget must stop the shard
+        # instead of spending the quota it is waiting for.
+        client = self.client(opener, rate_limit_event_budget=3, quota_retry_attempts=2)
+        for _ in range(3):
+            with patch.object(self.gc.time, 'sleep'):
+                with self.assertRaises(NvidiaAPIError):
+                    client.chat(client.model, [])
+        self.assertEqual(self.gc._rate_limit_events(self.gc.BASE_URL), 3)
+        self.assertEqual(len(calls), 6)          # two paced waits, then one probe per call
+        before = len(calls)
+        with patch.object(self.gc.time, 'sleep') as sleep:
+            with self.assertRaises(NvidiaAPIError):
+                client.chat(client.model, [])
+        self.assertEqual(len(calls), before + 1)   # a single probe, never a retry loop
+        # No extra quota wait is taken — at most the ordinary pacing interval sleeps
+        # — so the shard aborts instead of grinding away the quota it is waiting on.
+        self.assertLessEqual(len(sleep.call_args_list), 1)
+        self.assertEqual(self.gc._rate_limit_events(self.gc.BASE_URL), 3)
+        self.assertEqual(client.rate_limit_events, 3)  # budget reached, not exceeded
+
     def test_pacing_keys_are_validated_and_never_silently_loosened(self):
         for pacing in ({'min_interval_seconds': 1}, {'max_retry_delay_seconds': 5},
                        {'quota_retry_attempts': 50}, {'rate_limit_floor_seconds': 1},
-                       {'requests_per_minute': 900}):
+                       {'rate_limit_event_budget': 0}, {'requests_per_minute': 900}):
             with self.subTest(pacing=pacing):
                 with self.assertRaises(ValueError):
                     self.client(lambda *a, **k: self.response(), **pacing)
@@ -388,6 +413,84 @@ class DeadlineCheckpoints(unittest.TestCase):
                 with self.assertRaises(NvidiaAPIError):
                     client.chat(ANSWER_MODEL, [{'role': 'user', 'content': 'z'}])
                 self.assertEqual(fake.calls, 2)           # a paused client makes no further calls
+
+    def test_gateway_capacity_blips_are_paced_before_the_fleet_pauses(self):
+        """A free gateway answers with transient 429/503 capacity blips.
+
+        Those are waited out; a spent allowance then behaves exactly like the old
+        quota path so the user is still prompted instead of a silent switch.
+        """
+        import os
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plan = root/'plan.json'
+            write_json(plan, {'llm': {'provider': 'xkiro', 'model': ANSWER_MODEL,
+                                      'credential_secret': 'XKIRO_API_KEY_JINKO',
+                                      'pacing': {'max_retry_delay_seconds': 30.0, 'quota_retry_attempts': 2}},
+                              'google_fallback_authorized': True, 'google_fallback_active': False})
+            error = NvidiaAPIError('temporarily at capacity', 429, retry_after=7.0)
+            with patch('hard_harness.common.PLAN_PATH', plan), patch('hard_harness.common.OUTPUT', root/'out'):
+                client = CheckpointClient('candidate', call_limit=9, cache_root=temp, client=FakeClient(error=error))
+                with patch('hard_harness.common.time.sleep') as sleep:
+                    with self.assertRaises(NvidiaAPIError):
+                        client.chat(ANSWER_MODEL, [{'role': 'user', 'content': 'q'}])
+            self.assertEqual(client.client.calls, 3)              # original + two paced waits
+            self.assertEqual([c.args[0] for c in sleep.call_args_list], [7.0, 7.0])
+            self.assertEqual(client.rate_limit_waits, 2)
+            self.assertIsNotNone(client.pause)                     # allowance spent: ask the user
+
+    def test_gateway_success_after_a_wait_resets_the_pace_counter(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plan = root/'plan.json'
+            write_json(plan, {'llm': {'provider': 'xkiro', 'model': ANSWER_MODEL,
+                                      'credential_secret': 'XKIRO_API_KEY_JINKO',
+                                      'pacing': {'max_retry_delay_seconds': 30.0, 'quota_retry_attempts': 1}},
+                              'google_fallback_authorized': True, 'google_fallback_active': False})
+            class BlipThenOk:
+                base_url, timeout, attempts, min_interval, max_retry_delay = 'https://api.xkiro.com/v1', 120, 2, 3, 60
+                def __init__(self): self.calls = 0
+                def chat(self, model, messages, *, max_tokens=4096):
+                    self.calls += 1
+                    if self.calls % 2:
+                        raise NvidiaAPIError('temporarily at capacity', 429, retry_after=5.0)
+                    return {'text': '{"ok":true}', 'served_model': ANSWER_MODEL}
+            with patch('hard_harness.common.PLAN_PATH', plan), patch('hard_harness.common.OUTPUT', root/'out'), \
+                 patch('hard_harness.common.time.sleep'):
+                client = CheckpointClient('candidate', call_limit=9, cache_root=temp, client=BlipThenOk())
+                for expected in range(1, 4):        # three cases, each needing one retry
+                    self.assertEqual(client.chat(ANSWER_MODEL, [{'role': 'user', 'content': f'q{expected}'}])['text'],
+                                     '{"ok":true}')
+            self.assertIsNone(client.pause)
+            self.assertEqual(client.rate_retries, 0)
+            self.assertEqual(client.rate_limit_waits, 3)
+
+    def test_google_paces_internally_so_the_checkpoint_layer_adds_no_second_allowance(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plan = root/'plan.json'
+            write_json(plan, {'llm': {'provider': 'google', 'model': 'gemini-3.5-flash',
+                                      'credential_secret': 'GEMINI_API_KEY', 'free_tier_project_confirmed': True,
+                                      'pacing': {'quota_retry_attempts': 4, 'max_retry_delay_seconds': 240.0}},
+                              'google_fallback_authorized': True, 'google_fallback_active': True})
+            class Paced:
+                paces_rate_limits = True
+                base_url, timeout, attempts, min_interval, max_retry_delay = 'https://paced.invalid', 120, 3, 6, 240
+                def __init__(self): self.calls = 0
+                def chat(self, model, messages, *, max_tokens=4096):
+                    self.calls += 1
+                    raise NvidiaAPIError('Google HTTP 429: already paced by the adapter', 429, retry_after=14.0)
+            with patch('hard_harness.common.PLAN_PATH', plan), patch('hard_harness.common.OUTPUT', root/'out'), \
+                 patch('hard_harness.common.time.sleep') as sleep:
+                client = CheckpointClient('question_author', call_limit=9, cache_root=temp, client=Paced())
+                with self.assertRaises(NvidiaAPIError):
+                    client.chat('gemini-3.5-flash', [{'role': 'user', 'content': 'q'}])
+            self.assertEqual(client.client.calls, 1)     # no double retry loop
+            sleep.assert_not_called()
+            self.assertIsNotNone(client.pause)            # adapter gave up -> ask the user
 
     def test_quota_still_pauses_immediately_without_a_streak(self):
         from unittest.mock import patch

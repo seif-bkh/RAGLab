@@ -21,6 +21,7 @@ def main(argv=None):
     sub.add_parser('retrieve')
     predict = sub.add_parser('predict'); predict.add_argument('--shard', type=int, required=True)
     sub.add_parser('grade')
+    sub.add_parser('report')
     pub = sub.add_parser('publish'); pub.add_argument('--phase', required=True)
     get = sub.add_parser('collect'); get.add_argument('--repo', default='seif-bkh/RAGLab')
     get.add_argument('--sha', required=True); get.add_argument('--destination', default=str(OUTPUT))
@@ -34,6 +35,13 @@ def main(argv=None):
     if args.command == 'publish':
         from hard_harness.publishing import publish
         publish(args.phase); return 0
+    if args.command == 'report':
+        from hard_harness.reporting import build_report
+        report = build_report()
+        print(json.dumps({k: report[k] for k in ('status', 'graded_questions', 'ungraded_questions',
+                                                'by_language') if k in report},
+                         ensure_ascii=False, indent=2))
+        return 0
     if args.command == 'collect':
         from hard_harness.publishing import collect
         collect(args.repo, args.sha, args.destination); return 0

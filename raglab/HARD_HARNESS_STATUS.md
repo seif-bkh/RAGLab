@@ -47,11 +47,30 @@ intervals and quota waits. The user confirmed that the Google credential is on a
 free-tier project. Existing accepted Qwen and Gemini 3.1 Flash-Lite records keep
 their provenance; they are not regenerated.
 
+### Measured quota behaviour, run 34002128822 (this session)
+
+Four shards ran concurrently on the plan's `author_parallelism: 4`. Shards 0–3
+recovered 100 accepted families each with zero model calls, proving the resume
+path. Every shard that tried new authoring (4, 5, 7) was then rejected by Google
+after ~5 requests with `RESOURCE_EXHAUSTED` on
+`generate_content_free_tier_requests, limit: 20` and advertised waits of
+3.9–38.9 seconds — while the whole fleet was only issuing about 4 requests per
+minute. No family was accepted, so the total stays 468/900. Shard 6, which passed
+its gate before the first pause artifact existed, kept working, so the ceiling is
+shared and bursty rather than per-worker.
+
+Consequences accepted in this commit: `quota_retry_attempts` is 2 (was 4), a new
+`rate_limit_event_budget` of 12 lets one shared counter stop a job from grinding a
+hard limit, and `author_parallelism` must stay at 1 until the provider question
+below is settled. The plan's `quota_policy` requires asking the user before any
+provider/credential switch, so authoring does not silently move to another model.
+
 Candidate answering remains **xKiro `qwen/qwen3.8-max:free`** with native
 `nvidia/nemotron-3-embed-1b` retrieval. After authoring, the compiler must repair
 or flag exact duplicates and ambiguous negatives before freezing the separate
 question and answer-key files. Only then may the 3,000 candidate answers and the
 comparison run.
+
 
 Progress is recoverable without Actions artifact access
 (`.blob.core.windows.net` is unreachable from this sandbox):

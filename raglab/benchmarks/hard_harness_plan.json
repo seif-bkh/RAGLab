@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "12-adaptive-google-pacing-plus-resumable-shard-deadline",
+  "revision": "13-pace-provider-capacity-blips-for-candidate-and-reference-work",
   "phase": "author",
   "languages": [
     "ar",
@@ -35,9 +35,11 @@
     "pacing": {
       "min_interval_seconds": 6.0,
       "max_retry_delay_seconds": 240.0,
-      "quota_retry_attempts": 4,
-      "rate_limit_floor_seconds": 20.0
-    }
+      "quota_retry_attempts": 2,
+      "rate_limit_floor_seconds": 20.0,
+      "rate_limit_event_budget": 12
+    },
+    "pacing_note": "Run 34002128822 showed four concurrent shards each rejected after ~5 requests with \"Please retry in 3.9-38.9s\" while the aggregate was only ~4 requests/minute, so the usable free-tier allowance is far below the advertised 20/min. Waits stay bounded and one shared per-process event budget stops the job instead of grinding the quota away."
   },
   "embedding": {
     "provider": "nvidia",
@@ -65,7 +67,11 @@
   "candidate_llm": {
     "provider": "xkiro",
     "model": "qwen/qwen3.8-max:free",
-    "credential_secret": "XKIRO_API_KEY_JINKO"
+    "credential_secret": "XKIRO_API_KEY_JINKO",
+    "pacing": {
+      "max_retry_delay_seconds": 120.0,
+      "quota_retry_attempts": 3
+    }
   },
   "google_scope": "Unfinished reference authoring and auditing only; restore candidate_llm for answering unless the user explicitly approves a further switch.",
   "transport_failure_streak": 6,
