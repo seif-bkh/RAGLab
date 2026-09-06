@@ -219,6 +219,194 @@ class GoogleFallbackPolicy(unittest.TestCase):
             google_payload([{'role':'user','content':[{'type':'image_url','image_url':{'url':'https://untrusted.example/image'}}]}],100)
 
 
+class FreeTierPacing(unittest.TestCase):
+    """A 20-requests-per-minute free tier is a scheduling limit, not a stop signal.
+
+    Pacing must absorb the advertised minute-window wait, yet a daily quota or an
+    unlabelled 429 still has to halt the fleet for a user decision.
+    """
+
+    def setUp(self):
+        from unittest.mock import patch
+        import hard_harness.google_client as gc
+        self.gc = gc
+        self.saved = dict(gc._PACE_INTERVAL), dict(gc._LAST_REQUEST)
+        patcher = patch.object(gc, '_PACE_INTERVAL', {})
+        patcher.start(); self.addCleanup(patcher.stop)
+        patcher = patch.object(gc, '_LAST_REQUEST', {})
+        patcher.start(); self.addCleanup(patcher.stop)
+
+    def response(self, body='{"ok":true}', model='gemini-3.5-flash'):
+        gc = self.gc
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return json.dumps({'candidates': [{'finishReason': 'STOP',
+                                                   'content': {'parts': [{'text': body}]}}],
+                                   'modelVersion': model}).encode()
+        return Response()
+
+    def http_error(self, code, body):
+        import io, urllib.error
+        return urllib.error.HTTPError('https://generativelanguage.googleapis.com', code, 'err', {},
+                                      io.BytesIO(body.encode()))
+
+    def client(self, opener, **pacing):
+        return self.gc.GoogleHarnessClient('gemini-3.5-flash', 'test-key', free_project_confirmed=True,
+                                           budget={'used': 0, 'limit': 50},
+                                           opener=SimpleNamespace(open=opener), pacing=pacing or None)
+
+    def test_advertised_minute_window_wait_is_paced_and_slows_the_shared_interval(self):
+        from unittest.mock import patch
+        seen = []
+        def opener(*args, **kwargs):
+            seen.append(1)
+            if len(seen) == 1:
+                raise self.http_error(429, 'Quota exceeded for metric: generate_content_free_tier_requests, '
+                                           'limit: 20, model: gemini-3.5-flash. Please retry in 14.15s')
+            return self.response()
+        client = self.client(opener)
+        with patch.object(self.gc.time, 'sleep') as sleep:
+            result = client.chat(client.model, [])
+        self.assertEqual(result['text'], '{"ok":true}')
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(client.rate_limit_events, 1)
+        self.assertEqual(result['rate_limit_waits'], 1)
+        waits = [c.args[0] for c in sleep.call_args_list]
+        # The provider asked for 14s; a paced wait must be at least that long, never
+        # longer than the cap, and exactly one extra request was made.
+        self.assertTrue(any(14.0 <= w <= 240.0 for w in waits), waits)
+        self.assertGreaterEqual(min(waits), self.gc.DEFAULT_PACING['min_interval_seconds'])
+        self.assertGreaterEqual(self.gc._PACE_INTERVAL[self.gc.BASE_URL], 20.0)
+
+    def test_unlabelled_or_long_window_quota_raises_without_retries(self):
+        from unittest.mock import patch
+        for body in ('quota exhausted', 'Please retry in 3600s'):
+            with self.subTest(body=body):
+                calls = []
+                def opener(*args, _calls=calls, _body=body, **kwargs):
+                    _calls.append(1)
+                    raise self.http_error(429, _body)
+                client = self.client(opener)
+                with patch.object(self.gc.time, 'sleep') as sleep:
+                    with self.assertRaises(NvidiaAPIError) as caught:
+                        client.chat(client.model, [])
+                self.assertEqual(caught.exception.status_code, 429)
+                self.assertEqual(len(calls), 1)   # no hidden retry loop on a real quota
+                self.assertEqual(client.rate_limit_events, 0)
+                # Only normal pacing may sleep here: never a quota wait loop.
+                self.assertTrue(all(w <= client.min_interval for w in
+                                    [c.args[0] for c in sleep.call_args_list]), sleep.call_args_list)
+
+    def test_sustained_429s_stop_after_the_allowed_waits(self):
+        from unittest.mock import patch
+        calls = []
+        def opener(*args, **kwargs):
+            calls.append(1)
+            raise self.http_error(429, 'Please retry in 30s')
+        client = self.client(opener, quota_retry_attempts=2)
+        with patch.object(self.gc.time, 'sleep') as sleep:
+            with self.assertRaises(NvidiaAPIError):
+                client.chat(client.model, [])
+        self.assertEqual(len(calls), 3)           # original attempt + two paced waits
+        self.assertEqual(client.calls, 3)
+        self.assertEqual(client.rate_limit_events, 2)
+
+    def test_pacing_keys_are_validated_and_never_silently_loosened(self):
+        for pacing in ({'min_interval_seconds': 1}, {'max_retry_delay_seconds': 5},
+                       {'quota_retry_attempts': 50}, {'rate_limit_floor_seconds': 1},
+                       {'requests_per_minute': 900}):
+            with self.subTest(pacing=pacing):
+                with self.assertRaises(ValueError):
+                    self.client(lambda *a, **k: self.response(), **pacing)
+
+    def test_plan_pacing_reaches_the_google_client(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            plan = Path(temp)/'plan.json'
+            write_json(plan, {'llm': {'provider': 'google', 'model': 'gemini-3.5-flash',
+                                      'credential_secret': 'GEMINI_API_KEY',
+                                      'free_tier_project_confirmed': True,
+                                      'pacing': {'min_interval_seconds': 9.0}},
+                              'candidate_llm': {'provider': 'xkiro', 'model': ANSWER_MODEL,
+                                                'credential_secret': 'XKIRO_API_KEY_JINKO'},
+                              'google_fallback_authorized': True, 'google_fallback_active': True})
+            captured = {}
+            class Recorder:
+                def __init__(self, model, key, **kwargs): captured.update(kwargs)
+                base_url, timeout, attempts = 'https://recorder.invalid', 120, 3
+                min_interval, max_retry_delay = 9.0, 240.0
+                calls, rate_limit_events = 0, 0
+            with patch('hard_harness.common.PLAN_PATH', plan), \
+                 patch.dict(__import__('os').environ, {'GEMINI_API_KEY': 'test-only'}), \
+                 patch('hard_harness.google_client.GoogleHarnessClient', Recorder):
+                CheckpointClient('question_author', call_limit=1, cache_root=temp)
+            self.assertEqual(captured['pacing'], {'min_interval_seconds': 9.0})
+            self.assertIs(captured['free_project_confirmed'], True)
+
+
+class DeadlineCheckpoints(unittest.TestCase):
+    def test_job_deadline_env_overrides_the_plan_and_is_validated(self):
+        import os
+        from unittest.mock import patch
+        from hard_harness.common import deadline_reached, soft_deadline
+        with patch.dict(os.environ, {'HARNESS_DEADLINE_MINUTES': '3'}):
+            deadline = soft_deadline({'shard_deadline_minutes': 45})
+            self.assertIsNotNone(deadline)
+            self.assertFalse(deadline_reached(deadline))
+            self.assertTrue(deadline_reached(deadline - 10_000))
+        with patch.dict(os.environ, {}):
+            self.assertIsNone(soft_deadline({}))
+            self.assertIsNotNone(soft_deadline({'shard_deadline_minutes': 45}))
+        for raw in ('abc', '0.5'):
+            with self.subTest(raw=raw), patch.dict(os.environ, {'HARNESS_DEADLINE_MINUTES': raw}):
+                with self.assertRaises(ValueError):
+                    soft_deadline({})
+
+    def test_a_lone_transport_blip_does_not_stop_the_shard_but_a_streak_does(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plan = root/'plan.json'
+            write_json(plan, {'llm': {'provider': 'xkiro', 'model': ANSWER_MODEL,
+                                      'credential_secret': 'XKIRO_API_KEY_JINKO'},
+                             'google_fallback_authorized': True, 'google_fallback_active': False,
+                             'transport_failure_streak': 2})
+            with patch('hard_harness.common.PLAN_PATH', plan), patch('hard_harness.common.OUTPUT', root/'out'):
+                client = CheckpointClient('question_author', call_limit=9, cache_root=temp,
+                                          client=FakeClient(error=NvidiaAPIError('connection reset', 0)))
+                with self.assertRaises(NvidiaAPIError):
+                    client.chat(ANSWER_MODEL, [{'role': 'user', 'content': 'x'}])
+                self.assertIsNone(client.pause)          # one blip: the case retry may recover
+                with self.assertRaises(NvidiaAPIError):
+                    client.chat(ANSWER_MODEL, [{'role': 'user', 'content': 'y'}])
+                self.assertIsNotNone(client.pause)       # the streak proves an outage
+                self.assertTrue((root/'out'/'pause_question_author.json').exists())
+                self.assertEqual(client.summary()['consecutive_transport_failures'], 2)
+                fake = client.client
+                with self.assertRaises(NvidiaAPIError):
+                    client.chat(ANSWER_MODEL, [{'role': 'user', 'content': 'z'}])
+                self.assertEqual(fake.calls, 2)           # a paused client makes no further calls
+
+    def test_quota_still_pauses_immediately_without_a_streak(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plan = root/'plan.json'
+            write_json(plan, {'llm': {'provider': 'xkiro', 'model': ANSWER_MODEL,
+                                      'credential_secret': 'XKIRO_API_KEY_JINKO'},
+                              'google_fallback_authorized': True, 'google_fallback_active': False,
+                              'transport_failure_streak': 8})
+            with patch('hard_harness.common.PLAN_PATH', plan), patch('hard_harness.common.OUTPUT', root/'out'):
+                client = CheckpointClient('question_author', call_limit=9, cache_root=temp,
+                                          client=FakeClient(error=NvidiaAPIError('quota exhausted', 429)))
+                with self.assertRaises(NvidiaAPIError):
+                    client.chat(ANSWER_MODEL, [])
+            self.assertIsNotNone(client.pause)
+
+
+
 class DatasetIntegrity(unittest.TestCase):
     def test_focused_primary_repair_keeps_stable_evidence_aliases(self):
         from hard_harness.authoring import author_messages
@@ -290,6 +478,38 @@ class DatasetIntegrity(unittest.TestCase):
                 report=authoring.author_shard(0,recover_only=True)
             self.assertEqual(report['families'],2)
             self.assertEqual(report['new_model_calls'],0)
+            self.assertEqual([r['id'] for r in read_jsonl(out/'author_00/families.jsonl')],['hh0002','hh0003'])
+
+    def test_shard_deadline_stops_before_the_next_model_call(self):
+        from unittest.mock import patch
+        import hard_harness.authoring as authoring
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); out=root/'out'; work=root/'work'; (out/'sources').mkdir(parents=True)
+            plan=root/'plan.json'; write_json(plan,{'author_shards':1,'shard_deadline_minutes':45,
+                                                     'llm':{'model':ANSWER_MODEL}})
+            source_hash='verified-sources'; write_json(out/'sources/manifest.json',{'gold_unit_manifest':source_hash})
+            unit={'text':'هذا نص مصدر ثابت يبين اشتراط الموافقة على تعديل العقد.'}
+            specs=[{'id':f'hh{i:04d}','category':'supported','expected_behavior':'answer',
+                    'source_unit_ids':['u'],'primary_unit_id':'u'} for i in range(1,4)]
+            for spec in specs[1:]:
+                family={'id':spec['id'],'category':'supported','fact_summary':'approval','rationale':'source',
+                    'authoring_version':authoring.AUTHOR_VERSION,
+                    'evidence':[{'unit_id':'u','quote':unit['text']}],
+                    'languages':{l:{'question':q,'reference_answer':'approval required','required_facts':['approval']}
+                                 for l,q in [('ar','هل يشترط الحصول على الموافقة؟'),('fr','Une approbation est-elle nécessaire ?'),('en','Is approval required?')]}}
+                key=fingerprint({'version':authoring.AUTHOR_VERSION,'spec':spec,'source':source_hash})
+                write_json(work/'draft_families'/f'{key}.json',{'family':family,'audit':{'id':spec['id'],'approved':True,'issues':[]}})
+            with patch.object(authoring,'OUTPUT',out),patch.object(authoring,'WORK',work),patch.object(authoring,'PLAN_PATH',plan), \
+                 patch.object(authoring,'make_specs',return_value=(specs,{'u':unit})), \
+                 patch.object(authoring,'deadline_reached',return_value=True), \
+                 patch.object(authoring,'CheckpointClient',side_effect=AssertionError('no provider use at the deadline')):
+                report=authoring.author_shard(0)
+            # A timed-out shard is resumable, never a fake completion and never a
+            # fleet-wide 'paused' signal that would gate the other shards.
+            self.assertEqual(report['status'],'partial_deadline')
+            self.assertEqual(report['stop_reason'],'shard_deadline')
+            self.assertEqual(report['families'],2)
+            self.assertNotIn('error',report)
             self.assertEqual([r['id'] for r in read_jsonl(out/'author_00/families.jsonl')],['hh0002','hh0003'])
 
     def test_duplicate_detection_preserves_first_family_and_flags_later_ids(self):

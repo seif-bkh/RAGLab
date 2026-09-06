@@ -2,7 +2,7 @@ name: Large multilingual answer harness
 
 on:
   push:
-    branches: ["arena/01a071ba-raglab"]
+    branches: ["arena/01a071ba-raglab", "arena/01a0741e-raglab"]
     paths: ["raglab/benchmarks/hard_harness_plan.json"]
   workflow_dispatch:
 
@@ -58,8 +58,14 @@ jobs:
           candidate=p.get('candidate_llm',p['llm'])
           assert candidate['provider']=='xkiro' and candidate['model']=='qwen/qwen3.8-max:free'
           assert candidate['credential_secret'] in {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'}
-          fields={'phase':p['phase'],'key_secret':key_secret,'parallelism':'1' if p['llm']['provider']=='google' else '2',
+          # A free-tier key is latency-bound per worker, not rate-bound at low
+          # fan-out; several shards may share it because a 429 is paced in-client.
+          parallelism=int(p.get('author_parallelism', 1 if p['llm']['provider']=='google' else 2))
+          assert 1 <= parallelism <= 4
+          fields={'phase':p['phase'],'key_secret':key_secret,'parallelism':str(parallelism),
                   'candidate_key_secret':candidate['credential_secret'],'candidate_parallelism':'2'}
+          for name in ('min_interval_seconds','max_retry_delay_seconds','quota_retry_attempts'):
+              if name in p['llm'].get('pacing',{}): assert float(p['llm']['pacing'][name]) > 0
           for key in ('sources_run','dataset_run','resume_run','authors_run','predictions_run'):
               value=str(p.get(key,'')); assert not value or value.isdigit(); fields[key]=value
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:
@@ -151,6 +157,7 @@ jobs:
         id: work
         if: steps.gate.outputs.run == 'true'
         env:
+          HARNESS_DEADLINE_MINUTES: "45"
           HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.key_secret] }}
           HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.key_secret }}
           PYTHONUNBUFFERED: "1"
@@ -312,6 +319,7 @@ jobs:
         id: work
         if: steps.gate.outputs.run == 'true'
         env:
+          HARNESS_DEADLINE_MINUTES: "32"
           HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.candidate_key_secret] }}
           HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.candidate_key_secret }}
           TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
@@ -374,6 +382,7 @@ jobs:
           restore-keys: hard-grade-v1-${{ github.ref_name }}-
       - name: Calibrated semantic comparison; never exact-string grading alone
         env:
+          HARNESS_DEADLINE_MINUTES: "105"
           HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.key_secret] }}
           HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.key_secret }}
           TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer

@@ -14,7 +14,8 @@ from loader import load_all
 from retrieval import retrieve
 from store import get_collection, store_chunks
 from hard_harness.common import (ROOT, WORK, OUTPUT, PLAN_PATH, LANGUAGES, CheckpointClient,
-                                 now, read_json, read_jsonl, write_jsonl)
+                                 deadline_reached, now, read_json, read_jsonl, soft_deadline,
+                                 write_jsonl)
 
 
 def load_public_questions(directory):
@@ -152,8 +153,14 @@ def predict_shard(shard):
               'model':client.model,'provider':client.provider,'credential_alias':client.credential_alias,
               'fresh_success_only_cache_used':False}
     attempts = []
+    deadline = soft_deadline(plan)
     try:
         for row in rows:
+            if deadline_reached(deadline) and by_id:
+                # Each answer costs one model call; stopping between cases keeps the
+                # shard resumable instead of losing it to a job timeout.
+                report['stop_reason'] = 'shard_deadline'
+                break
             case_hash = case_identity(row,plan['answer_policy'])
             if row['id'] in by_id:
                 if by_id[row['id']]['case_hash'] != case_hash:

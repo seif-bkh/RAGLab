@@ -3,7 +3,8 @@ import json
 from collections import Counter, defaultdict
 
 from artifacts import fingerprint, write_json
-from hard_harness.common import OUTPUT, PLAN_PATH, LANGUAGES, CheckpointClient, now, read_json, read_jsonl, write_jsonl
+from hard_harness.common import (OUTPUT, PLAN_PATH, LANGUAGES, CheckpointClient, deadline_reached, now,
+                                read_json, read_jsonl, soft_deadline, write_jsonl)
 
 GRADER_VERSION = 'semantic-reference-v1'
 
@@ -142,7 +143,11 @@ def grade_all():
                 'candidate_claims':prediction['result']['claims'],
                 'candidate_sources':[s for s in prediction['result']['sources'] if s['source_id'] in {
                     e['source_id'] for c in prediction['result']['claims'] for e in c['evidence']}]})
+        deadline = soft_deadline(plan)
         for start in range(0,len(pending),6):
+            if deadline_reached(deadline):
+                summary['stop_reason'] = 'shard_deadline'
+                break
             batch = pending[start:start+6]
             data, provenance = client.object(judge_messages(batch),max_tokens=6000)
             for row in validate_judgments(data,[c['id'] for c in batch]):
@@ -153,7 +158,10 @@ def grade_all():
                     'provider':pred['provider'],'model':pred['model'],'grader':'model_semantic', 'judge_provenance':provenance})
             write_jsonl(out/'judgments.jsonl',results)
             print(f'[grade] {len(results)}/{len(predictions)} predictions classified',flush=True)
-        summary['status'] = 'complete' if len(predictions)==3000 else 'partial'
+        # A deadline stop is never reported as a finished comparison.
+        summary['status'] = ('complete' if len(predictions)==3000 and len(results)==len(predictions)
+                             and not summary.get('stop_reason')
+                             else 'partial_deadline' if summary.get('stop_reason') else 'partial')
     except Exception as exc:
         from nvidia_api import safe_error
         summary.update(status='paused' if client.pause else 'blocked',error=safe_error(exc))

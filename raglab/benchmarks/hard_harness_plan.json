@@ -1,6 +1,6 @@
 {
   "version": "hard-harness-v1",
-  "revision": "11-resume-reference-work-on-google-3-5-flash",
+  "revision": "12-adaptive-google-pacing-plus-resumable-shard-deadline",
   "phase": "author",
   "languages": [
     "ar",
@@ -31,7 +31,13 @@
       "GOOGLE_API_KEY"
     ],
     "free_tier_project_confirmed": true,
-    "free_tier_source": "https://ai.google.dev/gemini-api/docs/pricing"
+    "free_tier_source": "https://ai.google.dev/gemini-api/docs/pricing",
+    "pacing": {
+      "min_interval_seconds": 6.0,
+      "max_retry_delay_seconds": 240.0,
+      "quota_retry_attempts": 4,
+      "rate_limit_floor_seconds": 20.0
+    }
   },
   "embedding": {
     "provider": "nvidia",
@@ -55,11 +61,15 @@
   "random_seed": 20260905,
   "source_runtime_manifest": "807785db25fb798499e67f12f59589f6db33792e88cb00cf104752853046e60e",
   "sources_run": "33985662461",
-  "resume_run": "33997136207",
+  "resume_run": "34001048769",
   "candidate_llm": {
     "provider": "xkiro",
     "model": "qwen/qwen3.8-max:free",
     "credential_secret": "XKIRO_API_KEY_JINKO"
   },
-  "google_scope": "Unfinished reference authoring and auditing only; restore candidate_llm for answering unless the user explicitly approves a further switch."
+  "google_scope": "Unfinished reference authoring and auditing only; restore candidate_llm for answering unless the user explicitly approves a further switch.",
+  "transport_failure_streak": 6,
+  "shard_deadline_minutes": 45,
+  "author_parallelism": 4,
+  "quota_note": "Run 34001048769 paused on a Google HTTP 429 minute-window limit (free tier advertises 20 requests/min) while shard 4 was only issuing ~4 requests/min, so the project budget is thinner than documented. Short advertised waits are now paced inside the client and the shared interval doubles after any 429; an unlabelled 429 or a wait above the cap still pauses the fleet for a user decision. 468/900 base families are accepted and are resumed from that run's artifacts."
 }

@@ -11,7 +11,8 @@ from pathlib import Path
 from answer import normalized_quote
 from artifacts import fingerprint, write_json
 from hard_harness.common import (ROOT, OUTPUT, WORK, PLAN_PATH, LANGUAGES, CheckpointClient,
-                                 now, read_json, read_jsonl, write_jsonl)
+                                 deadline_reached, now, read_json, read_jsonl, soft_deadline,
+                                 write_jsonl)
 
 AUTHOR_VERSION = 'paired-author-v3-focused-families'
 TASKS = ('definition or main rule', 'conditional application', 'prohibition or exception',
@@ -328,10 +329,17 @@ def author_shard(shard, *, recover_only=False):
                        clients=[],new_model_calls=0)
         write_json(out/'manifest.json',summary)
         return summary
+    deadline = soft_deadline(plan)
     try:
         for spec in assigned:
             if spec['id'] in completed:
                 continue
+            if deadline_reached(deadline):
+                # Stop cleanly, publish, and let the next run continue this shard
+                # instead of losing the whole job to an Actions timeout.
+                summary['stop_reason'] = 'shard_deadline'
+                summary['deadline_minutes'] = plan.get('shard_deadline_minutes')
+                break
             batch = [spec]
             cache_file = WORK/'draft_families'/f'{fingerprint({"version":AUTHOR_VERSION,"spec":spec,"source":summary["source_manifest"]})}.json'
             if cache_file.exists():
@@ -388,7 +396,8 @@ def author_shard(shard, *, recover_only=False):
             write_jsonl(out/'unresolved_references.jsonl',unresolved_drafts)
             write_json(out/'manifest.json',summary)
             print(f'[author] shard {shard}: {len(rows)}/{len(assigned)} verified; unresolved={len(unresolved)}',flush=True)
-        summary['status']='drafts_complete' if len(rows)==len(assigned) else 'needs_reference_review'
+        summary['status']=('drafts_complete' if len(rows)==len(assigned)
+                           else 'partial_deadline' if summary.get('stop_reason') else 'needs_reference_review')
     except Exception as exc:
         from nvidia_api import safe_error
         code=getattr(exc,'status_code',getattr(exc,'code',0))

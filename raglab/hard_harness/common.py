@@ -3,6 +3,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,6 +29,29 @@ def read_json(path):
 
 def read_jsonl(path):
     return [json.loads(line) for line in Path(path).read_text(encoding='utf-8').splitlines() if line.strip()]
+
+
+def soft_deadline(plan):
+    """Return a monotonic stop time so a shard checkpoints before it is killed.
+
+    A cancelled Actions job loses its uploaded artifact; a shard that stops at its
+    own deadline keeps every completed case and resumes where it stopped. The
+    workflow sets HARNESS_DEADLINE_MINUTES from the job's real timeout; the plan
+    value is the default for local runs.
+    """
+    raw = os.environ.get('HARNESS_DEADLINE_MINUTES', '').strip()
+    minutes = float(raw) if raw else plan.get('shard_deadline_minutes')
+    if not minutes:
+        return None
+    value = float(minutes) * 60
+    if value < 120:
+        raise ValueError('A shard deadline below two minutes cannot checkpoint usefully')
+    return time.monotonic() + value
+
+
+def deadline_reached(deadline):
+    return deadline is not None and time.monotonic() >= deadline
+
 
 
 def write_jsonl(path, rows):
@@ -63,6 +87,12 @@ class HarnessPause(RuntimeError):
     def __init__(self, message, status_code=0):
         super().__init__(message)
         self.status_code = status_code
+
+
+# Only these codes mean the credential/quota itself is spent, so the fleet must
+# stop and ask the user. Everything else is a transient transport/5xx event that a
+# per-case retry can ride out; a streak of them trips the breaker below instead.
+QUOTA_STATUSES = frozenset({401, 402, 403, 429})
 
 
 class CheckpointClient:
@@ -116,7 +146,8 @@ class CheckpointClient:
             else:
                 from hard_harness.google_client import GoogleHarnessClient
                 self.client = GoogleHarnessClient(self.model, key,
-                    free_project_confirmed=profile.get('free_tier_project_confirmed'), budget=self.budget)
+                    free_project_confirmed=profile.get('free_tier_project_confirmed'), budget=self.budget,
+                    pacing=profile.get('pacing'))
         self.base_url = self.client.base_url
         self.timeout = self.client.timeout
         self.attempts = self.client.attempts
@@ -124,6 +155,11 @@ class CheckpointClient:
         self.max_retry_delay = self.client.max_retry_delay
         self.cached_calls = 0
         self.pause = None
+        # A single 503/connection blip used to stop a whole shard and then gate the
+        # rest of the fleet. Only a sustained streak is treated as provider trouble.
+        self.transport_failures = 0
+        self.transport_failure_streak = max(2, int(self.plan.get('transport_failure_streak', 4)))
+        self.rate_limit_waits = 0
         self.events = []
         self.last_provenance = None
 
@@ -174,16 +210,29 @@ class CheckpointClient:
                 self.last_provenance['cache_replayed'] = False
                 if status == 422:
                     write_json(path, record)
-                else:
+                elif status in QUOTA_STATUSES:
                     self.pause = HarnessPause(safe_error(exc), status)
                     write_json(OUTPUT / f'pause_{self.role}.json', {**record,
                                'action': 'Checkpoint saved. Ask the user before changing key/provider; resume does not discard completed records.'})
+                else:
+                    # Transport/5xx: the case-level retry may recover. Stop the shard
+                    # only when the streak proves the endpoint is unusable.
+                    self.transport_failures += 1
+                    if self.transport_failures >= self.transport_failure_streak:
+                        self.pause = HarnessPause(
+                            f'{self.transport_failures} consecutive transport failures; last: {safe_error(exc)}',
+                            status or 503)
+                        write_json(OUTPUT / f'pause_{self.role}.json', {**record,
+                                   'consecutive_transport_failures': self.transport_failures,
+                                   'action': 'Checkpoint saved. Resume reuses completed records; no provider or model was switched.'})
                 raise
             record = {'request_hash': key, 'role': self.role, 'provider': self.provider,
                       'model': model, 'credential_alias': self.credential_alias,
                       'timestamp': now(), 'status': 'response', 'response': response,
                       'http_attempts': self.client.calls - prior}
             write_json(path, record)
+            self.transport_failures = 0
+            self.rate_limit_waits += int(response.pop('rate_limit_waits', 0) or 0)
             self.last_provenance = {k:record.get(k) for k in ('request_hash','role','provider','model','credential_alias','timestamp')}
             self.last_provenance['cache_replayed'] = False
             self.events.append({k: record[k] for k in ('request_hash', 'role', 'provider', 'model', 'timestamp', 'http_attempts')})
@@ -230,4 +279,6 @@ class CheckpointClient:
         return {'role': self.role, 'provider': self.provider, 'model': self.model,
                 'credential_alias': self.credential_alias, 'http_requests': self.calls,
                 'logical_request_budget': dict(self.budget), 'cache_hits': self.cached_calls,
+                'rate_limit_waits': self.rate_limit_waits,
+                'consecutive_transport_failures': self.transport_failures,
                 'pause': str(self.pause) if self.pause else None}
