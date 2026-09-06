@@ -14,6 +14,7 @@ evidence; the referee is string containment, so the index is not graded by its o
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 import statistics
@@ -497,7 +498,12 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
             query_vectors = list(embedder.embed_texts([question for _, _, question in queries],
                                                       input_type='search_query'))
             index = VectorIndex(corpus, vectors)
-            lookup = {key: vector for key, vector in zip(queries, query_vectors)}
+            # Keyed by (family, language), not by the whole query tuple: the question text is
+            # what was embedded, but the lookup happens by identity.
+            lookup = {(family_id, language): vector for (family_id, language, _), vector
+                      in zip(queries, query_vectors)}
+            if len(lookup) != len(queries):
+                raise ValueError(f'Embeddings returned {len(query_vectors)} vectors for {len(queries)} queries')
             indices['vector'] = lambda family_id, language, question, allowed=None: index.scores(
                 lookup[(family_id, language)], allowed=allowed)
             arm_status['vector'] = {'status': 'ok', 'model': cfg.NVIDIA_EMBEDDING_MODEL,
@@ -509,33 +515,43 @@ def evaluate(*, top_k=5, arms=('lexical', 'vector'), out=None, families=None, co
             arm_status['vector'] = {'status': 'unavailable', 'error': safe_error(exc)}
     if not indices:
         raise ValueError('No arm could be built; nothing was substituted')
-    coverage = unit_coverage(corpus, gold_unit_texts()) if gold_unit_texts() else {
-        'status': 'unavailable', 'note': 'results/hard_harness/sources/gold_units.json was not present, '
-                                         'so the chunking diagnostic could not run; download the sources '
-                                         'checkpoint to enable it'}
+
     report = {}
-    for arm, score in indices.items():
-        rows = judge_families(families, corpus, rank_scores=score, top_k=top_k)
-        absent = abstention_rows(families, corpus, rank_scores_for=
-                                 lambda family_id, language, question, allowed: score(
-                                     family_id, language, question, allowed=allowed), top_k=top_k)
-        present_scores = [row['top_scores'][0] for row in rows if row['top_scores']]
-        absent_scores = [row['absent_best_score'] for row in absent]
-        threshold = threshold_at_fpr(present_scores, absent_scores, fpr=fpr)
-        abstain = {'auc': auc(present_scores, absent_scores), 'threshold': threshold,
-                   'answerable_queries': len(present_scores), 'unanswerable_queries': len(absent_scores),
-                   'note': 'positive = top score with the corpus intact; negative = top score with the supporting '
-                           'document removed from the searchable set'}
-        write_jsonl(out / f'{arm}_rows.jsonl', rows)
-        write_jsonl(out / f'{arm}_absent.jsonl', absent)
-        summary = summarise(rows, top_k=top_k, abstain=abstain)
-        summary['arm'] = arm_status[arm]
-        write_json(out / f'{arm}_summary.json', summary)
-        report[arm] = summary
+    for arm in list(indices):
+        score = indices[arm]
+        # Each arm is measured inside its own guard: a broken arm is named in the report
+        # with its error, and the other arm's numbers still reach the reader.
+        try:
+            rows = judge_families(families, corpus, rank_scores=score, top_k=top_k)
+            absent = abstention_rows(families, corpus, top_k=top_k, rank_scores_for=lambda family_id, language,
+                                     question, allowed: score(family_id, language, question, allowed=allowed))
+            present_scores = [row['top_scores'][0] for row in rows if row['top_scores']]
+            absent_scores = [row['absent_best_score'] for row in absent]
+            threshold = threshold_at_fpr(present_scores, absent_scores, fpr=fpr)
+            abstain = {'auc': auc(present_scores, absent_scores), 'threshold': threshold,
+                       'answerable_queries': len(present_scores), 'unanswerable_queries': len(absent_scores),
+                       'note': 'positive = top score with the corpus intact; negative = top score with the '
+                               'supporting document removed from the searchable set'}
+            write_jsonl(out / f'{arm}_rows.jsonl', rows)
+            write_jsonl(out / f'{arm}_absent.jsonl', absent)
+            summary = summarise(rows, top_k=top_k, abstain=abstain)
+            summary['arm'] = arm_status[arm]
+            write_json(out / f'{arm}_summary.json', summary)
+            report[arm] = summary
+        except Exception as exc:      # noqa: BLE001 - a failed arm is reported, not swallowed
+            from nvidia_api import safe_error
+            arm_status[arm] = {'status': 'failed', 'error': f'{type(exc).__name__}: {safe_error(exc)}'}
+            indices.pop(arm, None)
+    if not report:
+        raise ValueError('No arm produced a measurement: ' + json.dumps(arm_status, ensure_ascii=False))
     if len(indices) > 1:
         pair = agreement(read_jsonl(out / 'lexical_rows.jsonl'), read_jsonl(out / 'vector_rows.jsonl'))
         write_json(out / 'agreement.json', pair)
         report['agreement'] = pair
+    coverage = unit_coverage(corpus, gold_unit_texts()) if gold_unit_texts() else {
+        'status': 'unavailable', 'note': 'results/hard_harness/sources/gold_units.json was not present, so the '
+                                         'chunking diagnostic could not run; download the sources checkpoint to '
+                                         'enable it'}
     manifest = {'status': 'judged', 'created_at': now(), 'arms': sorted(indices), 'arm_status': arm_status,
                 'top_k': top_k, 'fpr': fpr, 'questions': len(queries), 'families': len(families),
                 'chunk_size_tokens': getattr(cfg, 'CHUNK_SIZE_TOKENS', None),

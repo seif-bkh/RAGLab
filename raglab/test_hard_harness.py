@@ -657,6 +657,62 @@ class RetrievalJudge(unittest.TestCase):
             self.assertTrue((Path(temp) / 'both' / 'REPORT.md').exists())
             self.assertTrue((Path(temp) / 'both' / 'lexical_rows.jsonl').exists())
 
+    def test_the_vector_arm_is_measured_through_the_same_labels(self):
+        """The embedding arm must reuse the deterministic labels, not invent its own."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import hard_harness.retrieval_judge as judge
+        corpus = self.corpus('alpha beta gamma delta epsilon zeta', 'unrelated text with other words here')
+        # The question shares the evidence word 'alpha', which is what the fake embedder
+        # keys on; a question phrased differently would legitimately rank lower.
+        family = self.family('alpha beta gamma delta epsilon zeta', question='alpha question?')
+
+        class FakeEmbedder:
+            api_calls = 2
+
+            def embed_texts(self, texts, *, input_type=''):
+                # One direction for the evidence, the orthogonal direction for everything else.
+                return [[1.0, 0.0] if 'alpha' in text else [0.0, 1.0] for text in texts]
+
+        with tempfile.TemporaryDirectory() as temp:
+            with patch('embedder.build_embedder', return_value=FakeEmbedder()):
+                manifest = judge.evaluate(arms=('vector',), out=Path(temp), families=[family], corpus=corpus,
+                                           cfg=SimpleNamespace(NVIDIA_EMBEDDING_MODEL='fake-embed'))
+        self.assertEqual(manifest['arms'], ['vector'])
+        self.assertEqual(manifest['arm_status']['vector']['status'], 'ok')
+        self.assertEqual(manifest['arm_status']['vector']['model'], 'fake-embed')
+        report = manifest['report']['vector']
+        self.assertEqual(report['arm']['dimensions'], 2)
+        self.assertEqual(report['overall']['recall@1'], 1.0)
+        self.assertEqual(report['overall']['top1_is_gold'], 1.0)
+        self.assertEqual(report['overall']['queries'], 3)
+        # An absent-evidence query set cannot be built when the corpus has one document,
+        # so the abstention figures stay empty instead of being reported as 0.0.
+        self.assertIsNone(report['abstention']['auc'])
+
+    def test_a_broken_arm_is_named_and_the_other_arm_still_reports(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import hard_harness.retrieval_judge as judge
+        corpus = self.corpus('alpha beta gamma delta epsilon zeta', 'unrelated text with other words here')
+        family = self.family('alpha beta gamma delta epsilon zeta', question='alpha question?')
+
+        class BrokenEmbedder:
+            """Corpus vectors are 2-d, query vectors are 3-d: the arm fails while measuring."""
+            def embed_texts(self, texts, *, input_type=''):
+                if input_type == 'search_query':
+                    return [[1.0, 0.0, 0.0] for _ in texts]
+                return [[1.0, 0.0] for _ in texts]
+
+        with tempfile.TemporaryDirectory() as temp:
+            with patch('embedder.build_embedder', return_value=BrokenEmbedder()):
+                manifest = judge.evaluate(arms=('lexical', 'vector'), out=Path(temp), families=[family],
+                                          corpus=corpus, cfg=SimpleNamespace(NVIDIA_EMBEDDING_MODEL='broken'))
+        self.assertEqual(manifest['arms'], ['lexical'])
+        self.assertEqual(manifest['arm_status']['vector']['status'], 'failed')
+        self.assertIn('dimension', manifest['arm_status']['vector']['error'])
+        self.assertEqual(manifest['report']['lexical']['overall']['queries'], 3)
+
     def test_reference_answers_are_never_read_into_a_retrieval_metric(self):
         from hard_harness.retrieval_judge import Corpus, judge_families
         family = self.family('bank must obtain written consent',
