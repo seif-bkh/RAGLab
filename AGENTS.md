@@ -79,7 +79,8 @@ download.pytorch.org, Azure blob hosts, the tiktoken CDN, `integrate.api.nvidia.
 Verified dead — do not retry:
 - `gh api .../jobs/{id}/logs` → 302 to Azure blob → connection EOF.
 - `gh run view --log(-failed)` → results-receiver EOF.
-- `gh run download` (artifacts) → same Azure-blob redirect → assumed dead.
+- `gh run download` (artifacts) → 302 to `*.blob.core.windows.net` → EOF
+  (confirmed dead 2026-09-07 on run 34140795660).
 
 Channels that WORK (use in this order):
 1. **Status**: `gh run list --limit 5` / `gh run view <run_id>` (conclusion, headSha).
@@ -162,6 +163,13 @@ Channels that WORK (use in this order):
 - `sacrebleu` is a test dependency — it is pinned in `requirements-benchmark.txt`
   (2.5.1); the plain `requirements.txt` does not carry it.
 - `gh run list --limit 1` once returned a stale top entry; match `headSha` instead.
+- **GitHub wraps workflow `run:` steps in `bash -e -o pipefail`.** A failing command
+  aborts the script before any `status=$?` capture, so capturing exit codes needs the
+  `status=0; cmd ... || status=$?` idiom. (Bite: first real-test run swallowed the
+  answer-smoke failure this way — step "succeeded", no diagnostics posted.)
+- The annotations API also carries GitHub's own annotations: Node-version deprecation
+  notices and `Process completed with exit code N.` for `continue-on-error` steps —
+  filter them when reading a run.
 - A workspace rebuild resets the git checkout to the branch's ORIGINAL base while
   leaving working-tree files: detect via `git status` (everything "modified" + the
   session files "untracked"), then `git ls-remote` + fetch the session branch and

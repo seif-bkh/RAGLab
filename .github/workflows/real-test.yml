@@ -100,14 +100,16 @@ jobs:
 
       # continue-on-error: the retrieval A/B is the deliverable; an answer-smoke failure is
       # reported as data (below) instead of hiding the tables.
+      # NOTE: GitHub wraps run-steps in `bash -e -o pipefail`, so a failing command aborts
+      # the script BEFORE any `status=$?` capture. The `|| status=$?` idiom is required.
       - name: Answer smoke test — xKiro/Qwen cited answer (restructure collection loaded)
         continue-on-error: true
         working-directory: raglab
         run: |
+          status=0
           python main.py answer "ما هي المرابحة؟" --query-lang ar \
             --output results/harness50/real_answer_murabaha.json \
-            > /tmp/raglab_ci/answer.log 2>&1
-          status=$?
+            > /tmp/raglab_ci/answer.log 2>&1 || status=$?
           echo "$status" > /tmp/raglab_ci/answer_status
           cat /tmp/raglab_ci/answer.log
 
@@ -140,14 +142,20 @@ jobs:
 
       - name: Fail the run if the answer smoke failed (tables are already published above)
         if: always()
+        working-directory: raglab
         run: |
           status=$(cat /tmp/raglab_ci/answer_status 2>/dev/null || echo "")
-          if [ -n "$status" ] && [ "$status" != "0" ]; then
-            touch /tmp/raglab_ci/answer_failed
-            echo "::error::answer smoke exited with status $status"
-            echo "::error::answer.log tail: $(tail -c 1200 /tmp/raglab_ci/answer.log | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')"
-            exit 1
+          if [ -z "$status" ] || [ "$status" = "0" ]; then
+            exit 0
           fi
+          touch /tmp/raglab_ci/answer_failed
+          diag=""
+          if [ -f results/harness50/real_answer_murabaha.json ]; then
+            diag=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1],encoding='utf-8'));ks=('status','reason','http_status','retry_after_s','served_model','error');print(' | '.join(f'{k}={d[k]!r}' for k in ks if d.get(k) is not None)[:1000])" results/harness50/real_answer_murabaha.json 2>/dev/null || echo "answer JSON unreadable")
+          fi
+          echo "::error::answer smoke exited with status $status${diag:+ — $diag}"
+          echo "::error::answer.log tail: $(tail -c 1000 /tmp/raglab_ci/answer.log | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')"
+          exit 1
 
       - name: Report the failure (job logs are not downloadable from the sandbox)
         if: failure()

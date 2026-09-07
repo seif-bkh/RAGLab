@@ -277,6 +277,20 @@ def build_anno(runs: dict, answer: dict | None) -> str:
         misses = [q["id"] for q in runs[arm]["questions"]
                   if not q["is_out_of_scope"] and q["correct_rank"] is None]
         parts.append(f"misses {arm}=[" + ",".join(misses) + "]")
+    # Top-1 detail for restructure misses so the annotation is self-sufficient:
+    # what the retriever actually returned instead of the expected chunk.
+    rmiss = [q for q in restr["questions"]
+             if not q["is_out_of_scope"] and q["correct_rank"] is None]
+    if rmiss:
+        seg = []
+        for q in rmiss:
+            if q["hits"]:
+                h = q["hits"][0]
+                seg.append(f"{q['id']} top1={h['score']:.3f} "
+                           f"{h.get('document', '?')} | {str(h.get('heading') or '?')[:44]}")
+            else:
+                seg.append(f"{q['id']} no-hits")
+        parts.append("restr_miss_detail: " + "; ".join(seg))
     if answer is not None:
         parts.append(f"answer status={answer.get('status')} "
                      f"validation_ok={answer.get('validation_ok')} "
