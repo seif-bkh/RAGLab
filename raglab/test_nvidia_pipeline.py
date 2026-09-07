@@ -1206,7 +1206,12 @@ class ManualChunkMaps(unittest.TestCase):
         # Structure only, on purpose: which token counter is configured decides sizes, not whether the
         # map is a partition of the document, and a test must not fail for the second reason because of
         # the first (that is exactly the trap these maps would fall into between a laptop and CI).
-        self.assertEqual([], sc.validate(self.TEXT, entries, max_tokens=10 ** 6, min_tokens=1))
+        # The message carries the boundaries and per-block counts so a machine whose counter differs
+        # (estimator vs cl100k_base) reports the shape it built, not just the rule name.
+        diag = [(e['start'], e['end'], sc.count_tokens(self.TEXT[e['start']:e['end']]))
+                for e in entries]
+        self.assertEqual([], sc.validate(self.TEXT, entries, max_tokens=10 ** 6, min_tokens=1),
+                         f'entries={diag} tokenizer={sc.tokenizer_identity()}')
         joined = ''.join(self.TEXT[e['start']:e['end']] for e in entries)
         self.assertEqual(' '.join(self.TEXT.split()), ' '.join(joined.split()),
                          'the chunks must be the document, not a summary of it')
