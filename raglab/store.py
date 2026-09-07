@@ -41,11 +41,18 @@ def _client(cfg):
 def chunk_fp(cfg) -> str:
     """Fingerprint of the chunking inputs currently configured (see
     chunker.chunk_fingerprint — it must match exactly what chunk_all uses)."""
+    maps = None
+    if str(getattr(cfg, 'CHUNKING_MODE', 'size')).lower() == 'manual':
+        # 'manual' is not one setting but a set of reviewed decisions, so the guard has to read the maps
+        # themselves: editing a single boundary must look like the corpus version change that it is.
+        import semantic_chunking
+        maps = semantic_chunking.maps_fingerprint(getattr(cfg, 'CHUNK_MAP_DIR', 'missing'))
     return chunk_fingerprint(
         chunk_size=cfg.CHUNK_SIZE_TOKENS,
         overlap=cfg.CHUNK_OVERLAP_TOKENS,
         split_on_headings=cfg.SPLIT_ON_HEADINGS_FIRST,
-        sentence_aware_overlap=cfg.CHUNK_OVERLAP_SENTENCE_AWARE)
+        sentence_aware_overlap=cfg.CHUNK_OVERLAP_SENTENCE_AWARE,
+        maps=maps)
 
 
 def ensure_fresh_chunks(collection, cfg) -> None:

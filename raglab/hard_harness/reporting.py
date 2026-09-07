@@ -44,11 +44,18 @@ def build_report():
     for family, values in sorted(families.items()):
         if len(values)==3 and len(set(values.values()))>1:
             manifest['paired_language_disagreements'].append({'family_id':family,'outcomes':values})
+    per_language = int(manifest.get('questions_per_language', manifest.get('by_language',{}).get('ar',{}).get('target',0) or 0))
+    target = int(manifest.get('full_target_questions_per_language', per_language) or per_language)
+    scale_note = (f"**This version: {per_language:,} paired scenarios × Arabic/French/English = "
+                  f"{per_language*3:,} question records** (a scaled pass; the full target is "
+                  f"{target:,} per language). Coverage gaps are listed below and are never filled with zeros."
+                  if per_language < target else
+                  f"**Target: {per_language:,} paired scenarios × Arabic/French/English = {per_language*3:,} question records.**")
     lines = ['# Hard multilingual answer-agent harness', '',
              f"Status: **{manifest['status']}**; generated {now()}.", '',
-             '**Target: 1,000 paired scenarios × Arabic/French/English = 3,000 question records.**',
+             scale_note,
              'Questions and anticipated answers are separate frozen files. The answering process receives no answer-key artifact.', '',
-             '| Language | Target | Observed judgments | Scored | Correct | Correct / scored |',
+             '| Language | Target in this version | Observed judgments | Scored | Correct | Correct / scored |',
              '|---|---:|---:|---:|---:|---:|']
     for lang in ('ar','fr','en'):
         row = manifest.get('by_language',{}).get(lang,{})

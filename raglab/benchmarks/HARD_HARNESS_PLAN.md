@@ -1,9 +1,12 @@
 # Proposed 3,000-question answer-agent harness
 
-Status: **initial design/source inspection complete; source-page transcription
-and reference auditing are being implemented. The 3,000 cases/scores have not
-been generated yet**. This extends the selected Qwen/Nemotron pipeline; no other
-provider/model is introduced.
+Status: **sources and the authoring protocol are implemented and running; 469 of
+the 900 base families are accepted; the 3,000 cases and every score derived from
+them are still absent.** This extends the selected Qwen/Nemotron pipeline. Per the
+user's decision the *harness construction* side is now provider-mixed (see
+"Provider mix"), because one free tier cannot carry ~1,000 audit requests; the
+answer model under test stays `qwen/qwen3.8-max:free` and the embeddings stay
+`nvidia/nemotron-3-embed-1b`.
 
 ## Target
 
@@ -21,6 +24,17 @@ Proposed allocation **per language**:
 | Adversarial | 100 | Legitimate questions with query/source injection, role spoofing, false authority and requests to override source rules |
 | Ambiguous / insufficient information | 50 | Missing variables, unspecified products/parties/dates and unsupported assumptions; abstain or request clarification |
 | **Total** | **1,000** | Identical category totals for each language |
+
+### Scaled version first
+
+Per the user's decision the first frozen dataset is a **scaled version**:
+`questions_per_language` and `counts_per_language` come from the plan, so the
+initial pass holds 475 paired scenarios per language (1,425 records) at the same
+65/20/10/5 proportions, gets scored, and is then extended to the 1,000-per-language
+target recorded as `full_target_questions_per_language`. Authoring still enumerates
+the identical 900 base specs, so no cache key changes between versions; the compiler
+selects the lowest accepted family ID per category and **refuses to freeze a version
+it cannot fill** rather than padding or duplicating.
 
 Only a minority of negative cases should be easy local private-account guards.
 Those guard passes must be reported separately from genuine model refusals.
@@ -120,8 +134,29 @@ question/reference files and compact measurements for inspection.
 
 The user confirmed paired scenarios and automatic continuation through all
 3,000 after validation. `XKIRO_API_KEY_JINKO` is the first harness credential.
-On quota exhaustion, preserve checkpoints and ask before switching. Google is
-authorized as a possible fallback, but is not active; provider/model/role changes
-must be explicit and mixed results cannot be reported as a Qwen-only score. A hard
+On quota exhaustion, preserve checkpoints and ask before switching. A hard
 3,000-case suite will substantially strengthen evidence for an answer-only agent,
 but it is still an evaluation—not a production guarantee by itself.
+
+## Provider mix (authoring side, user-authorized)
+
+- `author_llm` — xKiro `qwen/qwen3.8-max:free` drafts each paired family. This is
+  the same model the harness measures, so drafting alone is never validation.
+- `llm` — Google `gemini-3.5-flash` audits drafts, audits negatives, repairs
+  references and grades answers: a provider other than the candidate's.
+- Roles resolve through `role_profile(plan, role)`; a profile outside the two
+  approved free tiers fails the plan check before any request. Every phase reads
+  its counts and models from the plan, never from literals.
+- Measured ceiling: four concurrent authoring shards were rejected with
+  `RESOURCE_EXHAUSTED … limit: 20` at ~4 requests/minute in aggregate while a
+  single worker kept working, because the quota is shared per project. Auditing is
+  therefore capped at two workers with a 12-event wait budget, and authoring is
+  two-pass (`authoring.audit_mode: drafts_only`): each run drafts everything still
+  missing on the fast provider, then promotes as many pending drafts as the audit
+  allowance permits. A drafted family waits in a pending file instead of being
+  re-drafted or counted as accepted.
+- Mixed provenance is labelled, not smoothed over: the frozen manifest carries the
+  per-model `provider_mix` and `audit_independence` counts, and today's 469 accepted
+  families are all `same_model_audited: 469, cross_provider_audited: 0`, which the
+  report prints as a caveat. No number from a mixed run may be described as
+  Qwen-only.

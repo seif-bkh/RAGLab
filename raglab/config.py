@@ -164,6 +164,19 @@ EMBEDDING_CACHE_PATH = PROJECT_DIR / "embeddings_cache.json"
 # ---------------------------------------------------------------------------
 # Chunking
 # ---------------------------------------------------------------------------
+# Chunking strategy. 'size' is the historical behaviour (CHUNK_SIZE_TOKENS windows). 'manual' reads
+# raglab/benchmarks/chunk_maps/<document>.json: boundaries a reader reviewed against the document's own
+# structure, one subject per chunk, every character covered exactly once. It is off by default because a
+# map is a corpus *version* — retrieval, the citation contract and every published number depend on which
+# segmentation produced them, so switching is a deliberate act, and store.py's chunk fingerprint records
+# which maps were in force (a stale collection refuses to serve rather than mixing two segmentations).
+CHUNKING_MODE = os.getenv("CHUNKING_MODE", "size").strip().lower()
+if CHUNKING_MODE not in {"size", "manual"}:
+    raise ValueError('CHUNKING_MODE must be "size" or "manual", got %r' % CHUNKING_MODE)
+CHUNK_MAP_DIR = Path(os.getenv("CHUNK_MAP_DIR", str(PROJECT_DIR / "benchmarks" / "chunk_maps")))
+# A manual chunk larger than this is treated as a failed review, not a design choice.
+CHUNK_MAX_TOKENS = int(os.getenv("CHUNK_MAX_TOKENS", "900"))
+
 CHUNK_SIZE_TOKENS = int(os.getenv("CHUNK_SIZE_TOKENS", "220"))
 CHUNK_OVERLAP_TOKENS = int(os.getenv("CHUNK_OVERLAP_TOKENS", "40"))
 SPLIT_ON_HEADINGS_FIRST = True

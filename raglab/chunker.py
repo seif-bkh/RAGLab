@@ -63,7 +63,7 @@ CHUNK_FINGERPRINT_VERSION = 3
 
 def chunk_fingerprint(chunk_size: int, overlap: int,
                       split_on_headings: bool,
-                      sentence_aware_overlap: bool) -> str:
+                      sentence_aware_overlap: bool, maps: str | None = None) -> str:
     """Deterministic fingerprint of every chunking input that changes OUTPUT.
 
     Stored in each chunk's metadata at ingest; retrieval refuses to run over a
@@ -71,7 +71,8 @@ def chunk_fingerprint(chunk_size: int, overlap: int,
     collection makes every hit wrong — the fix is `ingest --reset`)."""
     return (f"chunkv{CHUNK_FINGERPRINT_VERSION}:"
             f"s{chunk_size}:o{overlap}:h{int(bool(split_on_headings))}:"
-            f"sen{int(bool(sentence_aware_overlap))}:tok{tokenizer_identity()}")
+            f"sen{int(bool(sentence_aware_overlap))}:tok{tokenizer_identity()}"
+            + (f":maps{maps}" if maps else ""))
 
 
 def tokenizer_identity():
@@ -581,7 +582,15 @@ def _hard_split(text: str, budget: int) -> list[str]:
 
 
 def chunk_all(docs: list[dict], cfg) -> list[Chunk]:
-    """Convenience wrapper: chunk every document with config.py parameters."""
+    """Convenience wrapper: chunk every document with config.py parameters.
+
+    With CHUNKING_MODE='manual' the boundaries come from the reviewed chunk maps instead, and a document
+    without a map is an error rather than a silent fallback: a corpus whose chunks mean two different
+    things in two different documents can be interpreted by nobody, grader included."""
+    if str(getattr(cfg, 'CHUNKING_MODE', 'size')).lower() == 'manual':
+        import semantic_chunking
+        mapped, _problems = semantic_chunking.chunk_documents(docs, cfg)
+        return mapped
     all_chunks: list[Chunk] = []
     for doc in docs:
         doc_chunks = chunk_document(

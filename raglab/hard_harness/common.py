@@ -3,6 +3,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,6 +29,29 @@ def read_json(path):
 
 def read_jsonl(path):
     return [json.loads(line) for line in Path(path).read_text(encoding='utf-8').splitlines() if line.strip()]
+
+
+def soft_deadline(plan):
+    """Return a monotonic stop time so a shard checkpoints before it is killed.
+
+    A cancelled Actions job loses its uploaded artifact; a shard that stops at its
+    own deadline keeps every completed case and resumes where it stopped. The
+    workflow sets HARNESS_DEADLINE_MINUTES from the job's real timeout; the plan
+    value is the default for local runs.
+    """
+    raw = os.environ.get('HARNESS_DEADLINE_MINUTES', '').strip()
+    minutes = float(raw) if raw else plan.get('shard_deadline_minutes')
+    if not minutes:
+        return None
+    value = float(minutes) * 60
+    if value < 120:
+        raise ValueError('A shard deadline below two minutes cannot checkpoint usefully')
+    return time.monotonic() + value
+
+
+def deadline_reached(deadline):
+    return deadline is not None and time.monotonic() >= deadline
+
 
 
 def write_jsonl(path, rows):
@@ -59,10 +83,76 @@ def parse_object(text):
     return data
 
 
+# Reference work may legitimately use a different provider from the candidate.
+# Authoring is the high-volume side; auditing/judging must stay independent of the
+# answering model, so a role may point at its own profile in the plan.
+ROLE_PROFILE_KEYS = {'candidate': 'candidate_llm', 'question_author': 'author_llm',
+                     'semantic_grader': 'grader_llm'}
+
+
+def role_profile(plan, role):
+    """Profile for a role, falling back to the shared reference `llm` block."""
+    key = ROLE_PROFILE_KEYS.get(role)
+    return (plan.get(key) if key else None) or plan['llm']
+
+
+def profile_label(profile):
+    return f"{profile['provider']}/{profile['model']}"
+
+
 class HarnessPause(RuntimeError):
     def __init__(self, message, status_code=0):
         super().__init__(message)
         self.status_code = status_code
+
+
+# Only these codes mean the credential/quota itself is spent, so the fleet must
+# stop and ask the user. Everything else is a transient transport/5xx event that a
+# per-case retry can ride out; a streak of them trips the breaker below instead.
+QUOTA_STATUSES = frozenset({401, 402, 403, 429})
+
+
+def provider_for_model(name):
+    """Label which provider a recorded ``served_model`` came from.
+
+    Providers were mixed on purpose because of free-tier ceilings, so every frozen
+    artefact has to say which model produced what. Older families only recorded the
+    served model, hence this derivation instead of a stored field.
+    """
+    text = str(name or '')
+    if not text or text == 'unknown':
+        return 'unlabelled'
+    if text.startswith('qwen/'):
+        return 'xkiro'
+    if text.startswith('gemini'):
+        return 'google'
+    if 'glm' in text.lower():
+        # The gateway may report the upstream id rather than the catalog slug.
+        return 'experiential'
+    return 'other'
+
+
+def _braces_unclosed(text):
+    """A reply whose object never closed was cut off; a reply that closed is merely malformed.
+
+    Those two need different handling: re-asking for valid JSON at the same length reproduces
+    the identical cut, which is how shards 4-8 spent every focused-repair round on one failure.
+    """
+    body = (text or '').strip()
+    if body.startswith('```'):
+        body = body.strip('`').strip()
+        if body[:4].lower() == 'json':
+            body = body[4:].strip()
+    if not body.startswith('{'):
+        return False
+    depth = 0
+    for character in body:
+        depth += 1 if character == '{' else -1 if character == '}' else 0
+    return depth > 0
+
+
+def _retruncatable(exc_text):
+    return "Unterminated string" in exc_text or "Expecting ',' delimiter" in exc_text
 
 
 class CheckpointClient:
@@ -76,7 +166,7 @@ class CheckpointClient:
     def __init__(self, role, *, call_limit, cache_root=WORK / 'requests', client=None):
         self.role = role
         self.plan = read_json(PLAN_PATH)
-        profile = self.plan.get('candidate_llm',self.plan['llm']) if role == 'candidate' else self.plan['llm']
+        profile = role_profile(self.plan, role)
         if profile['provider'] == 'xkiro':
             if profile['model'] != ANSWER_MODEL:
                 raise HarnessPause('The xKiro harness profile must use the selected Qwen SKU')
@@ -85,6 +175,15 @@ class CheckpointClient:
                 raise HarnessPause('Google is not active; ask the user before changing the harness plan')
             if profile.get('free_tier_project_confirmed') is not True:
                 raise HarnessPause('Confirm the Google key is for a free-tier project before inference')
+        elif profile['provider'] == 'experiential':
+            # A judging role on a third provider keeps the answerer from marking its own work.
+            if profile['model'] != 'glm-5.3-flash':
+                raise HarnessPause('The Experiential Labs profile must use the approved catalog slug '
+                                   'glm-5.3-flash; nothing else is substituted')
+            if profile.get('credits_acknowledged') is not True:
+                raise HarnessPause('Experiential Labs bills routed tokens against account credits. Set '
+                                   'grader_llm.credits_acknowledged only with the user approval recorded '
+                                   'in the plan note')
         else:
             raise HarnessPause('Unknown harness provider; no silent fallback')
         self.model = profile['model']
@@ -93,6 +192,7 @@ class CheckpointClient:
         supplied_alias = os.environ.get('HARNESS_CREDENTIAL_ALIAS')
         approved_aliases = profile.get('credential_aliases', [self.credential_alias])
         permitted_aliases = ({'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'} if self.provider == 'xkiro'
+                             else {'EXPERIENTIAL_API_KEY'} if self.provider == 'experiential'
                              else {'GEMINI_API_KEY','GOOGLE_API_KEY'})
         if not set(approved_aliases) <= permitted_aliases:
             raise HarnessPause('Credential aliases must belong to the selected provider')
@@ -113,10 +213,16 @@ class CheckpointClient:
                 self.client = FreeGatewayClient(self.provider, self.model,
                     load_pricing(self.provider, api_key=key), budget=self.budget, api_key=key,
                     json_mode=role != 'candidate')
+            elif self.provider == 'experiential':
+                from hard_harness.experiential_client import ExperientialHarnessClient
+                self.client = ExperientialHarnessClient(self.model, key, budget=self.budget,
+                                                        pacing=profile.get('pacing'),
+                                                        base_url=profile.get('base_url'))
             else:
                 from hard_harness.google_client import GoogleHarnessClient
                 self.client = GoogleHarnessClient(self.model, key,
-                    free_project_confirmed=profile.get('free_tier_project_confirmed'), budget=self.budget)
+                    free_project_confirmed=profile.get('free_tier_project_confirmed'), budget=self.budget,
+                    pacing=profile.get('pacing'))
         self.base_url = self.client.base_url
         self.timeout = self.client.timeout
         self.attempts = self.client.attempts
@@ -124,12 +230,57 @@ class CheckpointClient:
         self.max_retry_delay = self.client.max_retry_delay
         self.cached_calls = 0
         self.pause = None
+        # A single 503/connection blip used to stop a whole shard and then gate the
+        # rest of the fleet. Only a sustained streak is treated as provider trouble.
+        self.transport_failures = 0
+        self.transport_failure_streak = max(2, int(self.plan.get('transport_failure_streak', 4)))
+        # Providers that pace their own minute-window limit (see google_client) are
+        # not given a second allowance here; the gateway path needs this one.
+        pacing = profile.get('pacing') or {}
+        self.rate_allowance = max(0, int(pacing.get('quota_retry_attempts', 0)))
+        self.rate_cap = float(pacing.get('max_retry_delay_seconds', 240.0))
+        self.rate_retries = 0
+        self.paces_rate_limits = bool(getattr(self.client, 'paces_rate_limits', False))
+        self.rate_limit_waits = 0
         self.events = []
         self.last_provenance = None
 
     @property
     def calls(self):
         return self.client.calls
+
+    def _rate_wait(self, exc):
+        """Seconds to wait before re-issuing a provider-side refusal, if allowed.
+
+        A free gateway answers with 429/5xx "temporarily at capacity" blips that are
+        not quota exhaustion. Only a bounded, provider-advertised or transport-style
+        wait is honoured; auth/billing codes and a spent allowance fall through to
+        the pause path so the user is prompted instead of a silent provider switch.
+        """
+        status = getattr(exc, 'status_code', 0)
+        if status not in {429, 500, 502, 503, 504}:
+            return None
+        if self.paces_rate_limits or self.rate_retries >= self.rate_allowance:
+            return None
+        advertised = getattr(exc, 'retry_after', None)
+        if advertised is None:
+            advertised = 15.0 * (2 ** self.rate_retries)
+        if advertised > self.rate_cap:
+            return None
+        return min(float(advertised), self.rate_cap)
+
+    def _call_with_pacing(self, model, messages, max_tokens):
+        while True:
+            try:
+                return self.client.chat(model, messages, max_tokens=max_tokens)
+            except Exception as exc:
+                wait = self._rate_wait(exc)
+                if wait is None:
+                    raise
+                self.rate_retries += 1
+                self.rate_limit_waits += 1
+                time.sleep(wait)
+
 
     def chat(self, model, messages, *, max_tokens=4096):
         if model != self.model:
@@ -159,7 +310,7 @@ class CheckpointClient:
                 raise NvidiaAPIError(str(self.pause), self.pause.status_code)
             prior = self.client.calls
             try:
-                response = self.client.chat(model, messages, max_tokens=max_tokens)
+                response = self._call_with_pacing(model, messages, max_tokens)
             except Exception as exc:
                 status = getattr(exc, 'status_code', 0)
                 record = {'request_hash': key, 'role': self.role, 'provider': self.provider,
@@ -174,16 +325,30 @@ class CheckpointClient:
                 self.last_provenance['cache_replayed'] = False
                 if status == 422:
                     write_json(path, record)
-                else:
+                elif status in QUOTA_STATUSES:
                     self.pause = HarnessPause(safe_error(exc), status)
                     write_json(OUTPUT / f'pause_{self.role}.json', {**record,
                                'action': 'Checkpoint saved. Ask the user before changing key/provider; resume does not discard completed records.'})
+                else:
+                    # Transport/5xx: the case-level retry may recover. Stop the shard
+                    # only when the streak proves the endpoint is unusable.
+                    self.transport_failures += 1
+                    if self.transport_failures >= self.transport_failure_streak:
+                        self.pause = HarnessPause(
+                            f'{self.transport_failures} consecutive transport failures; last: {safe_error(exc)}',
+                            status or 503)
+                        write_json(OUTPUT / f'pause_{self.role}.json', {**record,
+                                   'consecutive_transport_failures': self.transport_failures,
+                                   'action': 'Checkpoint saved. Resume reuses completed records; no provider or model was switched.'})
                 raise
             record = {'request_hash': key, 'role': self.role, 'provider': self.provider,
                       'model': model, 'credential_alias': self.credential_alias,
                       'timestamp': now(), 'status': 'response', 'response': response,
                       'http_attempts': self.client.calls - prior}
             write_json(path, record)
+            self.transport_failures = 0
+            self.rate_retries = 0
+            self.rate_limit_waits += int(response.pop('rate_limit_waits', 0) or 0)
             self.last_provenance = {k:record.get(k) for k in ('request_hash','role','provider','model','credential_alias','timestamp')}
             self.last_provenance['cache_replayed'] = False
             self.events.append({k: record[k] for k in ('request_hash', 'role', 'provider', 'model', 'timestamp', 'http_attempts')})
@@ -208,6 +373,13 @@ class CheckpointClient:
         try:
             value = parse_object(response['text'])
         except (ValueError, TypeError) as exc:
+            if _braces_unclosed(response.get('text', '')) and _retruncatable(str(exc)):
+                # Ceiling first, prose later: the model cannot finish a sentence the response
+                # budget ends mid-way, so the repair call has to be allowed to run longer.
+                escalated = min(max(max_tokens * 2, 8192), 16000)
+                if escalated > max_tokens:
+                    budget_retry = True
+                    max_tokens = escalated
             repair = [*messages, {'role': 'assistant', 'content': response['text']},
                       {'role': 'user', 'content': 'Return exactly ONE valid JSON object for the same task, no commentary or second object. '
                                                 'Repair JSON formatting without inventing new facts. Parser error: ' + str(exc)[:300]}]
@@ -218,6 +390,7 @@ class CheckpointClient:
         provenance['source_call'] = self.last_provenance
         provenance['max_tokens'] = max_tokens
         provenance['budget_retry'] = budget_retry
+        provenance['max_tokens_after_truncation'] = max_tokens
         provenance['original_request_hash'] = original_hash
         provenance['format_repaired'] = provenance['_harness_request_hash'] != original_hash
         return value, provenance
@@ -230,4 +403,7 @@ class CheckpointClient:
         return {'role': self.role, 'provider': self.provider, 'model': self.model,
                 'credential_alias': self.credential_alias, 'http_requests': self.calls,
                 'logical_request_budget': dict(self.budget), 'cache_hits': self.cached_calls,
+                'rate_limit_waits': self.rate_limit_waits,
+                'paced_provider_retries': self.rate_retries,
+                'consecutive_transport_failures': self.transport_failures,
                 'pause': str(self.pause) if self.pause else None}
