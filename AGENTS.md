@@ -176,9 +176,17 @@ Channels that WORK (use in this order):
 ## 8. Gotchas (learned the hard way — do not relearn)
 
 - `gh run view --log` / job-log / artifact downloads all dead from the sandbox (§4).
-- **Fuzzy `edit_file` can silently misapply on a drifted file** (one "successful" edit
-  once lost a whole function; another appended duplicates at EOF). After every edit,
-  `grep` to verify it landed and check the surrounding region.
+- **Fuzzy `edit_file` can silently misapply — or report success without applying** (one
+  "successful" edit lost a whole function; another appended duplicates at EOF; a third
+  was reported successful yet the buggy line was still in the file at commit time and
+  shipped to CI as an AttributeError). After every edit: `grep` for both the absence
+  of the old text AND the presence of the new text before moving on, and exercise the
+  changed path (compile/compileall is not enough for semantics).
+- `except Exception` does not catch `SystemExit` — retrieval code raises
+  `SystemExit("collection is empty")`; catch-all diagnostics need `BaseException`.
+- `GOOGLE_API_KEY` is a confirmed-working repo secret (the /models listing succeeded
+  in run 34143586968); `nvidia/nemotron-3.5-lightning-30b-a3b` on
+  integrate.api.nvidia.com has not yet completed a call — watch its first run.
 - `_repair_orphan_starts` in `semantic_chunking.propose` exists because real cl100k can
   close a packing run exactly after an Arabic article marker ("الفصل 2"), leaving a
   chunk opening on ":" — a rule the checker (ORPHAN_TAIL) rejects. The fix merges the

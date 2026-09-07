@@ -132,7 +132,11 @@ def google_candidates(key: str) -> list:
     ids = [m.get("name", "").removeprefix("models/")
            for m in data.get("models", [])
            if isinstance(m, dict) and str(m.get("name", "")).startswith("models/")]
-    ids = [i for i in ids if re.match(r"^gemini-", i)]
+    # Text-chat models only: drop other modalities (image/audio/video/tts/embed/...).
+    non_text = ("image", "audio", "video", "tts", "embed", "live", "music", "veo", "imagen")
+    ids = [i for i in ids if re.match(r"^gemini-[\w.\-]+$", i)
+           and not any(f"-{t}" in i.lower() for t in non_text)
+           and not i.lower().endswith(non_text)]
     return sorted(set(ids), key=_model_rank)[:GOOGLE_MAX_TRIES]
 
 
@@ -144,8 +148,7 @@ def google_call(model: str, key: str, messages: list, max_tokens: int):
         "generationConfig": {"temperature": 0, "maxOutputTokens": max_tokens,
                              "responseMimeType": "application/json"},
     }
-    req = urllib.request.Request(url, data=json.dumps(body).ensure_ascii is None and
-                                 json.dumps(body).encode("utf-8"),
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
                                  headers={"x-goog-api-key": key,
                                           "Content-Type": "application/json",
                                           "User-Agent": "RAGLab-llm-smoke/1.0"},
@@ -235,6 +238,25 @@ def main() -> int:
     ns = smoke_cfg()
     question = args.question.strip()
     language = args.query_lang or detect_language(question)
+    try:
+        return _run(ns, args, question, language)
+    except BaseException as exc:  # includes SystemExit from retrieve_hits
+        # Always leave a diagnostic JSON behind so the workflow's failure step can
+        # extract it (CI logs are not downloadable from the sandbox).
+        import traceback
+        diag = {"provider": "nvidia", "model": NVIDIA_SMOKE_MODEL, "phase": "crash",
+                "status": "error", "reason": "unexpected_exception", "validation_ok": False,
+                "claims": [], "sources": [], "question": question,
+                "error": safe_error(exc),
+                "traceback_tail": "".join(traceback.format_exc(limit=6))[-1200:]}
+        try:
+            write_json(args.output, diag)
+        except Exception:
+            pass
+        raise
+
+
+def _run(ns, args, question, language) -> int:
     hits, variants = retrieve_hits(ns, question, language)
     sources = build_sources(hits, ns.ANSWER_CONTEXT_TOKENS)
     if not sources:
