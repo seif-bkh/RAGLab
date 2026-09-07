@@ -207,7 +207,8 @@ def build_md(runs: dict, answer: dict | None, top_k: int) -> str:
         w("")
 
     if answer is not None:
-        w("## Answer smoke test (xKiro/Qwen, restructure collection)")
+        w(f"## Answer smoke test (provider={answer.get('provider')} "
+          f"model={answer.get('model')} phase={answer.get('phase')}, restructure collection)")
         w("")
         w(f"- question: {answer.get('question', '?')}")
         w(f"- status={answer.get('status')} reason={answer.get('reason')} "
@@ -215,6 +216,8 @@ def build_md(runs: dict, answer: dict | None, top_k: int) -> str:
         claims = answer.get("claims") or []
         sources = answer.get("sources") or []
         w(f"- claims={len(claims)} sources={len(sources)}")
+        if answer.get("nvidia_attempt"):
+            w(f"- nvidia phase result: {str(answer['nvidia_attempt'])[:240]}")
         if claims:
             w(f"- first claim: {claims[0]['text'][:160]}")
         w(f"- answer text: {str(answer.get('answer', ''))[:300]}")
@@ -292,10 +295,13 @@ def build_anno(runs: dict, answer: dict | None) -> str:
                 seg.append(f"{q['id']} no-hits")
         parts.append("restr_miss_detail: " + "; ".join(seg))
     if answer is not None:
-        parts.append(f"answer status={answer.get('status')} "
+        parts.append(f"answer {answer.get('provider')}/{answer.get('model') or 'n/a'} "
+                     f"(phase {answer.get('phase')}) status={answer.get('status')} "
                      f"validation_ok={answer.get('validation_ok')} "
                      f"claims={len(answer.get('claims') or [])} "
-                     f"sources={len(answer.get('sources') or [])}")
+                     f"sources={len(answer.get('sources') or [])}"
+                     + (f" nvidia_attempt={str(answer.get('nvidia_attempt'))[:160]}"
+                        if answer.get("nvidia_attempt") else ""))
     return "ANNO| " + " | ".join(parts)
 
 

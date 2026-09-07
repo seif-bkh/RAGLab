@@ -44,9 +44,9 @@ Current state of the work:
    (`load_question_set`): categories `{verbatim, paraphrase, cross-lingual, out-of-scope}`;
    out-of-scope questions must have no expected match.
 4. **Never commit `raglab/.env` or any API key value.** The keys exist as GitHub Actions
-   repo secrets named `NVIDIA_API_KEY` and `XKIRO_API_KEY` (added by the user 2026-09-07).
-   Reference them by name in workflows; the dev token cannot read or list secrets (403) —
-   that is normal, not an error.
+   repo secrets named `NVIDIA_API_KEY`, `XKIRO_API_KEY` (and `GOOGLE_API_KEY` for the
+   LLM fallback) — added by the user 2026-09-07. Reference them by name in workflows;
+   the dev token cannot read or list secrets (403) — that is normal, not an error.
 5. `raglab/results/` is gitignored ("generated data — never commit these"). Benchmark
    artifacts there are **regenerable**: `python harness50.py` rebuilds the BM25 A/B
    artifacts offline. If a workspace is rebuilt, re-run it rather than treating missing
@@ -147,25 +147,31 @@ Channels that WORK (use in this order):
   - the 5 restructure misses are q26–q30, all fr→ar cross-lingual (documented lexical
     limit; the embedding arm should cover them)
   - OOS max top-1 BM25: base 17.5 vs restructure 18.1
-- **Real-model A/B (NVIDIA embeddings + xKiro/Qwen answer)**:
-  - Retrieval A/B completed twice (runs 34140795660, 34141551444; both arms, k=20):
+- **Real-model A/B (NVIDIA embeddings + LLM answer smoke)**:
+  - LLM role per owner instruction (2026-09-07, standing): the real-test answer smoke
+    uses **nvidia/nemotron-3.5-lightning-30b-a3b via integrate.api.nvidia.com with
+    NVIDIA_API_KEY**; if that fails, **GOOGLE_API_KEY with the cheapest free-tier
+    Gemini model** (flash-lite preferred). Implemented in `raglab/llm_smoke.py`
+    (retries + fallback + auto model selection); the app's pinned profile
+    (pipeline_policy: xkiro/qwen) is deliberately NOT changed. The old xKiro/Qwen
+    smoke was abandoned after repeated free-tier 502 "temporarily at capacity"
+    (runs 34140795660, 34141551444, 34142147484).
+  - Retrieval A/B completed three times (same code); stable picture at k=20:
     overall hit@1/3/5 — size `67/89/100` vs restructure `73–76/84–87/89–91`.
     Restructure wins hit@1 (+6–9 pp) driven by paraphrase (+15 pp), cross-lingual
     (+10–15 pp), fr (+27 pp), en (+7–14 pp); it loses a few recalls at top-20 that
-    size hits (size = 0 misses both runs).
-  - Persistent restructure misses (both runs): q01, q02, q03 (ar, Circulaire
+    size always hits (size = 0 misses in all runs).
+  - Persistent restructure misses (all runs): q01, q02, q03 (ar, Circulaire
     murabaha/salam definitions), q38 (en, same circular) — top-1 lands on
     chapter-heading chunks ("الفصل4"/"الفصل 7") or the Guide's murabaha section
     instead of the definition sub-chunk; q44 (en, Madkhal 1963) is borderline and
     jitters between runs.
   - **Run-to-run jitter exists**: hosted NVIDIA embeddings are not bit-reproducible,
-    so borderline questions move ±1 place between runs (q44 missed run 1, hit run 2;
-    cross-lingual 90→95). Treat differences smaller than ~1 question as noise.
-  - Answer smoke: first run failed with `provider_error` — xKiro 502 "temporarily at
-    capacity" (transient, NOT a key problem). The workflow now retries the answer 3×
-    with 90s backoff; a fully green run (evals + answer) is still the goal.
-  - When a green run lands, fold its numbers into this section and into
-    `raglab/results/harness50/comparison.md`.
+    so borderline questions move ±1 place between runs (q44 hit/miss varies;
+    cross-lingual 90→95→90). Treat differences smaller than ~1 question as noise.
+  - A fully green run (evals + a validated cited answer from either LLM phase) is
+    still the goal; fold its numbers into this section and into
+    `raglab/results/harness50/comparison.md` when it lands.
 
 ## 8. Gotchas (learned the hard way — do not relearn)
 
