@@ -1,0 +1,178 @@
+name: RAGLab real test
+
+# Real-model A/B of the two chunking arms:
+#   arm "size"        — legacy recursive 220/40 chunking
+#   arm "restructure" — normalization + context enrichment + recursive structural split
+# Both arms ingest the six-document corpus with the pinned NVIDIA nemotron embeddings and
+# evaluate raglab/questions_50.json (50 mixed ar/fr/en questions) at top-k 20, plus one
+# cited xKiro/Qwen answer as the LLM smoke test.
+#
+# This workflow SPENDS API CALLS, so it is manual-only:
+#   Actions -> "RAGLab real test" -> Run workflow
+# or from the sandbox:
+#   gh workflow run real-test.yml --ref <branch>
+# A tag named real-test-* also triggers it (fallback if dispatch is ever blocked).
+# The regular push CI (.github/workflows/ci.yml) stays API-free.
+#
+# Reading the result from the sandbox (job logs and artifact downloads are NOT reachable
+# there — verified dead, see AGENTS.md §4):
+#   1. the full markdown table is printed to this run's stdout (visible in the Actions UI)
+#      and uploaded as the "real-test-results" artifact (the user can download it);
+#   2. the compact self-sufficient key-number summary is posted as a ::warning:: annotation,
+#      readable through:  gh api repos/seif-bkh/RAGLab/check-runs/<id>/annotations
+#   3. on failure, the newest step-log tail is posted as an ::error:: annotation.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["real-test-*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-test
+  cancel-in-progress: false
+
+jobs:
+  real-test:
+    name: Real A/B — NVIDIA embeddings + xKiro/Qwen answer
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Repo secrets, added by the repository owner. Referenced by name only; values are
+      # never printed whole (repo convention: at most the first 8 characters).
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      XKIRO_API_KEY: ${{ secrets.XKIRO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: raglab/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+        working-directory: raglab
+
+      - name: Fail fast if the secrets are missing or empty
+        run: |
+          missing=0
+          for name in NVIDIA_API_KEY XKIRO_API_KEY; do
+            value="${!name}"
+            if [ -z "$value" ]; then
+              echo "::error::Actions secret $name is empty — the real test needs both keys in the repository secrets"
+              missing=1
+            else
+              echo "$name present (prefix ${value:0:8})"
+            fi
+          done
+          [ "$missing" -eq 0 ]
+
+      - name: ARM=size — ingest (NVIDIA embeddings) + evaluate
+        working-directory: raglab
+        run: |
+          set -o pipefail
+          export CHUNKING_MODE=size
+          mkdir -p /tmp/raglab_ci results/harness50
+          python main.py ingest --reset --skip-sanity-check \
+            --data-dir ../docs --data-dir data 2>&1 | tee /tmp/raglab_ci/size_ingest.log
+          python main.py evaluate --skip-sanity-check --no-translation \
+            --top-k 20 --questions questions_50.json 2>&1 | tee /tmp/raglab_ci/size_evaluate.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/harness50/real_eval_size.json
+          echo "eval run preserved as results/harness50/real_eval_size.json (source: $newest)"
+
+      - name: ARM=restructure — ingest (NVIDIA embeddings) + evaluate
+        working-directory: raglab
+        run: |
+          set -o pipefail
+          export CHUNKING_MODE=restructure
+          python main.py ingest --reset --skip-sanity-check \
+            --data-dir ../docs --data-dir data 2>&1 | tee /tmp/raglab_ci/restructure_ingest.log
+          python main.py evaluate --skip-sanity-check --no-translation \
+            --top-k 20 --questions questions_50.json 2>&1 | tee /tmp/raglab_ci/restructure_evaluate.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/harness50/real_eval_restructure.json
+          echo "eval run preserved as results/harness50/real_eval_restructure.json (source: $newest)"
+
+      # continue-on-error: the retrieval A/B is the deliverable; an answer-smoke failure is
+      # reported as data (below) instead of hiding the tables.
+      - name: Answer smoke test — xKiro/Qwen cited answer (restructure collection loaded)
+        continue-on-error: true
+        working-directory: raglab
+        run: |
+          python main.py answer "ما هي المرابحة؟" --query-lang ar \
+            --output results/harness50/real_answer_murabaha.json \
+            > /tmp/raglab_ci/answer.log 2>&1
+          status=$?
+          echo "$status" > /tmp/raglab_ci/answer_status
+          cat /tmp/raglab_ci/answer.log
+
+      - name: Build the comparison table
+        if: always()
+        working-directory: raglab
+        run: |
+          if [ ! -f results/harness50/real_eval_size.json ] || [ ! -f results/harness50/real_eval_restructure.json ]; then
+            echo "One of the eval runs is missing; skipping the report (the failure step carries the diagnostic)."
+            exit 0
+          fi
+          answer_arg=""
+          [ -f results/harness50/real_answer_murabaha.json ] && answer_arg="--answer results/harness50/real_answer_murabaha.json"
+          python real_report.py results/harness50/real_eval_size.json \
+            results/harness50/real_eval_restructure.json \
+            --out results/harness50/real_models.md $answer_arg \
+            2>&1 | tee /tmp/raglab_ci/report.log
+
+      - name: Post the key numbers as a check-run annotation (sandbox-readable channel)
+        if: always()
+        run: |
+          line=$(grep -h '^ANNO|' /tmp/raglab_ci/report.log 2>/dev/null | tail -1 || true)
+          if [ -n "$line" ]; then
+            message=${line#ANNO| }
+            printf '::warning::real-test numbers | %s\n' \
+              "$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g')"
+          else
+            echo "::warning::real-test produced no ANNO line; the failure step or the logs carry the diagnostic"
+          fi
+
+      - name: Fail the run if the answer smoke failed (tables are already published above)
+        if: always()
+        run: |
+          status=$(cat /tmp/raglab_ci/answer_status 2>/dev/null || echo "")
+          if [ -n "$status" ] && [ "$status" != "0" ]; then
+            touch /tmp/raglab_ci/answer_failed
+            echo "::error::answer smoke exited with status $status"
+            echo "::error::answer.log tail: $(tail -c 1200 /tmp/raglab_ci/answer.log | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')"
+            exit 1
+          fi
+
+      - name: Report the failure (job logs are not downloadable from the sandbox)
+        if: failure()
+        run: |
+          if [ -f /tmp/raglab_ci/answer_failed ]; then
+            echo "::warning::answer-smoke failure already annotated above; nothing more to add"
+            exit 0
+          fi
+          newest=$(ls -t /tmp/raglab_ci/*.log 2>/dev/null | head -1 || true)
+          if [ -n "$newest" ]; then
+            message=$(tail -c 1400 "$newest" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+            echo "::error::real-test failed; tail of ${newest##*/}: $message"
+          else
+            echo "::error::real-test failed before any step log existed (dependency install or earlier)"
+          fi
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-test-results
+          path: |
+            raglab/results/harness50/real_models.md
+            raglab/results/harness50/real_eval_size.json
+            raglab/results/harness50/real_eval_restructure.json
+            raglab/results/harness50/real_answer_murabaha.json
+          if-no-files-found: ignore
+          retention-days: 30

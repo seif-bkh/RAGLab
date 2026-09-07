@@ -23,6 +23,17 @@ restructure leads 47% vs 40% hit@1 (75% vs 42% on verbatim cases); see
 `results/harness50/comparison.md` and `raglab/README.md` for the full table
 and caveats.
 
+The same A/B also runs on the **real models** — pinned NVIDIA nemotron
+embeddings for both arms plus one cited xKiro/Qwen answer — via
+`.github/workflows/real-test.yml`. It spends API calls, so it is
+**manual-only**: Actions → "RAGLab real test" → Run workflow (or
+`gh workflow run real-test.yml --ref <branch>`; keys are repository
+secrets). The full tables land in the run's stdout and the
+`real-test-results` artifact, and a compact key-number summary is posted
+as a check-run annotation. `raglab/run_real_test.sh` runs the same
+two-arm evaluation locally wherever the endpoints are reachable and
+`raglab/.env` is filled in.
+
 ```bash
 cd raglab
 python3 -m venv .venv && source .venv/bin/activate
