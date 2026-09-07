@@ -799,10 +799,15 @@ except Exception as _e:  # noqa: BLE001
 check("fresh fingerprint: retrieval allowed",
       _fp_fresh, "")
 
-_fp_old = chunk_fingerprint(220, 40, True, True)
-_fp_new = chunk_fingerprint(340, 60, True, True)
+# FpCfg carries no CHUNKING_MODE, so chunk_fp falls back to the lab default
+# (restructure) — the reference fingerprints must use the same mode.
+_fp_old = chunk_fingerprint(220, 40, True, True, mode="restructure")
+_fp_new = chunk_fingerprint(340, 60, True, True, mode="restructure")
 check("fingerprint changes with chunk size",
       _fp_old != _fp_new and chunk_fp(FpCfg()) == _fp_old, "")
+check("fingerprint changes with chunking mode",
+      chunk_fingerprint(220, 40, True, True, mode="size")
+      != chunk_fingerprint(220, 40, True, True, mode="restructure"), "")
 
 try:
     ensure_fresh_chunks(FpCol("chunkv1:s500:o100:h1:sen0"), FpCfg())

@@ -1,0 +1,440 @@
+{
+  "_comment": "50-case evaluation set for the restructure chunking harness (harness50.py). Mix of ar/fr/en (17/17/16), 5 out-of-scope. expected_substring values are verbatim spans of the source documents (checked by the validation step of harness50.py).",
+  "cases": [
+    {
+      "id": "q01",
+      "question": "ما هي عملية التمويل بالمرابحة على معنى منشور البنك المركزي التونسي عدد 80 لسنة 2019؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "شراء منقولات او عقارات او خدمات لدى طرف ثالث"
+    },
+    {
+      "id": "q02",
+      "question": "كيف يحدد هامش الربح في عملية المرابحة وكيف يتم تسديد القرض؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "هامش ربح محدد مسبقا"
+    },
+    {
+      "id": "q03",
+      "question": "ما المقصود بعملية التمويل بالسلم وفق المنشور عدد 80 لسنة 2019؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "شراء اجل بثمن عاجل نقدا"
+    },
+    {
+      "id": "q04",
+      "question": "في عملية المضاربة، يوفر البنك كامل رأس المال، فماذا تقتصر عليه مساهمة الحريف؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "وتقتصر مساهمة الحريف فيه على الخبرة والتسيير"
+    },
+    {
+      "id": "q05",
+      "question": "ما هو أجل البنك المركزي للاعتراض على تسويق منتج أو خدمة صيرفة اسلامية جديدة؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "خلال عشرة ايام عمل"
+    },
+    {
+      "id": "q06",
+      "question": "ما هو شرط عمر السيارة الممولة بصيغة المرابحة في دليل بنك البركة تونس؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "لا يتجاوز عمرها 3 سنوات"
+    },
+    {
+      "id": "q07",
+      "question": "ما هو الحد الأقصى لإجمالي المبالغ المقترضة بالربا في معايير مطابقة الشركات؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "اجمالي المبالغ المقترضة بالربا 30 %"
+    },
+    {
+      "id": "q08",
+      "question": "على عاتق من تقع الأصول المؤجرة في عقد الاجارة مع خيار التملك حسب الدليل الداخلي؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "الاصول المؤجرة تكون على ضمان البنك"
+    },
+    {
+      "id": "q09",
+      "question": "لماذا يجب ألا ترتبط عمولات الاعتمادات المستندية بمدة الاعتماد؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "حتى لا تؤول العملية الى قرض بزيادة ربوية"
+    },
+    {
+      "id": "q10",
+      "question": "إلى ماذا يهدف قانون البنوك والمؤسسات المالية عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "القانون هذا يهدف"
+    },
+    {
+      "id": "q11",
+      "question": "على أي بنوك ومؤسسات مالية غير المقيمة تنطبق أحكام قانون عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "المالية والمؤسسات بالصرف"
+    },
+    {
+      "id": "q12",
+      "question": "كيف يتم الطعن في حكم حل بنك أو مؤسسة مالية وفق قانون عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "بالاستئناف الطعن يتم"
+    },
+    {
+      "id": "q13",
+      "question": "ما هو صندوق تجميع مدخرات الحج الذي تأسس في ماليزيا سنة 1962؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "طابوج حاجي"
+    },
+    {
+      "id": "q14",
+      "question": "متى وأين تأسس البنك الاسلامي للتنمية؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "البنك الاسلامي للتنمية"
+    },
+    {
+      "id": "q15",
+      "question": "إلى أي مبلغ ارتفعت الأصول المالية الاسلامية سنة 2012؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "1166 مليار دولار امريكي سنة 2012"
+    },
+    {
+      "id": "q16",
+      "question": "Quel est le montant mensuel des frais de tenue de compte du Compte Courant Atlas ?",
+      "language": "fr",
+      "category": "verbatim",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "4,50 euros par mois"
+    },
+    {
+      "id": "q17",
+      "question": "Sous quelle condition liée au salaire les frais du Compte Courant Atlas sont-ils exonérés ?",
+      "language": "fr",
+      "category": "paraphrase",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "un salaire d'au moins 1 500 euros versé directement sur le compte"
+    },
+    {
+      "id": "q18",
+      "question": "Quelles sont les conditions d'âge et de résidence pour ouvrir un Compte Courant Atlas ?",
+      "language": "fr",
+      "category": "verbatim",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "âgée de 18 ans ou plus, résidant en France"
+    },
+    {
+      "id": "q19",
+      "question": "Quel est le plafond du découvert autorisé sur le Compte Courant Atlas ?",
+      "language": "fr",
+      "category": "verbatim",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "500 euros maximum"
+    },
+    {
+      "id": "q20",
+      "question": "Quelles sont les trois conditions d'éligibilité au Compte Courant Atlas Pro ?",
+      "language": "fr",
+      "category": "verbatim",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "numéro SIRET actif"
+    },
+    {
+      "id": "q21",
+      "question": "Combien coûtent les frais du Compte Courant Atlas Pro et comment y échapper ?",
+      "language": "fr",
+      "category": "paraphrase",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "9,00 euros par mois"
+    },
+    {
+      "id": "q22",
+      "question": "Quel est le taux d'intérêt annuel brut du Livret Croissance ?",
+      "language": "fr",
+      "category": "verbatim",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "2,75 %"
+    },
+    {
+      "id": "q23",
+      "question": "À quelle date sont capitalisés les intérêts du Livret Croissance ?",
+      "language": "fr",
+      "category": "paraphrase",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "capitalisés le 31 décembre"
+    },
+    {
+      "id": "q24",
+      "question": "Quel est le dépôt d'ouverture minimum du Livret Croissance ?",
+      "language": "fr",
+      "category": "verbatim",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "dépôt d'ouverture minimum est de 100 euros"
+    },
+    {
+      "id": "q25",
+      "question": "Quel est le solde minimum à respecter après un retrait sur le Livret Croissance ?",
+      "language": "fr",
+      "category": "paraphrase",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "solde minimum après retrait est de 30 euros"
+    },
+    {
+      "id": "q26",
+      "question": "En quelle année et dans quelle ville la Banque Islamique de Développement a-t-elle été fondée ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "Banque Islamique de Développement"
+    },
+    {
+      "id": "q27",
+      "question": "Quelle est l'institution égyptienne de 1971 mentionnée dans le texte sur la sayrafa islamique ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "Nasser Social Bank"
+    },
+    {
+      "id": "q28",
+      "question": "Dans la fiche produit arabe, quel est le plafond du solde (رصيد الدفتر) du Livret Croissance ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "fiche_produit_banque_atlas_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "50 000 يورو"
+    },
+    {
+      "id": "q29",
+      "question": "Selon la fiche produit arabe, quel est le taux annuel brut (معدل الفائدة) du Livret Croissance (دفتر التوفير) ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "fiche_produit_banque_atlas_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "2,75 %"
+    },
+    {
+      "id": "q30",
+      "question": "Quelle est l'âge minimum pour ouvrir le Livret Croissance (دفتر التوفير) d'après la fiche arabe de Banque Atlas ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "fiche_produit_banque_atlas_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "سن 12 عاما"
+    },
+    {
+      "id": "q31",
+      "question": "What is the monthly fee of the Compte Courant Atlas?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "4,50 euros par mois"
+    },
+    {
+      "id": "q32",
+      "question": "What salary, deposited directly on the account, waives the monthly fee of the Compte Courant Atlas?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "1 500 euros"
+    },
+    {
+      "id": "q33",
+      "question": "What is the maximum balance of the Livret Croissance savings book?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "50 000 euros"
+    },
+    {
+      "id": "q34",
+      "question": "Which account product is reserved for professionals holding an active SIRET number?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "SIRET actif"
+    },
+    {
+      "id": "q35",
+      "question": "How much does an instant transfer to another bank cost?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "1 euro par opération"
+    },
+    {
+      "id": "q36",
+      "question": "What minimum deposit is required to open the Livret Croissance?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "100 euros"
+    },
+    {
+      "id": "q37",
+      "question": "Are withdrawals from the Livret Croissance free and without notice period?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "gratuits et illimités"
+    },
+    {
+      "id": "q38",
+      "question": "According to BCT circular 80/2019, who gives the order to purchase (الامر بالشراء) in a murabaha (المرابحة) financing transaction?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "الامر بالشراء"
+    },
+    {
+      "id": "q39",
+      "question": "What is the maximum execution period allowed for spot FX operations under the internal guide?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "الصرف الفوري – SPOT –"
+    },
+    {
+      "id": "q40",
+      "question": "Which international Islamic bank was founded in Jeddah in 1975?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "جدة 1975"
+    },
+    {
+      "id": "q41",
+      "question": "How many institutions offered Islamic financial products in 2012 according to the Madkhal text?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "716 مؤسسة سنة 2012"
+    },
+    {
+      "id": "q42",
+      "question": "Under the BCT circular, the investment-deposit mudaraba (المضاربة) exists in how many forms?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "المضاربة وفق صيغتين"
+    },
+    {
+      "id": "q43",
+      "question": "Which committee must approve the sharia aspects (الجوانب الشرعية) of Islamic banking operations (عمليات الصيرفة) under the circular?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "هيئة مراقبة مطابقة"
+    },
+    {
+      "id": "q44",
+      "question": "Which Egyptian regional savings experiment appeared in Mit Ghamr in 1963?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "ميت غمر"
+    },
+    {
+      "id": "q45",
+      "question": "What does law no. 48/2016 consider to be public deposits (ودائع العموم)?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "العموم من ودائع"
+    },
+    {
+      "id": "q46",
+      "question": "ما هو سعر سهم شركة تسلا اليوم في بورصة نيويورك؟",
+      "language": "ar",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q47",
+      "question": "كيف احجز تذكرة طائرة من تونس الى دبي؟",
+      "language": "ar",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q48",
+      "question": "Quelle est la recette originale de la bouillabaisse marseillaise ?",
+      "language": "fr",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q49",
+      "question": "Quand a lieu la prochaine élection présidentielle aux États-Unis ?",
+      "language": "fr",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q50",
+      "question": "What is the current prime lending rate of the Federal Reserve?",
+      "language": "en",
+      "category": "out-of-scope"
+    }
+  ]
+}

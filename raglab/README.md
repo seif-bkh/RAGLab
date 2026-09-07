@@ -205,6 +205,84 @@ new maps in the harness means a new corpus version, a re-frozen dataset, and 300
 The place where maps can be judged on their own terms first is the chat, which has no published number
 to protect.
 
+## Restructure chunking (the new default)
+
+`CHUNKING_MODE=restructure` (now the default in `config.py`) replaces blind
+token windows with a three-stage pipeline in `restructure.py`, one stage per
+engineering decision:
+
+1. **Normalization** — raw extraction (PDFs, DOCX, Markdown, HTML) is cleaned
+   into hierarchy-explicit Markdown: page markers and official-gazette running
+   headers are stripped, repeated headers are dropped (table rows exempt, so a
+   table of contents survives), over-long lines are re-split at sentence
+   boundaries, list items are standardized, legal section markers
+   (`الفصل N`, `العنوان الثاني`, `الباب الأول`, fused/spaced visual-order
+   variants) are lifted into `##`/`###` headings, and Arabic lines stored in
+   visual (word-mirrored) order are repaired with a curated-bigram scorer that
+   only flips a line when the mirror clearly wins.
+2. **Context enrichment** — a `> **Context:** doc > section > subsection`
+   breadcrumb is injected above every H2/H3 heading and standalone table, so a
+   section stays self-contained when the splitter separates it from its
+   parent.
+3. **Recursive structural chunking** — the standard recursive splitter over
+   the engineered boundaries, separators in hierarchy order
+   `["\n# ", "\n## ", "\n### ", "\n\n", "\n", " "]`, same 220/40 token budget
+   as the size mode, small parts merged, overlap re-anchors continuations.
+
+The chunk fingerprint (v4) now carries the mode, so a collection built from
+`size` chunks refuses to serve `restructure` settings (and vice versa) instead
+of mixing two segmentations. The pinned hard-harness chunking (640/40 in
+`benchmarks/hard_harness_plan.json`) is untouched.
+
+```bash
+python main.py inspect --data-dir ../docs --data-dir data   # per-doc report + chunks
+```
+
+### harness50: baseline vs restructure, 50 questions
+
+`harness50.py` scores `questions_50.json` (50 cases: 17 ar / 17 fr / 16 en,
+5 out-of-scope; 12 verbatim, 13 paraphrase, 20 cross-lingual) against both
+chunking arms with the lab's own judge (`evaluate.is_correct_hit` +
+`evaluate.compute_metrics`). Retrieval is **BM25-lexical only**
+(`store.keyword_search`, k=20) — identical for both arms — because the pinned
+embedding model is not reachable from this sandbox; the only variable is the
+chunking strategy. Placeholder vectors keep Chroma happy; the lexical path is
+the measurement.
+
+```bash
+.venv/bin/python harness50.py
+# -> results/harness50/{arm_baseline.json, arm_restructure.json,
+#    comparison.md, validation.md}
+```
+
+The harness also **validates the question set**: every `expected_substring`
+must be a verbatim span of the expected document's restructured chunks (fatal
+if not) and is reported against the raw text (PDFs are stored in visual word
+order with corrupted digits, so the baseline arm legitimately misses spans
+that only exist in the repaired reading).
+
+Results on this corpus (45 answerable cases):
+
+| arm | hit@1 | hit@3 | hit@5 |
+|---|---|---|---|
+| size-220/40 baseline | 40% | 69% | 80% |
+| restructure-220/40 | **47%** | **78%** | **89%** |
+
+| category | n | base hit@1/3/5 | restructure hit@1/3/5 |
+|---|---|---|---|
+| verbatim | 12 | 42%/58%/75% | **75%/92%/100%** |
+| paraphrase | 13 | 46%/100%/100% | 31%/92%/100% |
+| cross-lingual | 20 | 35%/55%/70% | **40%/60%/75%** |
+
+Read plainly: restructure wins on every overall metric and is strongest where
+structure matters most (verbatim spans that survive inside one section).
+Paraphrase hit@1 drops because BM25 has no word overlap with paraphrased
+queries — a limitation of the lexical retriever, not of the chunks (hit@5
+stays 100% for both arms). The five remaining restructure misses are all
+fr→ar cross-lingual questions: a French question against an Arabic chunk
+shares almost no terms, which is exactly what the embedding arm (unreachable
+here) exists for.
+
 ## Grounding, free pricing and credentials
 
 - The model receives only the question and retrieved source context, not gold

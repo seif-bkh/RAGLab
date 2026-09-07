@@ -52,7 +52,8 @@ def chunk_fp(cfg) -> str:
         overlap=cfg.CHUNK_OVERLAP_TOKENS,
         split_on_headings=cfg.SPLIT_ON_HEADINGS_FIRST,
         sentence_aware_overlap=cfg.CHUNK_OVERLAP_SENTENCE_AWARE,
-        maps=maps)
+        maps=maps,
+        mode=str(getattr(cfg, 'CHUNKING_MODE', 'restructure')).strip().lower())
 
 
 def ensure_fresh_chunks(collection, cfg) -> None:

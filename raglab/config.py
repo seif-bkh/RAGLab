@@ -170,9 +170,18 @@ EMBEDDING_CACHE_PATH = PROJECT_DIR / "embeddings_cache.json"
 # map is a corpus *version* — retrieval, the citation contract and every published number depend on which
 # segmentation produced them, so switching is a deliberate act, and store.py's chunk fingerprint records
 # which maps were in force (a stale collection refuses to serve rather than mixing two segmentations).
-CHUNKING_MODE = os.getenv("CHUNKING_MODE", "size").strip().lower()
-if CHUNKING_MODE not in {"size", "manual"}:
-    raise ValueError('CHUNKING_MODE must be "size" or "manual", got %r' % CHUNKING_MODE)
+# 'restructure' is the current default strategy (see restructure.py):
+# Stage 1 semantic normalization of messy extraction -> clean hierarchical
+# Markdown, Stage 2 context enrichment (breadcrumb lines above sub-headings
+# and tables), Stage 3 recursive structural chunking over the separator list
+# ["\n# ", "\n## ", "\n### ", "\n\n", "\n", " "].
+CHUNKING_MODE = os.getenv("CHUNKING_MODE", "restructure").strip().lower()
+if CHUNKING_MODE not in {"size", "manual", "restructure"}:
+    raise ValueError('CHUNKING_MODE must be "size", "manual" or "restructure", '
+                     'got %r' % CHUNKING_MODE)
+# Stage 1 of restructure: repair visual-order (word-flipped) Arabic lines from
+# PDF extraction using a bigram plausibility scorer. Set 0 to keep raw order.
+RESTRUCTURE_RTL_REPAIR = os.getenv("RESTRUCTURE_RTL_REPAIR", "1")
 CHUNK_MAP_DIR = Path(os.getenv("CHUNK_MAP_DIR", str(PROJECT_DIR / "benchmarks" / "chunk_maps")))
 # A manual chunk larger than this is treated as a failed review, not a design choice.
 CHUNK_MAX_TOKENS = int(os.getenv("CHUNK_MAX_TOKENS", "900"))

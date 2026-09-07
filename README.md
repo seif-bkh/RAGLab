@@ -10,6 +10,19 @@ Retrieval uses the original query, local ChromaDB/cosine, and no separate chat
 translation model. There is no model/provider fallback. Retired provider choices
 and stale translation-enabled configuration fail before model calls.
 
+Chunking defaults to the **restructure** strategy (`raglab/restructure.py`):
+semantic normalization to hierarchy-explicit Markdown (page/gazette cleanup,
+section-marker extraction, visual-order Arabic repair), context-breadcrumb
+enrichment above every heading and table, then recursive structural splitting
+over `["\n# ", "\n## ", "\n### ", "\n\n", "\n", " "]` at the usual 220/40
+budget. The old token-window mode remains as `CHUNKING_MODE=size`, and the
+chunk fingerprint carries the mode so the two corpora can never be mixed.
+`raglab/harness50.py` benchmarks the two strategies over a 50-question
+ar/fr/en set (`raglab/questions_50.json`) with BM25-only retrieval:
+restructure leads 47% vs 40% hit@1 (75% vs 42% on verbatim cases); see
+`results/harness50/comparison.md` and `raglab/README.md` for the full table
+and caveats.
+
 ```bash
 cd raglab
 python3 -m venv .venv && source .venv/bin/activate

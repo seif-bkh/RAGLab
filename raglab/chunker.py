@@ -56,20 +56,26 @@ def count_tokens(text: str) -> int:
 # Bump this whenever the chunker's ALGORITHM changes chunk boundaries (not
 # merely parameters): collections built by an older version must be rebuilt
 # or their chunks silently carry different (misaligned) text.
-# v2 = paragraph+heading boundaries preserved (loader reflow fix) and
-#      sentence-aligned hard splits; v1 = single-paragraph hard splits.
-CHUNK_FINGERPRINT_VERSION = 3
+# v1 = single-paragraph hard splits; v2 = paragraph+heading boundaries
+#      preserved (loader reflow fix) and sentence-aligned hard splits;
+# v4 = restructure strategy (restructure.py) added as the default mode and
+#      the fingerprint now carries the mode itself, so collections from
+#      different strategies can never be confused (v3 was the pre-mode
+#      fingerprint, superseded without a boundary change).
+CHUNK_FINGERPRINT_VERSION = 4
 
 
 def chunk_fingerprint(chunk_size: int, overlap: int,
                       split_on_headings: bool,
-                      sentence_aware_overlap: bool, maps: str | None = None) -> str:
+                      sentence_aware_overlap: bool, maps: str | None = None,
+                      mode: str | None = None) -> str:
     """Deterministic fingerprint of every chunking input that changes OUTPUT.
 
     Stored in each chunk's metadata at ingest; retrieval refuses to run over a
     collection whose fingerprint differs from the current settings (a stale
     collection makes every hit wrong — the fix is `ingest --reset`)."""
     return (f"chunkv{CHUNK_FINGERPRINT_VERSION}:"
+            f"m{mode or 'size'}:"
             f"s{chunk_size}:o{overlap}:h{int(bool(split_on_headings))}:"
             f"sen{int(bool(sentence_aware_overlap))}:tok{tokenizer_identity()}"
             + (f":maps{maps}" if maps else ""))
@@ -587,10 +593,14 @@ def chunk_all(docs: list[dict], cfg) -> list[Chunk]:
     With CHUNKING_MODE='manual' the boundaries come from the reviewed chunk maps instead, and a document
     without a map is an error rather than a silent fallback: a corpus whose chunks mean two different
     things in two different documents can be interpreted by nobody, grader included."""
-    if str(getattr(cfg, 'CHUNKING_MODE', 'size')).lower() == 'manual':
+    mode = str(getattr(cfg, 'CHUNKING_MODE', 'restructure')).strip().lower()
+    if mode == 'manual':
         import semantic_chunking
         mapped, _problems = semantic_chunking.chunk_documents(docs, cfg)
         return mapped
+    if mode == 'restructure':
+        import restructure
+        return restructure.chunk_documents(docs, cfg)
     all_chunks: list[Chunk] = []
     for doc in docs:
         doc_chunks = chunk_document(
