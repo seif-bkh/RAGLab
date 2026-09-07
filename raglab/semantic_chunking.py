@@ -178,7 +178,11 @@ def propose(doc, *, target_tokens=300, max_tokens=520, min_tokens=60, hard_subje
             entries[-1] = _entry(entries[-1]['start'], end, text)
             continue
         entries.append(_entry(start, end, text))
-    return enforce_one_subject(text, entries, min_tokens=min_tokens, hard=hard_subjects)
+    entries = enforce_one_subject(text, entries, min_tokens=min_tokens,
+                                  hard=hard_subjects)
+    # Same builder/checker contract as the heading list above: the assembled
+    # chunks must never open on the fragment the checker refuses.
+    return _repair_orphan_starts(text, entries)
 
 
 def _entry(start, end, text, idea=None):
@@ -234,6 +238,34 @@ def forced_stub(doc_text, entries, index, min_tokens, *, maximum=900):
     if index + 1 < len(entries) and ok(start, entries[index + 1]['end']):
         return False
     return True
+
+
+def _repair_orphan_starts(text, entries):
+    """The packer may close a run right after a bare marker block ("الفصل 2"),
+    leaving the next chunk to open on the marker's own continuation
+    (" : يحدد...") — a chunk that opens on punctuation. Whether that close
+    happens depends on which token counter is configured, so the boundary is
+    tokenization-dependent even though the defect it creates is not. The rule
+    the checker applies (ORPHAN_TAIL) is therefore enforced here, while the
+    boundary is still movable: the orphan piece joins the chunk before it, so
+    a marker and its text reach the index as one hit. The merge is refused
+    when it would swallow a second subject, and it is impossible for the
+    first entry — a document that literally starts on an orphan tail is a
+    real defect the checker should still report.
+    """
+    fixed = []
+    for entry in entries:
+        start, end = int(entry['start']), int(entry['end'])
+        if fixed:
+            prev_start = int(fixed[-1]['start'])
+            stripped = text[start:end].strip()
+            orphan = (ORPHAN_TAIL.match(stripped)
+                      and not re.match(r'^(?:[-*|]|#{1,6}\s)', stripped))
+            if orphan and one_subject(text, prev_start, end, hard=True):
+                fixed[-1] = _entry(prev_start, end, text)
+                continue
+        fixed.append(entry)
+    return fixed
 
 
 def enforce_one_subject(text, entries, *, min_tokens=20, hard=True):
