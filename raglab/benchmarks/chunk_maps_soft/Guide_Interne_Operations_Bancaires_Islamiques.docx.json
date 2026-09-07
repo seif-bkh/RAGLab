@@ -1,6 +1,7 @@
 {
  "document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
  "source_text_fp": "eb554f026784bccc4173660944e4678b",
+ "tokenizer": "estimator-char4-v1",
  "chunk_count": 18,
  "tokens_total": 8309,
  "note": "drafted by chunk_maps.py (target 620, max 900 tokens); needs human review of each idea label",

@@ -25,7 +25,7 @@ import json
 import re
 from pathlib import Path
 
-from chunker import Chunk, count_tokens
+from chunker import Chunk, count_tokens, tokenizer_identity
 
 # Structure markers that mean "a new idea starts here" in this corpus: markdown headings (the docx
 # exports), Tunisian legal article numbers, and French/Arabic circular section numbers.
@@ -287,14 +287,31 @@ def enforce_one_subject(text, entries, *, min_tokens=20, hard=True):
     return out
 
 
-def validate(doc_text, entries, *, max_tokens=900, min_tokens=20, hard=True):
+def band_note(drafted_with):
+    """Say out loud when the size band could not be judged, instead of reporting a clean pass."""
+    if drafted_with and drafted_with != tokenizer_identity():
+        return (f'sizes not comparable here: map drafted under {drafted_with}, this run counts with '
+                f'{tokenizer_identity()}')
+    return None
+
+
+def validate(doc_text, entries, *, max_tokens=900, min_tokens=20, hard=True, drafted_with=None):  # noqa: C901
     """Return every way this map fails to be a partition of the document into complete ideas.
 
     Empty list means: the chunks are verbatim slices, they cover the document with no gap or overlap,
     each is within the size band, and none swallows a later section heading (which is what 'exactly one
     idea' can be checked as mechanically).
+
+    ``drafted_with`` is the tokenizer identity recorded in the map. When it differs from this run's, the
+    size band and the token-count drift check are skipped, and ``band_note`` says so: those complaints are
+    statements about a tokenization this process does not use, so a map reviewed under cl100k_base is not
+    'invalid' on a machine counting with the fallback estimator - it is just not measurable here. The
+    structural rules (verbatim, complete cover, one subject) hold in both, and those are the ones that
+    protect an answer.
     """
+
     text = str(doc_text or '')
+    bands = drafted_with is None or drafted_with == tokenizer_identity()
     problems = []
     heading_re = re.compile('(?:' + '|'.join(p for p in HEADING_PATTERNS if not p.startswith(r'^\|')) + ')', re.M)
     ordered = sorted(range(len(entries)), key=lambda i: entries[i]['start'])
@@ -317,13 +334,14 @@ def validate(doc_text, entries, *, max_tokens=900, min_tokens=20, hard=True):
         body = text[start:end]
         if not body.strip():
             problems.append(f'chunk {index}: slices only whitespace')
-        if 'tokens' in entry and abs(count_tokens(body) - int(entry['tokens'])) > 8:
+        if (drafted_with is None or drafted_with == tokenizer_identity()) \
+                and 'tokens' in entry and abs(count_tokens(body) - int(entry['tokens'])) > 8:
             problems.append(f'chunk {index}: recorded {entry["tokens"]} tokens, text holds '
                             f'{count_tokens(body)} (the document changed since the map was drafted)')
         size = count_tokens(body)
-        if size > max_tokens:
+        if bands and size > max_tokens:
             problems.append(f'chunk {index}: {size} tokens exceeds the {max_tokens} ceiling')
-        if size < min_tokens and not forced_stub(doc_text, entries, index, min_tokens, maximum=max_tokens):
+        if bands and size < min_tokens and not forced_stub(doc_text, entries, index, min_tokens, maximum=max_tokens):
             problems.append(f'chunk {index}: {size} tokens is below the {min_tokens} floor')
         stripped = body.strip()
         if ORPHAN_TAIL.match(stripped) and not re.match(r'^(?:[-*|]|#{1,6}\s)', stripped):
@@ -414,7 +432,8 @@ def chunk_documents(docs, cfg, *, strict=True, hard=True):
             missing.append(Path(str(doc.get('source'))).name)
             continue
         data = load_map(path, doc)
-        found = validate(doc.get('text'), data['chunks'], max_tokens=maximum, hard=hard)
+        found = validate(doc.get('text'), data['chunks'], max_tokens=maximum, hard=hard,
+                         drafted_with=data.get('tokenizer'))
         if found:
             problems[Path(str(doc.get('source'))).name] = found[:8]
             continue
@@ -438,6 +457,7 @@ def write_map(path, doc, entries, *, note=''):
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {'document': Path(str(doc.get('source'))).name,
                'source_text_fp': text_fingerprint(doc.get('text')),
+               'tokenizer': tokenizer_identity(),
                'chunk_count': len(entries), 'tokens_total': sum(int(e['tokens']) for e in entries),
                'note': note, 'chunks': entries}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')

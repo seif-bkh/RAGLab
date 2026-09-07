@@ -237,7 +237,8 @@ def main(argv=None):
             entries = sc.propose(doc, target_tokens=args.target, max_tokens=args.max_tokens,
                                  min_tokens=args.min_tokens, hard_subjects=not args.soft)
             problems = sc.validate(doc.get('text'), entries, max_tokens=args.max_tokens,
-                                   min_tokens=10, hard=not args.soft)
+                                   min_tokens=10, hard=not args.soft,
+                                   drafted_with=sc.tokenizer_identity())
             payload = sc.write_map(path, doc, entries,
                                    note=f'drafted by chunk_maps.py (target {args.target}, max '
                                         f'{args.max_tokens} tokens); needs human review of each idea label')
@@ -258,11 +259,13 @@ def main(argv=None):
                 continue
             data = sc.load_map(path, doc)
             problems = sc.validate(doc.get('text'), data['chunks'], max_tokens=args.max_tokens,
-                                   hard=not args.soft)
+                                   hard=not args.soft, drafted_with=data.get('tokenizer'))
             sizes = [count_tokens(' '.join(str(doc['text'])[int(e['start']):int(e['end'])].split()))
                      for e in data['chunks']]
             print(f'[check] {name}: {len(data["chunks"])} chunk(s), median {int(statistics.median(sizes))}, '
-                  f'{"OK" if not problems else str(len(problems)) + " problem(s)"}')
+                  f'{"OK" if not problems else str(len(problems)) + " problem(s)"}'
+                  + (' — ' + sc.band_note(data.get('tokenizer'))
+                     if sc.band_note(data.get('tokenizer')) else ''))
             for problem in problems[:6]:
                 print(f'         {problem}')
                 bad += 1
@@ -280,7 +283,8 @@ def main(argv=None):
         except Exception:                                              # noqa: BLE001
             continue
         if not sc.validate(doc.get('text'), data['chunks'], max_tokens=900,
-                           hard=not getattr(args, 'soft', False)):
+                           hard=not getattr(args, 'soft', False),
+                           drafted_with=data.get('tokenizer')):
             usable.add(Path(str(doc.get('source'))).name)
     mapped = usable
     if mapped and len(mapped) < len(docs):

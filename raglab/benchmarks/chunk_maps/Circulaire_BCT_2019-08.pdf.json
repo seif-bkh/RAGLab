@@ -1,6 +1,7 @@
 {
  "document": "Circulaire_BCT_2019-08.pdf",
  "source_text_fp": "468523496e37411180b4e9e05ab551c0",
+ "tokenizer": "estimator-char4-v1",
  "chunk_count": 14,
  "tokens_total": 1729,
  "note": "drafted by chunk_maps.py (target 620, max 900 tokens); needs human review of each idea label",

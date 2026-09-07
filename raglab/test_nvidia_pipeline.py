@@ -1197,7 +1197,10 @@ class ManualChunkMaps(unittest.TestCase):
     def test_map_round_trip_reproduces_the_document(self):
         entries = sc.propose(dict(self.DOC), target_tokens=80, max_tokens=200, min_tokens=20)
         self.assertGreaterEqual(len(entries), 2)
-        self.assertEqual([], sc.validate(self.TEXT, entries, max_tokens=200))
+        # Structure only, on purpose: which token counter is configured decides sizes, not whether the
+        # map is a partition of the document, and a test must not fail for the second reason because of
+        # the first (that is exactly the trap these maps would fall into between a laptop and CI).
+        self.assertEqual([], sc.validate(self.TEXT, entries, max_tokens=10 ** 6, min_tokens=1))
         joined = ''.join(self.TEXT[e['start']:e['end']] for e in entries)
         self.assertEqual(' '.join(self.TEXT.split()), ' '.join(joined.split()),
                          'the chunks must be the document, not a summary of it')
@@ -1209,16 +1212,16 @@ class ManualChunkMaps(unittest.TestCase):
         entries = sc.propose(dict(self.DOC), target_tokens=80, max_tokens=200, min_tokens=20)
         broken = [dict(e) for e in entries]
         broken[0]['end'] = broken[0]['end'] - 40            # opens a hole between chunk 0 and 1
-        problems = sc.validate(self.TEXT, broken, max_tokens=200)
+        problems = sc.validate(self.TEXT, broken, max_tokens=10 ** 6, min_tokens=1)
         self.assertTrue(any('gap' in problem or 'not covered' in problem for problem in problems),
                         problems)
         clipped = [dict(e) for e in entries]
         clipped[0]['start'] = clipped[0]['start'] + 20     # drops the document's opening line
-        found = sc.validate(self.TEXT, clipped, max_tokens=200)
+        found = sc.validate(self.TEXT, clipped, max_tokens=10 ** 6, min_tokens=1)
         self.assertTrue(any('belong to no chunk' in problem for problem in found), found)
         truncated = [dict(e) for e in entries]
         truncated[-1]['end'] = truncated[-1]['end'] - 20   # and its closing one
-        found = sc.validate(self.TEXT, truncated, max_tokens=200)
+        found = sc.validate(self.TEXT, truncated, max_tokens=10 ** 6, min_tokens=1)
         self.assertTrue(any('after it' in problem for problem in found), found)
 
     def test_a_map_refuses_a_changed_document(self):
@@ -1261,8 +1264,12 @@ class ManualChunkMaps(unittest.TestCase):
                           hard_subjects=False)
         hard = sc.propose(dict(self.DOC), target_tokens=200, max_tokens=400, min_tokens=20)
         self.assertGreaterEqual(len(hard), len(soft))
-        self.assertEqual([], sc.validate(self.TEXT, soft, max_tokens=400, hard=False))
-        self.assertEqual([], sc.validate(self.TEXT, hard, max_tokens=400, hard=True))
+        self.assertEqual([], sc.validate(self.TEXT, soft, max_tokens=10 ** 6, min_tokens=1, hard=False))
+        self.assertEqual([], sc.validate(self.TEXT, hard, max_tokens=10 ** 6, min_tokens=1, hard=True))
+        split = lambda rows: sum(len(sc.ARTICLE.findall(self.TEXT[r['start']:r['end']])) > 1
+                                 for r in rows)
+        self.assertEqual(0, split(hard), 'hard mode must never leave two articles in one chunk')
+        self.assertGreater(split(soft), 0, 'soft mode exists precisely to pack short articles together')
 
     def test_chat_runs_on_maps_in_its_own_collection(self):
         with tempfile.TemporaryDirectory() as tmp:

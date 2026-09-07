@@ -1,6 +1,7 @@
 {
  "document": "Loi_2016-48.pdf",
  "source_text_fp": "8ddb72749b9e664aa4f502639fbe81ea",
+ "tokenizer": "estimator-char4-v1",
  "chunk_count": 50,
  "tokens_total": 28390,
  "note": "drafted by chunk_maps.py (target 620, max 900 tokens); needs human review of each idea label",

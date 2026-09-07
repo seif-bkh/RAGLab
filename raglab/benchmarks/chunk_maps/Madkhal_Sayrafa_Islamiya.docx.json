@@ -1,6 +1,7 @@
 {
  "document": "Madkhal_Sayrafa_Islamiya.docx",
  "source_text_fp": "2ffa9c64a15c782d3bacbc427b4807eb",
+ "tokenizer": "estimator-char4-v1",
  "chunk_count": 14,
  "tokens_total": 5799,
  "note": "drafted by chunk_maps.py (target 620, max 900 tokens); needs human review of each idea label",

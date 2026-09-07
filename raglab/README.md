@@ -192,6 +192,13 @@ real embedding calls (~400 for the corpus, cached afterwards) — `chunk_maps.py
 spends nothing and therefore cannot answer that. And these maps are `draft`ed: the `idea` labels are
 unreviewed, and a map whose labels nobody read is a formatter with extra steps.
 
+One caveat travels with those tables: they were computed with `estimator-char4-v1`, because this machine
+could not download the `cl100k_base` BPE file, and CI can. That is also why a map now records the tokenizer
+it was drafted with and `check` refuses to grade sizes across the two — a map reviewed on one machine is
+not invalid on the other, it is just not measurable there. Before manual chunking carries anything real,
+re-draft where cl100k_base is available (`TIKTOKEN_CACHE_DIR` warmed, or in CI) so the boundaries are
+placed against the count the embedder's chunk budget will actually see.
+
 So the pinned harness chunking is unchanged (640/40, and `hard_harness_plan.json` is not touched by this
 feature), for the harder reason as well: chunking is part of the frozen dataset's identity, so adopting
 new maps in the harness means a new corpus version, a re-frozen dataset, and 300 predictions paid again.

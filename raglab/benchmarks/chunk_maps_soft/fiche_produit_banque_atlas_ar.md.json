@@ -1,6 +1,7 @@
 {
  "document": "fiche_produit_banque_atlas_ar.md",
  "source_text_fp": "db4b46e19fb63fb95b6f2c0fa7ab9586",
+ "tokenizer": "estimator-char4-v1",
  "chunk_count": 9,
  "tokens_total": 917,
  "note": "drafted by chunk_maps.py (target 620, max 900 tokens); needs human review of each idea label",
