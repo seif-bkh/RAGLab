@@ -99,6 +99,10 @@ Channels that WORK (use in this order):
    GitHub Actions UI for the user) and in the uploaded artifact
    `real-test-results` (the user can download it; I cannot).
 4. GitHub HTML log pages render client-side — `fetch_page` on them gets nothing.
+5. The ANNO `::warning::` line is self-sufficient by design (overall/by-category/
+   by-language/separation/OOS/flips/misses + per-miss top-1 detail + answer status) —
+   it has been verified twice end-to-end (runs 34140795660, 34141551444) and is the
+   primary interpretation channel.
 
 ## 5. Commit/push discipline (standing user instruction)
 
@@ -143,10 +147,25 @@ Channels that WORK (use in this order):
   - the 5 restructure misses are q26–q30, all fr→ar cross-lingual (documented lexical
     limit; the embedding arm should cover them)
   - OOS max top-1 BM25: base 17.5 vs restructure 18.1
-- **Real-model A/B (NVIDIA embeddings + xKiro/Qwen answer)**: first CI run pending —
-  see the `real-test.yml` workflow; results land in its stdout/artifact and in the
-  `::warning::` annotation (compact numbers). Fill this section in with the run's
-  numbers when it goes green.
+- **Real-model A/B (NVIDIA embeddings + xKiro/Qwen answer)**:
+  - Retrieval A/B completed twice (runs 34140795660, 34141551444; both arms, k=20):
+    overall hit@1/3/5 — size `67/89/100` vs restructure `73–76/84–87/89–91`.
+    Restructure wins hit@1 (+6–9 pp) driven by paraphrase (+15 pp), cross-lingual
+    (+10–15 pp), fr (+27 pp), en (+7–14 pp); it loses a few recalls at top-20 that
+    size hits (size = 0 misses both runs).
+  - Persistent restructure misses (both runs): q01, q02, q03 (ar, Circulaire
+    murabaha/salam definitions), q38 (en, same circular) — top-1 lands on
+    chapter-heading chunks ("الفصل4"/"الفصل 7") or the Guide's murabaha section
+    instead of the definition sub-chunk; q44 (en, Madkhal 1963) is borderline and
+    jitters between runs.
+  - **Run-to-run jitter exists**: hosted NVIDIA embeddings are not bit-reproducible,
+    so borderline questions move ±1 place between runs (q44 missed run 1, hit run 2;
+    cross-lingual 90→95). Treat differences smaller than ~1 question as noise.
+  - Answer smoke: first run failed with `provider_error` — xKiro 502 "temporarily at
+    capacity" (transient, NOT a key problem). The workflow now retries the answer 3×
+    with 90s backoff; a fully green run (evals + answer) is still the goal.
+  - When a green run lands, fold its numbers into this section and into
+    `raglab/results/harness50/comparison.md`.
 
 ## 8. Gotchas (learned the hard way — do not relearn)
 

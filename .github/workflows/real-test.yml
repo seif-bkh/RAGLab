@@ -102,14 +102,26 @@ jobs:
       # reported as data (below) instead of hiding the tables.
       # NOTE: GitHub wraps run-steps in `bash -e -o pipefail`, so a failing command aborts
       # the script BEFORE any `status=$?` capture. The `|| status=$?` idiom is required.
+      # The xKiro free tier returns transient "temporarily at capacity" HTTP 502s (observed
+      # 2026-09-07), so the attempt is retried with a backoff. The gateway client itself
+      # already retries once internally (free_gateway.FreeGatewayClient, attempts=2).
       - name: Answer smoke test — xKiro/Qwen cited answer (restructure collection loaded)
         continue-on-error: true
         working-directory: raglab
         run: |
-          status=0
-          python main.py answer "ما هي المرابحة؟" --query-lang ar \
-            --output results/harness50/real_answer_murabaha.json \
-            > /tmp/raglab_ci/answer.log 2>&1 || status=$?
+          status=1
+          for attempt in 1 2 3; do
+            status=0
+            python main.py answer "ما هي المرابحة؟" --query-lang ar \
+              --output results/harness50/real_answer_murabaha.json \
+              > /tmp/raglab_ci/answer.log 2>&1 || status=$?
+            echo "attempt $attempt/3 -> exit $status"
+            if [ "$status" -eq 0 ]; then break; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "transient failure expected on the free tier; waiting 90s before retry"
+              sleep 90
+            fi
+          done
           echo "$status" > /tmp/raglab_ci/answer_status
           cat /tmp/raglab_ci/answer.log
 
