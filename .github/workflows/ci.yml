@@ -38,6 +38,20 @@ jobs:
           python -m unittest -v test_nvidia_pipeline test_hard_harness
         working-directory: raglab
 
+      # This sandbox cannot fetch workflow logs, and that cost a whole round trip once already: a
+      # failure-only annotation carrying the reproduction is readable through the API instead. It re-runs
+      # the same two offline commands, so it spends nothing and changes nothing.
+      - name: Report which offline test failed, for a runner whose logs cannot be fetched
+        if: failure()
+        run: |
+          cd raglab
+          set +e
+          { python tests_offline.py; python -m unittest test_nvidia_pipeline test_hard_harness; } \
+            > /tmp/offline.txt 2>&1
+          message=$(tail -c 1400 /tmp/offline.txt | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+          echo "::error::offline reproduction: $message"
+        shell: bash
+
       - name: Offline inspect (load + chunk only, zero API calls)
         run: python main.py inspect
         working-directory: raglab

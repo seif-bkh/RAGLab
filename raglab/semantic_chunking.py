@@ -324,7 +324,8 @@ def validate(doc_text, entries, *, max_tokens=900, min_tokens=20, hard=True, dra
                             'no chunk')
         last = int(entries[ordered[-1]]['end'])
         if last < len(text) and text[last:].strip():
-            problems.append(f'the map ends at character {last}, so the document still has '                            f'{len(text) - last} characters of text after it')
+            problems.append(f'the map ends at character {last}, so the document still has '
+                            f'{len(text) - last} characters of text after it')
     for position, index in enumerate(ordered):
         entry = entries[index]
         start, end = int(entry['start']), int(entry['end'])
@@ -354,8 +355,6 @@ def validate(doc_text, entries, *, max_tokens=900, min_tokens=20, hard=True, dra
             same = [head for head in tops if len(head.split()[0]) == shallow]
             # '## 1. x', '### 1.1 y', '### 1.2 z' is one section with subsections. The parent number is
             # what makes it one idea; two children of the same parent are not two subjects.
-            parents = {re.match(r'(?:#+\s*)?(\d+(?:\.\d+)?)', head.replace('#', '').strip())
-                       for head in same}
             trimmed = sorted({(m.group(1) or '').rsplit('.', 1)[0] if m else ''
                               for m in (re.match(r'(?:#+\s*)?(\d+(?:\.\d+)?)',
                                                  head.replace('#', '').strip()) for head in same)})

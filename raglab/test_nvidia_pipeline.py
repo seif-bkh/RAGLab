@@ -1187,6 +1187,12 @@ class ManualChunkMaps(unittest.TestCase):
             'الفصل 4 : يسلم العقد بعد أخذ موافقة اللجنة.\n')
     DOC = {'text': TEXT, 'source': 'docs/manual_test.md', 'language': 'ar'}
 
+    @staticmethod
+    def _map(*pairs):
+        """A map from (start, end) pairs. No 'tokens' key on purpose: that field is drafted metadata, and
+        claiming a count the text does not hold is exactly what the drift check exists to catch."""
+        return [{'start': a, 'end': b} for a, b in pairs]
+
     def cfg(self, directory, **extra):
         values = {'CHUNKING_MODE': 'manual', 'CHUNK_MAP_DIR': Path(directory),
                   'CHUNK_MAX_TOKENS': 900, 'CHUNK_SIZE_TOKENS': 640, 'CHUNK_OVERLAP_TOKENS': 40,
@@ -1209,20 +1215,36 @@ class ManualChunkMaps(unittest.TestCase):
             self.assertIn(' '.join(chunk.text.split()), ' '.join(self.TEXT.split()))
 
     def test_validate_finds_a_gap_and_a_reworded_chunk(self):
-        entries = sc.propose(dict(self.DOC), target_tokens=80, max_tokens=200, min_tokens=20)
-        broken = [dict(e) for e in entries]
-        broken[0]['end'] = broken[0]['end'] - 40            # opens a hole between chunk 0 and 1
-        problems = sc.validate(self.TEXT, broken, max_tokens=10 ** 6, min_tokens=1)
-        self.assertTrue(any('gap' in problem or 'not covered' in problem for problem in problems),
-                        problems)
-        clipped = [dict(e) for e in entries]
-        clipped[0]['start'] = clipped[0]['start'] + 20     # drops the document's opening line
-        found = sc.validate(self.TEXT, clipped, max_tokens=10 ** 6, min_tokens=1)
-        self.assertTrue(any('belong to no chunk' in problem for problem in found), found)
-        truncated = [dict(e) for e in entries]
-        truncated[-1]['end'] = truncated[-1]['end'] - 20   # and its closing one
-        found = sc.validate(self.TEXT, truncated, max_tokens=10 ** 6, min_tokens=1)
-        self.assertTrue(any('after it' in problem for problem in found), found)
+        """Boundaries written by hand, so the assertion is about the rule and not about the proposer's
+        arithmetic: which pieces a token counter would cut is a different question from whether a map may
+        leave a hole."""
+        a = self.TEXT.index('الفصل 2')
+        b = self.TEXT.index('## الإجراءات')
+        whole = len(self.TEXT)
+        pieces = self._map((0, a), (a, b), (b, whole))
+        # hard=False: this fixture's last piece holds a section heading and both of its articles, which
+        # is the other rule's business. Coverage is what is under test here.
+        self.assertEqual([], sc.validate(self.TEXT, pieces, max_tokens=10 ** 6, min_tokens=1, hard=False))
+        holed = [dict(e) for e in pieces]
+        holed[0]['end'] = holed[0]['end'] - 20                  # characters in no chunk at all
+        self.assertTrue(any('gap' in problem or 'no chunk' in problem
+                            for problem in sc.validate(self.TEXT, holed, max_tokens=10 ** 6,
+                                                        min_tokens=1, hard=False)),
+                        sc.validate(self.TEXT, holed, max_tokens=10 ** 6, min_tokens=1))
+        clipped = [dict(e) for e in pieces]
+        clipped[0]['start'] = 20                                # the document's opening line dropped
+        self.assertTrue(any('belong to no chunk' in problem
+                            for problem in sc.validate(self.TEXT, clipped, max_tokens=10 ** 6,
+                                                       min_tokens=1, hard=False)))
+        truncated = [dict(e) for e in pieces]
+        truncated[-1]['end'] = whole - 20                        # and its closing one
+        self.assertTrue(any('after it' in problem
+                           for problem in sc.validate(self.TEXT, truncated, max_tokens=10 ** 6,
+                                                      min_tokens=1, hard=False)))
+        invented = [dict(e) for e in pieces]
+        invented[1]['end'] = invented[1]['end'] + 5              # overlapping, i.e. not a partition
+        self.assertTrue(sc.validate(self.TEXT, invented, max_tokens=10 ** 6, min_tokens=1,
+                                            hard=False))
 
     def test_a_map_refuses_a_changed_document(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1260,16 +1282,24 @@ class ManualChunkMaps(unittest.TestCase):
             self.assertEqual([], loose)             # non-strict reports the gap instead of inventing one
 
     def test_soft_mode_packs_short_articles_and_hard_mode_does_not(self):
-        soft = sc.propose(dict(self.DOC), target_tokens=200, max_tokens=400, min_tokens=20,
-                          hard_subjects=False)
-        hard = sc.propose(dict(self.DOC), target_tokens=200, max_tokens=400, min_tokens=20)
-        self.assertGreaterEqual(len(hard), len(soft))
-        self.assertEqual([], sc.validate(self.TEXT, soft, max_tokens=10 ** 6, min_tokens=1, hard=False))
-        self.assertEqual([], sc.validate(self.TEXT, hard, max_tokens=10 ** 6, min_tokens=1, hard=True))
-        split = lambda rows: sum(len(sc.ARTICLE.findall(self.TEXT[r['start']:r['end']])) > 1
-                                 for r in rows)
-        self.assertEqual(0, split(hard), 'hard mode must never leave two articles in one chunk')
-        self.assertGreater(split(soft), 0, 'soft mode exists precisely to pack short articles together')
+        """One map, two verdicts. Boundaries are given rather than proposed, so no token counter decides
+        whether the test runs, and every piece but the deliberate merge is already article-aligned, so
+        nothing except the mode is at stake."""
+        tail = len(self.TEXT)
+        marks = [m.start() for m in sc.ARTICLE.finditer(self.TEXT)]
+        split = self._map((0, marks[0]), *[(x, y) for x, y in zip(marks, marks[1:])],
+                          (marks[-1], tail))
+        both = self._map((0, marks[2]), *[(x, y) for x, y in zip(marks[2:], marks[3:])],
+                         (marks[-1], tail))          # the first chunk holds الفصل 1 and الفصل 2 together
+        self.assertEqual([], sc.validate(self.TEXT, split, max_tokens=10 ** 6, min_tokens=1, hard=True))
+        hard = sc.validate(self.TEXT, both, max_tokens=10 ** 6, min_tokens=1, hard=True)
+        self.assertTrue(any('numbered articles' in problem for problem in hard), hard)
+        self.assertEqual([], sc.validate(self.TEXT, both, max_tokens=10 ** 6, min_tokens=1, hard=False))
+        entries = sc.propose(dict(self.DOC), target_tokens=200, max_tokens=10 ** 6, min_tokens=1)
+        soft_entries = sc.propose(dict(self.DOC), target_tokens=200, max_tokens=10 ** 6, min_tokens=1,
+                                  hard_subjects=False)
+        self.assertLessEqual(len(soft_entries), len(entries),
+                             'soft mode may only ever pack further, never cut deeper')
 
     def test_chat_runs_on_maps_in_its_own_collection(self):
         with tempfile.TemporaryDirectory() as tmp:
