@@ -16,7 +16,3 @@ raglab/benchmark_cache/
 
 # Local tokenizer/package cache
 .cache/
-
-# Accepted harness families: restored from CI artifacts by ./raglab/local.sh restore,
-# not committed (chunk_maps.py measure reads them when present, and reports what it found).
-raglab/benchmarks/hard_harness_accepted/
