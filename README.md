@@ -24,15 +24,20 @@ restructure leads 47% vs 40% hit@1 (75% vs 42% on verbatim cases); see
 and caveats.
 
 The same A/B also runs on the **real models** — pinned NVIDIA nemotron
-embeddings for both arms plus one cited xKiro/Qwen answer — via
+embeddings for both arms plus one retrieved, cited, validated answer (LLM
+role: `nvidia/nemotron-3.5-lightning-30b-a3b` via the NVIDIA build
+endpoint, with a Google free-tier fallback) — via
 `.github/workflows/real-test.yml`. It spends API calls, so it is
-**manual-only**: Actions → "RAGLab real test" → Run workflow (or
-`gh workflow run real-test.yml --ref <branch>`; keys are repository
-secrets). The full tables land in the run's stdout and the
-`real-test-results` artifact, and a compact key-number summary is posted
-as a check-run annotation. `raglab/run_real_test.sh` runs the same
-two-arm evaluation locally wherever the endpoints are reachable and
-`raglab/.env` is filled in.
+**manual-only**: Actions → "RAGLab real test" → Run workflow, or push a
+tag `real-test-*` (the dispatch API only sees the default branch). The
+full tables land in the run's stdout and the `real-test-results`
+artifact, and a compact key-number summary is posted as a check-run
+annotation (readable via the annotations API). Green run so far:
+34144251576 — restructure leads hit@1 (73–76% vs 67% for the legacy
+220/40 arm, +15 pp on paraphrase, +27 pp on French queries) while the
+legacy arm keeps perfect top-20 recall (see AGENTS.md §7).
+`raglab/run_real_test.sh` runs the same two-arm evaluation locally
+wherever the endpoints are reachable and `raglab/.env` is filled in.
 
 ```bash
 cd raglab
