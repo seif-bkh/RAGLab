@@ -62,12 +62,17 @@ python app.py --ask "..."    # one grounded answer, then exit
 python app.py --no-keycheck  # skip the startup key questions
 ```
 
-The menu covers: status/doctor, provider & model switching, API keys, corpus
-inspection (no API calls), the embedding sanity check (one batched call),
-ingest/rebuild, retrieval-only queries, one-shot grounded answers, the chat
-REPL, evaluation over a question set, lab settings (chunking mode, k, retrieval
-mode, language filter, corpus dirs), and offline diagnostics (harness50 A/B,
-the read-only xKiro catalog).
+The menu covers: status/doctor (keys, SDKs, tokenizer, index state), provider & model
+switching, API keys, corpus inspection (no API calls), chunk search (is a quote inside
+ONE chunk — the invalid_output diagnostic), the embedding sanity check (one batched
+call), ingest/rebuild, retrieval-only queries, one-shot grounded answers (with an
+offer to retry when the citation gate rejects a reply), the chat REPL, evaluation
+over a question set, lab settings (chunking mode, k, retrieval mode, language filter,
+corpus dirs), and offline diagnostics (harness50 A/B, the read-only xKiro catalog).
+Pure greetings/thanks ("bonjour", "hello", "السلام عليكم", …) are answered locally in the
+detected language with zero retrieval and zero model calls — they assert nothing about the
+corpus, so they never enter the citation gate (a greeting that also contains a question,
+e.g. "bonjour, what is Murabaha?", goes through the full grounded path).
 
 Policy: the console is a lab surface with the same standing as `chat.py`. The
 supported pipeline stays pinned in `pipeline_policy.py` (NVIDIA nemotron

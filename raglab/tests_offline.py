@@ -1022,4 +1022,55 @@ finally:
     app_mod.ENV_PATH = _app_env
     app_mod.STATE_PATH = _app_state_path
 
+# --- app.py: locate_text (the quote-vs-chunk-boundary diagnostic) -----------
+# Same normalization as the citation gate (answer.normalized_quote), so 'full'
+# is exactly "can a verbatim quote of this text pass from that chunk".
+_rows = [
+    ("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu", "note.md", 0, "Fees"),
+    ("payment is due in january", "note.md", 1, "Fees"),
+]
+_loc = app_mod.locate_text("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu", _rows)
+check("app: locate_text finds text contained in one chunk",
+      len(_loc["full"]) == 1 and _loc["full"][0][1] == "note.md" and _loc["full"][0][2] == 0)
+_loc = app_mod.locate_text("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu "
+                           "payment is due in january", _rows)
+check("app: locate_text flags text crossing chunk boundaries",
+      not _loc["full"] and _loc["head"][0][2] == 0 and _loc["tail"][0][2] == 1
+      and not [r for r in _loc["head"] if r in _loc["tail"]],
+      f"head={[r[2] for r in _loc['head']]} tail={[r[2] for r in _loc['tail']]}")
+# Same length on both edges, one word changed in the middle: the edges sit in
+# one chunk but the whole text does not -> paraphrase, not boundary-crossing.
+_loc = app_mod.locate_text("alpha beta gamma delta epsilon xylo eta theta iota kappa lambda mu", _rows)
+check("app: locate_text separates paraphrase from boundary-crossing",
+      not _loc["full"] and [r for r in _loc["head"] if r in _loc["tail"]],
+      f"head={[r[2] for r in _loc['head']]} tail={[r[2] for r in _loc['tail']]}")
+_loc = app_mod.locate_text("completely absent text", _rows)
+check("app: locate_text reports absent text",
+      not _loc["full"] and not _loc["head"] and not _loc["tail"])
+_loc = app_mod.locate_text("  Alpha   BETA gamma delta epsilon zeta eta theta iota kappa lambda mu  ", _rows)
+check("app: locate_text normalizes whitespace/case like the gate",
+      len(_loc["full"]) == 1)
+
+# --- app.py: greeting/smalltalk short-circuit (local, zero calls) -----------
+check("app: greeting detection (fr/en/ar, punctuation-only tail)",
+      app_mod.is_greeting("bonjour") and app_mod.is_greeting("Bonjour !")
+      and app_mod.is_greeting("salut,") and app_mod.is_greeting("merci beaucoup")
+      and app_mod.is_greeting("hello") and app_mod.is_greeting("hi!")
+      and app_mod.is_greeting("good morning") and app_mod.is_greeting("thank you")
+      and app_mod.is_greeting("السلام عليكم") and app_mod.is_greeting("شكرا جزيلا")
+      and app_mod.is_greeting("صباح الخير"))
+check("app: real questions are never treated as greetings",
+      not app_mod.is_greeting("bonjour, what is murabaha?")
+      and not app_mod.is_greeting("what is murabaha")
+      and not app_mod.is_greeting("hello, qui est le directeur ?")
+      and not app_mod.is_greeting("مرابحة")
+      and not app_mod.is_greeting("hi what is salam financing")
+      and not app_mod.is_greeting("")
+      and not app_mod.is_greeting("   "))
+check("app: greeting language beats the single-word detector",
+      app_mod.greeting_language("bonjour") == "fr"
+      and app_mod.greeting_language("merci beaucoup") == "fr"
+      and app_mod.greeting_language("hello") == "en"
+      and app_mod.greeting_language("السلام عليكم") == "ar")
+
 sys.exit(0 if ok else 1)

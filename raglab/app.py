@@ -7,7 +7,9 @@ Run it from this folder, inside the same virtualenv as main.py:
 
 You get a menu over the whole lab — corpus inspection, ingestion, retrieval,
 grounded answers, a chat REPL, evaluation, embedding sanity checks, offline
-diagnostics — plus the two things that used to mean editing files by hand:
+diagnostics, a chunk-search tool that says whether any quote lives inside ONE
+chunk (the invalid_output diagnostic) — plus the two things that used to mean
+editing files by hand:
 
   * switching providers and models. The embedding slot offers every provider
     registered in embedder.build_embedder (nvidia, gemini, jina, huggingface,
@@ -562,13 +564,15 @@ class GoogleChatClient:
         return candidates[0]
 
     def chat(self, model, messages, *, max_tokens=4096):
+        import time
         from llm_smoke import google_call
         self.calls += 1
+        started = time.monotonic()
         text, error = google_call(model, self.api_key, messages, max_tokens)
         if error:
             raise RuntimeError(error)
         return {"text": text, "requested_model": model, "served_model": model,
-                "usage": {}, "seconds": 0.0}
+                "usage": {}, "seconds": round(time.monotonic() - started, 3)}
 
 
 def build_generator(local: SimpleNamespace):
@@ -679,6 +683,28 @@ def collection_count(state: dict):
         return None
 
 
+def stored_index_info(state: dict):
+    """(count, stored_chunk_fp) of the profile's collection; fp None when absent.
+
+    The chunk fingerprint embeds the tokenizer identity ('…:tok<name>:…'), so
+    comparing it with this machine's tokenizer_identity() answers the classic
+    cross-device puzzle: two machines that ingested 'the same' corpus with
+    different tokenizer availability produce different chunk boundaries, and a
+    sentence whole inside one chunk on machine A is split across two on B.
+    """
+    try:
+        from store import _client
+        client = _client(build_lab_config(state))
+        collection = client.get_collection(collection_name(state))
+        count = collection.count()
+        if not count:
+            return 0, None
+        metas = collection.get(include=["metadatas"], limit=1).get("metadatas") or [{}]
+        return count, (metas[0] or {}).get("chunk_fp")
+    except Exception:                                        # noqa: BLE001 — absent/chromadb missing
+        return 0, None
+
+
 # ---------------------------------------------------------------------------
 # Small console helpers
 # ---------------------------------------------------------------------------
@@ -765,6 +791,15 @@ def action_status(state: dict) -> None:
     print(f"chunking    : {state['chunking']['mode']}"
           + (f" ({state['chunking']['size']}/{state['chunking']['overlap']} tokens)"
              if state["chunking"]["mode"] == "size" else ""))
+    try:
+        from chunker import tokenizer_identity
+        tokenizer = tokenizer_identity()
+        note = ("" if tokenizer == "cl100k_base" else
+                "  — WARNING: fallback estimator; chunk boundaries differ from a real "
+                "cl100k_base build (set TIKTOKEN_CACHE_DIR)")
+        print(f"tokenizer   : {tokenizer}{note}")
+    except Exception as exc:                                 # noqa: BLE001 — report, never crash
+        print(f"tokenizer   : unavailable ({safe_error(exc)})")
     print(f"retrieval   : k={state['retrieval']['top_k']} mode={state['retrieval']['mode']}"
           f" lang_filter={state['retrieval']['lang_filter'] or 'none'}"
           f" neighbor_radius={state['retrieval']['neighbor_radius']}")
@@ -795,6 +830,14 @@ def action_status(state: dict) -> None:
     count = collection_count(state)
     print(f"\nIndex for this profile: {collection_name(state)} — "
           + (f"{count} chunk(s)" if count is not None else "count unavailable (is chromadb installed?)"))
+    _count, stored_fp = stored_index_info(state)
+    stored_tok = re.search(r"tok([^:]+)", stored_fp or "")
+    if stored_tok:
+        from chunker import tokenizer_identity
+        current_tok = tokenizer_identity()
+        match = "matches this machine" if stored_tok.group(1) == current_tok else \
+            f"DIFFERS from this machine's {current_tok} — boundaries here are not what the index was built with"
+        print(f"index built with tokenizer: {stored_tok.group(1)} ({match})")
 
     print("\nQuestion sets available")
     for name in ("questions.json", "questions_50.json", "questions_real.json"):
@@ -959,6 +1002,105 @@ def action_inspect(state: dict) -> None:
     print("=" * 78)
 
 
+# ---------------------------------------------------------------------------
+# Quote-vs-chunk diagnostic — the "why was my quote rejected" tool
+# ---------------------------------------------------------------------------
+
+def _search_rows(state: dict):
+    """(description, rows) with rows = [(text, source, index, heading), ...].
+
+    Prefers the STORED chunks of the current profile — they are literally what
+    retrieval supplied to the model — and falls back to a fresh offline
+    chunking with the current settings when that index is empty.
+    """
+    local = build_lab_config(state)
+    try:
+        from store import _client
+        client = _client(local)
+        collection = client.get_collection(local.CHROMA_COLLECTION_NAME)
+        count = collection.count()
+    except Exception:                                   # noqa: BLE001 — chroma absent/unbuilt
+        count = 0
+    if count:
+        got = collection.get(include=["documents", "metadatas"])
+        rows = [(text, (meta or {}).get("document") or (meta or {}).get("source") or "?",
+                 (meta or {}).get("chunk_index"), (meta or {}).get("heading") or "")
+                for text, meta in zip(got.get("documents") or [], got.get("metadatas") or [])]
+        return (f"{count} stored chunk(s) in {local.CHROMA_COLLECTION_NAME} "
+                "(exactly what retrieval supplies)"), rows
+    from chunker import chunk_all
+    from loader import load_all
+    chunks = chunk_all(load_all(data_dirs(state)), local)
+    rows = [(chunk.text, chunk.source, chunk.index, chunk.heading) for chunk in chunks]
+    return (f"{len(rows)} freshly chunked chunk(s) with the current settings "
+            "(the profile index is empty)"), rows
+
+
+def locate_text(needle: str, rows):
+    """Where does a quote/phrase live relative to the chunk boundaries?
+
+    Uses the citation gate's own normalization (answer.normalized_quote), so
+    'full' being non-empty means a verbatim quote of `needle` CAN pass the
+    gate from that chunk. 'head'/'tail' locate the first/last ~24 characters
+    when no single chunk holds the whole text (a quote crossing a chunk
+    boundary can never validate, however faithfully the model copies it).
+    """
+    from answer import normalized_quote
+    target = normalized_quote(needle)
+    if not target:
+        return {"needle": "", "full": [], "head": [], "tail": []}
+    normalized = [(normalized_quote(text), row) for row in rows for text in [row[0]]]
+    window = 24 if len(target) > 24 else len(target)
+    return {
+        "needle": target,
+        "full": [row for norm, row in normalized if target in norm],
+        "head": [row for norm, row in normalized if target[:window] in norm],
+        "tail": [row for norm, row in normalized if target[-window:] in norm],
+    }
+
+
+def action_search_chunks(state: dict) -> None:
+    print("=" * 78)
+    print("SEARCH CHUNKS — is this text inside ONE chunk? (no API calls)")
+    print("=" * 78)
+    needle = prompt("text to find (a phrase, or the full rejected quote): ")
+    if not needle:
+        return
+    description, rows = _search_rows(state)
+    print(f"[search] scanned {description}")
+    found = locate_text(needle, rows)
+    if found["full"]:
+        print(f"[search] the FULL text is inside {len(found['full'])} chunk(s) — a verbatim "
+              "quote of it can pass the citation gate:")
+        for _text, source, index, heading in found["full"]:
+            print(f"  - {source}::chunk_{index:04d} | heading={heading or '(none)'}")
+        if confirm("print the full text of the first hit?"):
+            text, source, index, heading = found["full"][0]
+            print("-" * 78)
+            print(f"{source}::chunk_{index:04d} | heading={heading or '(none)'}")
+            print(text)
+        return
+    head, tail = found["head"], found["tail"]
+    shared = [row for row in head if row in tail]
+    if head and tail and not shared:
+        print("[search] the text CROSSES chunk boundaries — no single chunk contains it, so a "
+              "one-chunk verbatim quote of the whole text can never validate:")
+        for _text, source, index, heading in head:
+            print(f"  - starts in {source}::chunk_{index:04d} (heading={heading or '(none)'})")
+        for _text, source, index, heading in tail:
+            print(f"  - ends in   {source}::chunk_{index:04d} (heading={heading or '(none)'})")
+        print("[search] fixes: a larger k or neighbor radius >= 1 (adjacent chunks are supplied "
+              "too, and each claim may quote any of them), or a different chunking mode/size.")
+        return
+    if shared or head or tail:
+        print("[search] the text's edges sit in one chunk but the middle differs — the wording "
+              "pasted is not the corpus wording (a paraphrase, or characters the lab's "
+              "normalization does not fold, e.g. ى vs ي).")
+        return
+    print("[search] not found anywhere in the chunked corpus — the quote was invented or differs "
+          "beyond the lab's normalization.")
+
+
 def action_embed_test(state: dict) -> None:
     if not ensure_slot_key(state, "embedding"):
         print("[app] no key for the selected embedding provider — cancelled.")
@@ -1014,8 +1156,70 @@ def action_query(state: dict) -> None:
     print_hits(hits, variants, mode)
 
 
+# ---------------------------------------------------------------------------
+# Greetings / smalltalk — answered locally, zero calls
+# ---------------------------------------------------------------------------
+# A pure greeting is not a document question: the grounded contract would only
+# force the model to abstain (correctly) after paying for retrieval + a
+# completion. Like answer.local_private_refusal, this is decided locally before
+# any provider call — and because it asserts NOTHING about the corpus, it never
+# enters the citation gate. Anchored to the WHOLE input, so "bonjour, what is
+# murabaha?" still goes through the full grounded path.
+GREETING_RE = re.compile(
+    r"^(?:bonjour|bonsoir|salut|coucou|merci(?:\s+beaucoup)?|de\s+rien"
+    r"|hello|hi|hey|good\s+(?:morning|afternoon|evening)|thank\s+you"
+    r"|thanks(?:\s+(?:a\s+lot|very\s+much))?"
+    r"|السلام\s+عليكم|سلام\s+عليكم|مرحبا|مرحبتين|أهلا|اهلا|صباح\s+الخير"
+    r"|مساء\s+الخير|شكرا|شكراً|شكرا\s+جزيلا)[\s!.,;?؟…]*$",
+    re.IGNORECASE)
+
+GREETING_REPLIES = {
+    "fr": "Bonjour ! Je suis l'assistant documentaire du laboratoire : posez une question sur le "
+          "corpus (ex. « Qu'est-ce que la Murabaha ? », « ما هي المرابحة؟ »). Une salutation "
+          "n'interroge aucun document, donc aucun appel au modèle n'a été fait.",
+    "en": "Hello! I'm the lab's document-grounded assistant: ask something about the corpus "
+          "(e.g. 'What is Murabaha?', « Qu'est-ce que la Murabaha ? », « ما هي المرابحة؟ »). "
+          "A greeting queries no document, so no model call was made.",
+    "ar": "مرحبا! انا مساعد هذا المختبر للإجابة من المستندات: اطرح سؤالا عن المدونة (مثال: "
+          "«ما هي المرابحة؟» أو What is Murabaha). التحية لا تستند الى اي مستند، لذلك لم يتم "
+          "اي استدعاء للنموذج.",
+}
+
+
+def is_greeting(text: str) -> bool:
+    return bool(GREETING_RE.match((text or "").strip()))
+
+
+def greeting_language(text: str) -> str:
+    """fr/ar/en for a pure greeting. The generic detector returns 'en' for a
+    single French word (no stopwords to bite on), so French/Arabic tokens are
+    recognized explicitly — the reply should not answer 'bonjour' in English."""
+    lowered = (text or "").strip().lower()
+    if any(word in lowered for word in ("bonjour", "bonsoir", "salut", "coucou",
+                                        "merci", "de rien")):
+        return "fr"
+    if re.search(r"[\u0600-\u06FF]", lowered):
+        return "ar"
+    return "en"
+
+
+def maybe_greeting_reply(question: str, *, language: str = None) -> bool:
+    """Print the local greeting reply and return True when input is pure smalltalk."""
+    if not is_greeting(question):
+        return False
+    language = language or greeting_language(question)
+    print(GREETING_REPLIES.get(language, GREETING_REPLIES["en"]))
+    print("[app] greeting handled locally — no retrieval, no model call, nothing asserted "
+          "about the documents.")
+    return True
+
+
 def one_turn(state, runtime, question: str, *, show_context: bool = False) -> dict:
     """A single grounded question through chat.ask — shared by menu 8 and --ask."""
+    if maybe_greeting_reply(question):
+        return {"status": "greeting", "reason": "smalltalk", "validation_ok": True,
+                "model": "(none — answered locally)", "claims": [], "sources": [],
+                "question": question, "retrieved": 0, "seconds": 0.0}
     local, embedder, collection, generator = runtime
     result = chat_mod.ask(local, embedder, collection, generator, question,
                           top_k=local.ANSWER_TOP_K,
@@ -1025,16 +1229,31 @@ def one_turn(state, runtime, question: str, *, show_context: bool = False) -> di
     print(chat_mod.format_turn(result, show_context=show_context))
     print(f"\n[app] status={result['status']}/{result.get('reason')} · model={result['model']} · "
           f"{result.get('seconds', 0)}s · retrieved={result.get('retrieved', 0)} · "
-          f"cached={result.get('cached', False)}")
+          f"cached={result.get('cached', False)}"
+          + (f" · failed check: {result['error']}" if result.get("error") else ""))
+    if result.get("reason") == "invalid_output":
+        # The answer text can be factually right and still be refused: the contract
+        # requires every claim to quote one retrieved chunk EXACTLY. Say which check
+        # failed and what usually causes it, because "invalid_output" alone is opaque.
+        print("[app] the citation gate rejected the reply. Common causes: a quote that crosses a "
+              "chunk boundary (check with the search-chunks action), a punctuation/character "
+              "variant (– vs -, ى vs ي, model 'correcting' spelling), or malformed JSON.")
+        if confirm("ask the model again? (hosted models are not bit-deterministic; "
+                   "a fresh reply often quotes verbatim)"):
+            return one_turn(state, runtime, question, show_context=show_context)
+    if result.get("status") == "error" and confirm("provider error — ask again?"):
+        return one_turn(state, runtime, question, show_context=show_context)
     return result
 
 
 def action_answer(state: dict) -> None:
-    runtime = prepare_runtime(state, need_generator=True)
-    if runtime is None:
-        return
     question = prompt("\nquestion (blank to cancel): ")
     if not question:
+        return
+    if maybe_greeting_reply(question):      # a greeting needs no index and no model
+        return
+    runtime = prepare_runtime(state, need_generator=True)
+    if runtime is None:
         return
     one_turn(state, runtime, question)
 
@@ -1058,6 +1277,8 @@ def action_chat(state: dict) -> None:
           f"languages: {', '.join(settings['corpus_languages']) or '?'}")
     stream = sys.stdin if not sys.stdin.isatty() else chat_mod._prompted_lines()
     for question in chat_mod.read_questions(stream, settings):
+        if maybe_greeting_reply(question, language=settings.get("language")):
+            continue
         try:
             result = chat_mod.ask(local, embedder, collection, generator, question,
                                   top_k=settings["top_k"],
@@ -1072,7 +1293,8 @@ def action_chat(state: dict) -> None:
         chat_mod.log_turn(settings["log"], result)
         print(chat_mod.format_turn(result, show_context=settings["show_context"]))
         print(f"\n[app] {result['status']}/{result.get('reason')} · {result['model']} · "
-              f"{result.get('seconds', 0)}s · k={settings['top_k']}")
+              f"{result.get('seconds', 0)}s · k={settings['top_k']}"
+              + (f" · failed check: {result['error']}" if result.get("error") else ""))
 
 
 def action_evaluate(state: dict) -> None:
@@ -1216,14 +1438,15 @@ MENU_ACTIONS = [
     ("2", "providers & models (switch embedding / answer profiles)", action_providers),
     ("3", "API keys (keep / change / add / remove)", action_keys),
     ("4", "inspect corpus (chunking preview — no API calls)", action_inspect),
-    ("5", "embedding sanity check (one batched embedding call)", action_embed_test),
-    ("6", "ingest / rebuild the index for this profile", action_ingest),
-    ("7", "retrieval query (top-k hits, no chat model)", action_query),
-    ("8", "grounded answer (one question, cited)", action_answer),
-    ("9", "chat over the documents", action_chat),
-    ("10", "evaluate a question set", action_evaluate),
-    ("11", "lab settings (chunking, retrieval, corpus)", action_settings),
-    ("12", "diagnostics (offline harness50, xKiro catalog)", action_diagnostics),
+    ("5", "search the chunks for a text/quote (no API calls)", action_search_chunks),
+    ("6", "embedding sanity check (one batched embedding call)", action_embed_test),
+    ("7", "ingest / rebuild the index for this profile", action_ingest),
+    ("8", "retrieval query (top-k hits, no chat model)", action_query),
+    ("9", "grounded answer (one question, cited)", action_answer),
+    ("10", "chat over the documents", action_chat),
+    ("11", "evaluate a question set", action_evaluate),
+    ("12", "lab settings (chunking, retrieval, corpus)", action_settings),
+    ("13", "diagnostics (offline harness50, xKiro catalog)", action_diagnostics),
 ]
 
 
@@ -1316,6 +1539,8 @@ def main(argv=None) -> int:
             action_ingest(state)
             return 0
         if args.ask:
+            if maybe_greeting_reply(args.ask):
+                return 0
             runtime = prepare_runtime(state, need_generator=True)
             if runtime is None:
                 return 2
