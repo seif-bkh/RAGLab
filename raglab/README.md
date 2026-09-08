@@ -38,6 +38,48 @@ vectors and `truncate=NONE`. Use dimension `0` (native) or `2048`, not a reduced
 Matryoshka dimension. Invalid/nonfinite/zero vectors and stale spaces fail before
 storage or retrieval. Embedding model changes require a collection reset.
 
+## The console: `python app.py`
+
+One interactive entry point for everything above, with two extra powers:
+
+* **Provider & model switching.** The embedding slot offers every provider
+  registered in `embedder.build_embedder` (nvidia, gemini, jina, huggingface,
+  openai, cohere, voyage) with their registered models; the answer/chat slot
+  offers the xKiro gateway (the supported path), the free NVIDIA build-endpoint
+  chat models (`chat.py`'s profile plus the registered `ANSWER_MODELS`) and the
+  Google free-tier Gemini path from `llm_smoke.py`.
+* **API-key management.** On startup the app asks, for each selected provider,
+  whether to keep the key found in `raglab/.env`, change it, or paste one when
+  none exists. Keys are written back to `.env` (never committed) and never
+  printed in full — only the first 8 characters, the repo's masking rule.
+
+```bash
+python app.py                # menu over every lab function
+python app.py --status       # doctor report (keys, SDKs, index state), no prompts
+python app.py --chat         # startup checks, then straight into the chat
+python app.py --ingest       # startup checks, then build this profile's index
+python app.py --ask "..."    # one grounded answer, then exit
+python app.py --no-keycheck  # skip the startup key questions
+```
+
+The menu covers: status/doctor, provider & model switching, API keys, corpus
+inspection (no API calls), the embedding sanity check (one batched call),
+ingest/rebuild, retrieval-only queries, one-shot grounded answers, the chat
+REPL, evaluation over a question set, lab settings (chunking mode, k, retrieval
+mode, language filter, corpus dirs), and offline diagnostics (harness50 A/B,
+the read-only xKiro catalog).
+
+Policy: the console is a lab surface with the same standing as `chat.py`. The
+supported pipeline stays pinned in `pipeline_policy.py` (NVIDIA nemotron
+embeddings + xKiro `qwen/qwen3.8-max:free`) and `main.py answer` still refuses
+anything else. The console runs every selection through the same chunker, store
+fingerprints, retrieval, verbatim-citation validation and refusals — but on its
+own `raglab_app_<provider>_<model>_<chunking>` collections, so switching never
+touches another entry point's vectors, and no number it produces is a benchmark
+result. Selections persist in `raglab/app_state.json` (gitignored); only API
+keys are written to `.env`, because `config.py` deliberately rejects model
+overrides from `.env`.
+
 ## Inspect → ingest → retrieve → answer
 
 ```bash

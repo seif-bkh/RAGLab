@@ -32,6 +32,23 @@ Current state of the work:
 - **Real-model A/B**: `.github/workflows/real-test.yml` (manual trigger, spends API
   calls, reads repo secrets) + `raglab/real_report.py` (table builder).
 - **CI**: `.github/workflows/ci.yml` — API-free, runs on every push, must stay green.
+- **Interactive console** (added 2026-09-08, session `arena/01a08139-raglab`):
+  `raglab/app.py` — one menu over every lab function (inspect/ingest/query/
+  answer/chat/evaluate/sanity/diagnostics) that also lets the user switch the
+  embedding provider/model (all `build_embedder` providers) and the answer/chat
+  provider/model (xKiro pinned SKU, NVIDIA build-endpoint chat models, Google
+  free-tier Gemini via `llm_smoke`), and manages API keys per provider
+  (keep/change/add → written to `raglab/.env`, masked to 8 chars). It is a lab
+  surface like `chat.py`: it builds its OWN collections
+  (`raglab_app_<provider>_<model>_<chunking>`) via a `SimpleNamespace` copy of
+  config (`build_lab_config`), never mutates the module config, and the pinned
+  `pipeline_policy` checks still gate `main.py`. Selections live in
+  `raglab/app_state.json` (gitignored) — never in `.env`. Offline coverage:
+  `tests_offline.py` drives a stubbed HF+nvidia-chat profile end-to-end
+  (state → lab config → ingest → retrieve → cited answer) plus env-writer and
+  state round-trip checks. Known subtlety: `config.active_embedding_model()` is
+  a closure over module globals, so the lab copy MUST override it with a lambda
+  returning the selected model or store.py mislabels chunks.
 
 ## 2. Hard constraints (never violate)
 

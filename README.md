@@ -44,6 +44,8 @@ cd raglab
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env  # configure only NVIDIA_API_KEY and XKIRO_API_KEY
+python app.py          # OR the interactive console: menus, provider/model
+                       # switching, key keep/change/add, chat — everything
 python main.py inspect --data-dir ../docs
 python main.py ingest --reset --data-dir ../docs
 python main.py query "What is Murabaha?" --query-lang en

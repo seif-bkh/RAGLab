@@ -11,6 +11,7 @@ raglab/embeddings_cache.json
 raglab/translations_cache.json
 raglab/embeddings_cache_*.json
 raglab/answers_cache*.json
+raglab/app_state.json
 raglab/logs/
 raglab/benchmark_cache/
 

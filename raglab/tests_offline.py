@@ -899,4 +899,127 @@ check("store_chunks drops invalid vectors loudly",
           "dropped_vectors.json").read_text(encoding="utf-8"),
       f"stored={len(sc.records)} records")
 
+
+# --- app.py console: lab profile end-to-end with stubbed providers ----------
+# The console is the one entry point that lets a user switch providers, so the
+# offline check drives a NON-pinned profile (local HF embeddings + an NVIDIA
+# chat model) through the real app code path: state -> lab config -> ingest ->
+# retrieval -> cited answer, with sentence-transformers and the chat endpoint
+# stubbed. It must use its own collection and never the pinned module config.
+import app as app_mod  # noqa: E402
+from answer import AnswerGenerator  # noqa: E402
+from retrieval import retrieve  # noqa: E402
+
+_app_tmp = Path(tempfile.mkdtemp())
+(_app_tmp / "note.md").write_text(
+    "# Account\n\nThe Atlas current account has no management fee.\n\n"
+    "## Fees\n\nThe Atlas card costs 10 dinars per year.\n", encoding="utf-8")
+
+_app_state = app_mod.default_state()
+_app_state["embedding"] = {"provider": "huggingface", "model": "Qwen/Qwen3-Embedding-0.6B"}
+_app_state["answer"] = {"provider": "nvidia", "model": "nvidia/nemotron-3.5-lightning-30b-a3b"}
+_app_state["chunking"] = {"mode": "size", "size": 60, "overlap": 10}
+_app_state["data_dirs"] = [str(_app_tmp)]
+
+check("app: collection is scoped to provider+model+chunking",
+      app_mod.collection_name(_app_state)
+      == "raglab_app_huggingface_qwen3_embedding_0_6b_size",
+      app_mod.collection_name(_app_state))
+
+# The copy must not leak back into the pinned module config (whatever the
+# local .env says it should be): snapshot, compare, no hardcoded values.
+_cfg_snapshot = (cfg.EMBEDDING_PROVIDER, cfg.NVIDIA_EMBEDDING_MODEL, cfg.ANSWER_MODEL)
+_local = app_mod.build_lab_config(_app_state)
+check("app: lab config swaps the selected slots",
+      _local.EMBEDDING_PROVIDER == "huggingface"
+      and _local.active_embedding_model() == "Qwen/Qwen3-Embedding-0.6B"
+      and _local.ANSWER_MODEL == "nvidia/nemotron-3.5-lightning-30b-a3b"
+      and _local.CHROMA_COLLECTION_NAME == app_mod.collection_name(_app_state)
+      and _local.QUERY_TRANSLATION_ENABLED is False)
+check("app: lab config leaves the pinned module config alone",
+      (cfg.EMBEDDING_PROVIDER, cfg.NVIDIA_EMBEDDING_MODEL, cfg.ANSWER_MODEL)
+      == _cfg_snapshot)
+
+# Keep every artifact the run writes inside the temp dir.
+_local.EMBEDDING_CACHE_PATH = _app_tmp / "emb.json"
+_local.CHROMA_DIR = _app_tmp / "chroma"
+_local.RESULTS_DIR = _app_tmp
+_local.ANSWER_CACHE_PATH = _app_tmp / "answers.json"
+
+
+class _FakeChatClient:
+    """Returns one claim citing a verbatim prefix of the first source."""
+    base_url = "https://fake.test/v1"
+    api_key = "fake"
+
+    def chat(self, model, messages, *, max_tokens=4096):
+        payload = json.loads(messages[1]["content"])
+        source = payload["sources"][0]
+        quote = " ".join(source["text"].split())[:40]
+        return {"text": json.dumps({"answerable": True, "claims": [
+            {"text": "The Atlas card costs 10 dinars per year.",
+             "evidence": [{"source_id": source["source_id"], "quote": quote}]}]}),
+            "served_model": model, "usage": {}, "seconds": 0.0}
+
+
+sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+try:
+    from embedder import build_embedder as _app_build_embedder
+    _emb = _app_build_embedder(_local)
+    _col = app_mod.ingest(_local, _emb, _app_state, reset=False)
+    check("app: ingest stores chunks in the profile collection",
+          _col.count() > 0, f"count={_col.count()}")
+
+    _hits, _variants = retrieve(_local, _emb, _col, "what does the card cost?",
+                                language="en", translator=None, mode="vector",
+                                top_k=3, variant_strategy="original")
+    check("app: retrieval works over the app collection",
+          len(_hits) > 0 and _hits[0]["text"], f"hits={len(_hits)}")
+
+    _gen = AnswerGenerator(_local, client=_FakeChatClient(),
+                           approved_models=(_app_state["answer"]["model"],))
+    _result = app_mod.chat_mod.ask(_local, _emb, _col, _gen,
+                                   "What does the Atlas card cost?")
+    check("app: one chat turn returns a validated, cited answer",
+          _result["status"] == "answered" and _result["validation_ok"]
+          and _result["claims"] and _result["sources"]
+          and _result["model"] == "nvidia/nemotron-3.5-lightning-30b-a3b",
+          f"status={_result['status']} reason={_result.get('reason')}")
+finally:
+    sys.modules.pop("sentence_transformers", None)
+
+# --- app.py: .env writer/reader and state round-trip (pure file logic) ------
+_app_env, app_mod.ENV_PATH = app_mod.ENV_PATH, _app_tmp / ".env"
+_app_state_path, app_mod.STATE_PATH = app_mod.STATE_PATH, _app_tmp / "app_state.json"
+try:
+    app_mod.write_env_assignment("XKIRO_API_KEY", "xki-abc123")
+    app_mod.write_env_assignment("NVIDIA_API_KEY", "nvapi-xyz789")
+    app_mod.write_env_assignment("XKIRO_API_KEY", "xki-updated999")
+    _env_text = app_mod.ENV_PATH.read_text(encoding="utf-8")
+    check("app: env writer updates in place, keeps other keys",
+          _env_text.count("XKIRO_API_KEY=") == 1 and "xki-updated999" in _env_text
+          and "nvapi-xyz789" in _env_text)
+    check("app: env reader parses assignments",
+          app_mod.read_env_file()["XKIRO_API_KEY"] == "xki-updated999")
+    check("app: env removal drops only that key",
+          app_mod.remove_env_assignment("NVIDIA_API_KEY")
+          and "NVIDIA_API_KEY" not in app_mod.read_env_file()
+          and "XKIRO_API_KEY" in app_mod.read_env_file())
+
+    app_mod.save_state(_app_state)
+    check("app: state round-trips through app_state.json",
+          app_mod.load_state()["embedding"] == _app_state["embedding"])
+    app_mod.STATE_PATH.write_text("{not json", encoding="utf-8")
+    check("app: corrupt state falls back to defaults",
+          app_mod.load_state() == app_mod.default_state())
+    _broken = app_mod.default_state()
+    _broken["embedding"] = {"provider": "nope", "model": "x"}
+    app_mod.save_state(_broken)
+    check("app: unknown provider resets to the default slot",
+          app_mod.load_state()["embedding"] == app_mod.default_state()["embedding"])
+finally:
+    app_mod.ENV_PATH = _app_env
+    app_mod.STATE_PATH = _app_state_path
+
 sys.exit(0 if ok else 1)
