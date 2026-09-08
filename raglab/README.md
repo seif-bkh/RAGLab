@@ -45,9 +45,15 @@ One interactive entry point for everything above, with two extra powers:
 * **Provider & model switching.** The embedding slot offers every provider
   registered in `embedder.build_embedder` (nvidia, gemini, jina, huggingface,
   openai, cohere, voyage) with their registered models; the answer/chat slot
-  offers the xKiro gateway (the supported path), the free NVIDIA build-endpoint
-  chat models (`chat.py`'s profile plus the registered `ANSWER_MODELS`) and the
-  Google free-tier Gemini path from `llm_smoke.py`.
+  offers the xKiro gateway (the pinned SKU with its live free-price check,
+  plus any custom model ID you enter — non-pinned SKUs are labelled
+  experimental and skip the price gate rather than weaken it), the free NVIDIA
+  build-endpoint chat models (`chat.py`'s profile plus the registered
+  `ANSWER_MODELS`), the Google free-tier Gemini path from `llm_smoke.py`, and
+  the Kira AI OpenAI-compatible gateway (`kiraai.vn`, e.g. `glm-5.3-free`).
+  Every custom model ID you type is remembered per provider in
+  `app_state.json` and offered again next session (menu 2 reviews/removes the
+  saved list).
 * **API-key management.** On startup the app asks, for each selected provider,
   whether to keep the key found in `raglab/.env`, change it, or paste one when
   none exists. Keys are written back to `.env` (never committed) and never

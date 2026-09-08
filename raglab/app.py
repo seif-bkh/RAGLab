@@ -14,9 +14,14 @@ editing files by hand:
   * switching providers and models. The embedding slot offers every provider
     registered in embedder.build_embedder (nvidia, gemini, jina, huggingface,
     openai, cohere, voyage) with their registered models; the answer/chat slot
-    offers the xKiro gateway (the supported answer path), the free NVIDIA
-    build-endpoint chat models (the chat.py profile plus the registered
-    ANSWER_MODELS) and the Google free-tier Gemini path from llm_smoke.py.
+    offers the xKiro gateway (the pinned SKU, plus any custom model ID you
+    enter — non-pinned SKUs are labelled experimental and skip the free-price
+    gate rather than weaken it), the free NVIDIA build-endpoint chat models
+    (the chat.py profile plus the registered ANSWER_MODELS), the Google
+    free-tier Gemini path from llm_smoke.py, and the Kira AI OpenAI-compatible
+    gateway (kiraai.vn, e.g. glm-5.3-free). Every custom model ID you type is
+    remembered per provider in raglab/app_state.json and offered again on the
+    next session (menu 2 lists and can remove them).
   * API keys per provider. On startup, and again from the menus, the app asks
     for each selected provider whether to KEEP the key found in raglab/.env,
     CHANGE it, or — when none exists — paste one. The answer is written back
@@ -68,11 +73,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import config as cfg
-from nvidia_api import ANSWER_MODELS, safe_error
+from nvidia_api import ANSWER_MODELS, NvidiaAPIError, NvidiaClient, safe_error
 from pipeline_policy import (ANSWER_MODEL as POLICY_ANSWER_MODEL,
                              ANSWER_PROVIDER as POLICY_ANSWER_PROVIDER,
                              EMBEDDING_MODEL as POLICY_EMBEDDING_MODEL,
                              EMBEDDING_PROVIDER as POLICY_EMBEDDING_PROVIDER)
+from provider_catalog import PROVIDERS as GATEWAY_CATALOG
 from chat import CHAT_MODEL
 import chat as chat_mod
 
@@ -81,6 +87,7 @@ ENV_PATH = PROJECT_DIR / ".env"
 STATE_PATH = PROJECT_DIR / "app_state.json"
 NVIDIA_CHAT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 GOOGLE_API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
+KIRA_BASE_URL = "https://kiraai.vn/api/v1"
 
 # The pinned pair every selection is compared against (single source of truth:
 # pipeline_policy, the same constants main.py answer enforces).
@@ -168,8 +175,13 @@ ANSWER_PROVIDERS = {
         "key_envs": ("XKIRO_API_KEY",),
         "key_hint": "https://docs.xkiro.com/ — dashboard -> API keys",
         "models": [{"id": POLICY_ANSWER_MODEL,
-                    "note": "pinned SKU; the policy forbids substitutes"}],
-        "custom": False,   # free_gateway.validate_answer_selection allows no other ID
+                    "note": "pinned SKU; live free-price check; the policy forbids substitutes "
+                            "on the benchmark path"}],
+        # The pinned SKU is the only benchmark-attributable answerer, but this is
+        # the LAB console: other IDs on the same gateway may be typed and are
+        # routed as clearly-labelled experimental calls (no price gate, no
+        # benchmark attribution) — the pin itself stays intact for main.py.
+        "custom": True,
     },
     "nvidia": {
         "label": "NVIDIA build endpoint — free chat models",
@@ -188,6 +200,14 @@ ANSWER_PROVIDERS = {
                     "note": "cheapest free gemini-* model, discovered from your key"}],
         "custom": True,
     },
+    "kira": {
+        "label": "Kira AI — OpenAI-compatible gateway (kiraai.vn)",
+        "key_envs": ("KIRA_API_KEY",),
+        "key_hint": "the key from your Kira AI dashboard (https://kiraai.vn)",
+        "models": [{"id": "glm-5.3-free",
+                    "note": "free GLM chat model from Kira's own usage example"}],
+        "custom": True,
+    },
 }
 
 # Every key this repo knows about, for the key-manager screen. Descriptions
@@ -198,13 +218,15 @@ KEY_ENV_INFO = {
     "GEMINI_API_KEY": "Google AI Studio — Gemini embeddings (GOOGLE_API_KEY is also accepted)",
     "GOOGLE_API_KEY": "Google AI Studio — Gemini chat fallback (llm_smoke phase B reads this one)",
     "JINA_API_KEY": "Jina embeddings",
+    "KIRA_API_KEY": "Kira AI gateway — OpenAI-compatible chat models (kiraai.vn)",
     "OPENAI_API_KEY": "OpenAI embeddings",
     "COHERE_API_KEY": "Cohere embeddings",
     "VOYAGE_API_KEY": "Voyage embeddings",
     "EXPERIENTIAL_API_KEY": "Experiential Labs judge — hard-harness grading only, not used by this console (xpl_…)",
 }
 PLACEHOLDER_PATTERNS = ("paste-your", "paste your", "your-key", "your_key",
-                        "changeme", "change-me", "xxx", "placeholder")
+                        "your_kira", "changeme", "change-me", "xxx", "placeholder",
+                        "api_key")   # pasted templates like YOUR_KIRA_API_KEY
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +416,7 @@ def default_state() -> dict:
         "retrieval": {"top_k": cfg.ANSWER_TOP_K, "mode": "vector",
                       "lang_filter": None, "neighbor_radius": 0},
         "data_dirs": None,                  # None = chat.py's default corpus
+        "custom_models": {},                # provider -> [model IDs you typed]
     }
 
 
@@ -416,6 +439,13 @@ def load_state() -> dict:
                 state[key] = {**state[key], **saved[key]}
         if isinstance(saved.get("data_dirs"), list):
             state["data_dirs"] = [str(d) for d in saved["data_dirs"]]
+        custom = saved.get("custom_models")
+        if isinstance(custom, dict):
+            # The per-provider model-ID memory: keep only sane string lists.
+            state["custom_models"] = {
+                str(provider): [str(m) for m in models
+                                if isinstance(m, str) and m.strip()]
+                for provider, models in custom.items() if isinstance(models, list)}
     # A state the registries cannot drive would crash mid-action; reset loudly.
     for slot, registry in (("embedding", EMBEDDING_PROVIDERS), ("answer", ANSWER_PROVIDERS)):
         entry = state[slot]
@@ -441,6 +471,25 @@ def load_state() -> dict:
 def save_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n",
                           encoding="utf-8")
+
+
+# The per-provider memory of model IDs you typed (see record_custom_model):
+# newest last, deduped, bounded so a long history cannot grow without limit.
+MAX_SAVED_MODELS = 20
+
+
+def record_custom_model(state: dict, provider: str, model_id: str) -> None:
+    """Remember a custom model ID under its provider, then persist the state.
+
+    This is the 'cache' that makes typed IDs reappear in model selection,
+    categorized by provider. Registered catalog models are never stored here —
+    only what you typed yourself.
+    """
+    saved = state.setdefault("custom_models", {})
+    entries = [m for m in saved.get(provider, []) if m != model_id]
+    entries.append(model_id)
+    saved[provider] = entries[-MAX_SAVED_MODELS:]
+    save_state(state)
 
 
 def pipeline_marker(state: dict) -> str:
@@ -575,13 +624,57 @@ class GoogleChatClient:
                 "usage": {}, "seconds": round(time.monotonic() - started, 3)}
 
 
+class GatewayChatClient(NvidiaClient):
+    """OpenAI-compatible gateway chat over the lab's tested stdlib HTTPS
+    transport (retries, pacing, key redaction, SSE) — no SDK dependency.
+
+    Used for Kira and for EXPERIMENTAL xKiro SKUs. The pinned xKiro SKU never
+    goes through this: build_answer_generator keeps its live free-price
+    verification, and 'no substitution' stays true on the benchmark path.
+    """
+
+    def __init__(self, *, base_url: str, api_key: str, provider_label: str):
+        super().__init__(base_url=base_url, api_key=api_key,
+                         timeout=120, attempts=2, min_interval=3.0,
+                         max_retry_delay=60)
+        self.provider_label = provider_label
+
+    def request(self, path, payload=None):
+        try:
+            return super().request(path, payload)
+        except NvidiaAPIError as exc:
+            raise NvidiaAPIError(str(exc).replace("NVIDIA", self.provider_label),
+                                 exc.status_code, exc.retry_after) from None
+
+
 def build_generator(local: SimpleNamespace):
     """AnswerGenerator wired to the selected answer provider, or an error saying why not."""
     from answer import AnswerGenerator, build_answer_generator
     provider, model = local.ANSWER_PROVIDER, local.ANSWER_MODEL
-    if provider == "xkiro":
+    if provider == "xkiro" and model == SUPPORTED_ANSWER["model"]:
         # The supported path: live zero-price verification, no substitution.
         return build_answer_generator(local, call_budget=1000)
+    if provider == "xkiro":
+        # A custom SKU on the same gateway: an experimental lab call. The price
+        # gate is not weakened for the pinned SKU — it is simply not claimed for
+        # this one, and no benchmark number is attributed to it.
+        key = os.environ.get("XKIRO_API_KEY", "").strip()
+        if not key:
+            raise ValueError("XKIRO_API_KEY is not set — add it from the API-keys menu, "
+                             "then try again.")
+        print(f"[app] xKiro/{model} is an EXPERIMENTAL SKU: the live free-price check and "
+              f"benchmark attribution belong to the pinned {SUPPORTED_ANSWER['model']} only.")
+        return AnswerGenerator(local, client=GatewayChatClient(
+            base_url=GATEWAY_CATALOG["xkiro"]["base_url"], api_key=key,
+            provider_label="XKIRO"), approved_models=(model,))
+    if provider == "kira":
+        key = os.environ.get("KIRA_API_KEY", "").strip()
+        if not key:
+            raise ValueError("KIRA_API_KEY is not set — add it from the API-keys menu, "
+                             "then try again.")
+        return AnswerGenerator(local, client=GatewayChatClient(
+            base_url=KIRA_BASE_URL, api_key=key, provider_label="KIRA"),
+            approved_models=(model,))
     if provider == "nvidia":
         from nvidia_api import NvidiaClient
         client = NvidiaClient(base_url=NVIDIA_CHAT_BASE_URL,
@@ -827,6 +920,12 @@ def action_status(state: dict) -> None:
         if info.get("sdk"):
             print(f"  {provider:12} {sdk_status(info)}")
 
+    saved = {p: ms for p, ms in (state.get("custom_models") or {}).items() if ms}
+    if saved:
+        print("\nSaved custom model IDs (from your previous sessions)")
+        for provider in sorted(saved):
+            print(f"  {provider:12} {', '.join(saved[provider])}")
+
     count = collection_count(state)
     print(f"\nIndex for this profile: {collection_name(state)} — "
           + (f"{count} chunk(s)" if count is not None else "count unavailable (is chromadb installed?)"))
@@ -852,16 +951,25 @@ def action_status(state: dict) -> None:
     print("=" * 78)
 
 
-def select_model(provider: str, registry_entry, current: str) -> str:
-    models = registry_entry["models"]
+def select_model(provider: str, registry_entry, current: str, state: dict) -> str:
+    registered = registry_entry["models"]
+    registered_ids = {entry["id"] for entry in registered}
+    # What you typed before, minus anything now in the registered catalog.
+    saved = [model for model in state.get("custom_models", {}).get(provider, [])
+             if model not in registered_ids]
     print(f"\nModels registered for {provider}:")
-    for index, model in enumerate(models, 1):
+    for index, model in enumerate(registered, 1):
         marker = "  <- current" if model["id"] == current else ""
         print(f"  {index}. {model['id']} — {model['note']}{marker}")
+    if saved:
+        print("  saved from your previous sessions:")
+        for index, model in enumerate(saved, len(registered) + 1):
+            marker = "  <- current" if model == current else ""
+            print(f"  {index}. {model} — your custom ID{marker}")
     custom_allowed = registry_entry.get("custom", True)
     if not custom_allowed:
         print("  (the policy pins this provider to the listed SKU; no substitutes)")
-    total = len(models)
+    total = len(registered) + len(saved)
     if custom_allowed:
         total += 1
         print(f"  {total}. type another exact model ID")
@@ -869,12 +977,34 @@ def select_model(provider: str, registry_entry, current: str) -> str:
         choice = choose_number(total, default=1)
         if choice == 0:
             return current
-        if choice <= len(models):
-            return models[choice - 1]["id"]
+        if choice <= len(registered):
+            return registered[choice - 1]["id"]
+        if choice <= len(registered) + len(saved):
+            return saved[choice - len(registered) - 1]
         model_id = prompt("exact model ID: ")
         if model_id and not re.search(r"\s", model_id):
+            if provider == "xkiro" and model_id != SUPPORTED_ANSWER["model"]:
+                print("  note: non-pinned xKiro IDs run as EXPERIMENTAL calls here — the live "
+                      f"free-price check and benchmark attribution apply only to "
+                      f"{SUPPORTED_ANSWER['model']}.")
+            record_custom_model(state, provider, model_id)
+            print(f"  remembered {model_id} for {provider} "
+                  f"(saved in {STATE_PATH.name}; review with menu 2)")
             return model_id
         print("  a model ID has no spaces; try again.")
+
+
+def consistent_model(provider: str, entry: dict, state: dict, previous: str) -> str:
+    """The model to preselect after a provider switch: the previous model only
+    if the NEW provider offers it, else its first registered model.
+
+    Never carry another provider's model across a switch — a gemini slot that
+    keeps 'nvidia/nemotron-3-embed-1b' (because model selection was backed out
+    of) is a profile that cannot be built or honestly labelled.
+    """
+    offered = ({model["id"] for model in entry["models"]}
+               | set(state.get("custom_models", {}).get(provider, [])))
+    return previous if previous in offered else entry["models"][0]["id"]
 
 
 def select_provider(slot: str, state: dict) -> None:
@@ -900,7 +1030,8 @@ def select_provider(slot: str, state: dict) -> None:
                  hint=info.get("key_hint", ""))
     else:
         print(f"\n[{slot}] {provider} — {info['label']} (no key to configure)")
-    model = select_model(provider, info, state[slot]["model"])
+    current_model = consistent_model(provider, info, state, state[slot]["model"])
+    model = select_model(provider, info, current_model, state)
     state[slot] = {"provider": provider, "model": model}
     save_state(state)
     print(f"\n[app] saved: {slot} = {provider}/{model}")
@@ -913,18 +1044,58 @@ def select_provider(slot: str, state: dict) -> None:
               "switching never touches another profile's vectors.")
 
 
+def action_saved_models(state: dict) -> None:
+    """Review/remove the model IDs you typed on previous sessions."""
+    saved = {provider: models for provider, models
+             in (state.get("custom_models") or {}).items() if models}
+    if not saved:
+        print("\n[saved] no custom model IDs saved yet — one is recorded each time you type "
+              "a model ID in the selection menus.")
+        return
+    print("\nSaved custom model IDs (categorized by provider, stored in "
+          f"{STATE_PATH.name})")
+    entries = []
+    for provider in sorted(saved):
+        for model in saved[provider]:
+            entries.append((provider, model))
+            print(f"  {len(entries):>2}. {provider}/{model}")
+    print("   0. back")
+    while True:
+        raw = prompt("number to remove (0 = back): ")
+        if not raw or raw == "0":
+            return
+        if raw.isdigit() and 1 <= int(raw) <= len(entries):
+            provider, model = entries[int(raw) - 1]
+            if confirm(f"remove {provider}/{model} from the saved list?"):
+                remaining = [m for m in state["custom_models"].get(provider, [])
+                             if m != model]
+                if remaining:
+                    state["custom_models"][provider] = remaining
+                else:
+                    state["custom_models"].pop(provider, None)
+                save_state(state)
+                print(f"[saved] removed {provider}/{model}")
+            return
+        print("  enter a number from the list, or 0")
+
+
 def action_providers(state: dict) -> None:
     while True:
         print("\nProviders & models — pick a slot to switch")
         print(f"  1. embedding    : {slot_display(state['embedding'])}")
         print(f"  2. answer/chat  : {slot_display(state['answer'])}")
+        saved_total = sum(len(models) for models
+                          in (state.get("custom_models") or {}).values())
+        print(f"  3. saved custom model IDs ({saved_total} saved, by provider)")
         print(f"  profile: {pipeline_marker(state)}")
         print("  0. back")
-        choice = choose_number(2, default=0)
+        choice = choose_number(3, default=0)
         if choice == 1:
             select_provider("embedding", state)
         elif choice == 2:
             select_provider("answer", state)
+        elif choice == 3:
+            action_saved_models(state)
         else:
             return
 

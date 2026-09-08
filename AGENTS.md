@@ -37,16 +37,28 @@ Current state of the work:
   answer/chat/evaluate/sanity/diagnostics) that also lets the user switch the
   embedding provider/model (all `build_embedder` providers) and the answer/chat
   provider/model (xKiro pinned SKU, NVIDIA build-endpoint chat models, Google
-  free-tier Gemini via `llm_smoke`), and manages API keys per provider
-  (keep/change/add → written to `raglab/.env`, masked to 8 chars). It is a lab
+  free-tier Gemini via `llm_smoke`, Kira AI `kiraai.vn` OpenAI-compatible
+  gateway e.g. `glm-5.3-free`), and manages API keys per provider
+  (keep/change/add → written to `raglab/.env`, masked to 8 chars). Custom model
+  IDs typed in the selection menus are remembered per provider in
+  `app_state.json` (`record_custom_model`, capped at 20/provider) and
+  re-offered next session; menu 2 → 3 reviews/removes them. Non-pinned xKiro
+  SKUs run through `GatewayChatClient` (NvidiaClient on
+  `api.xkiro.com/v1`) as EXPERIMENTAL calls — the pinned SKU alone keeps
+  `build_answer_generator`'s live free-price check, and no benchmark number is
+  attributed to experimental SKUs. Greetings (fr/en/ar) are answered locally,
+  zero calls; invalid_output prints the failed check, offers a re-ask, and the
+  search-chunks action (citation-gate normalization) tells boundary-crossing
+  quotes from paraphrases. It is a lab
   surface like `chat.py`: it builds its OWN collections
   (`raglab_app_<provider>_<model>_<chunking>`) via a `SimpleNamespace` copy of
   config (`build_lab_config`), never mutates the module config, and the pinned
   `pipeline_policy` checks still gate `main.py`. Selections live in
   `raglab/app_state.json` (gitignored) — never in `.env`. Offline coverage:
   `tests_offline.py` drives a stubbed HF+nvidia-chat profile end-to-end
-  (state → lab config → ingest → retrieve → cited answer) plus env-writer and
-  state round-trip checks. Known subtlety: `config.active_embedding_model()` is
+  (state → lab config → ingest → retrieve → cited answer) plus env-writer,
+  state round-trip, greeting, locate_text, model-memory and gateway-wiring
+  checks. Known subtlety: `config.active_embedding_model()` is
   a closure over module globals, so the lab copy MUST override it with a lambda
   returning the selected model or store.py mislabels chunks.
 

@@ -1073,4 +1073,82 @@ check("app: greeting language beats the single-word detector",
       and app_mod.greeting_language("hello") == "en"
       and app_mod.greeting_language("السلام عليكم") == "ar")
 
+# --- app.py: Kira gateway, custom xKiro SKUs, per-provider model memory ------
+check("app: kira registered as an OpenAI-compatible answer gateway",
+      "kira" in app_mod.ANSWER_PROVIDERS
+      and app_mod.ANSWER_PROVIDERS["kira"]["key_envs"] == ("KIRA_API_KEY",)
+      and app_mod.KIRA_BASE_URL == "https://kiraai.vn/api/v1"
+      and any(m["id"] == "glm-5.3-free" for m in app_mod.ANSWER_PROVIDERS["kira"]["models"])
+      and app_mod.ANSWER_PROVIDERS["xkiro"]["custom"] is True)
+
+# A provider switch must never carry the OLD provider's model ID across
+# (caught live: backing out of model selection left gemini + nvidia/…-1b).
+_ms = {"custom_models": {"kira": ["kira/custom-model-x"]}}
+check("app: provider switch never keeps the previous provider's model",
+      app_mod.consistent_model("gemini", app_mod.EMBEDDING_PROVIDERS["gemini"],
+                               _ms, "nvidia/nemotron-3-embed-1b")
+      == "gemini-embedding-2"
+      and app_mod.consistent_model("kira", app_mod.ANSWER_PROVIDERS["kira"],
+                                   _ms, "kira/custom-model-x")
+      == "kira/custom-model-x"
+      and app_mod.consistent_model("kira", app_mod.ANSWER_PROVIDERS["kira"],
+                                   _ms, "glm-5.3-free") == "glm-5.3-free")
+
+# Keep the model-ID memory's file writes inside the temp dir.
+_mem_state_path, app_mod.STATE_PATH = app_mod.STATE_PATH, _app_tmp / "app_state_mem.json"
+try:
+    _ms = {"custom_models": {}}
+    app_mod.record_custom_model(_ms, "xkiro", "vendor/custom-a")
+    app_mod.record_custom_model(_ms, "kira", "glm-5.4-free")
+    app_mod.record_custom_model(_ms, "xkiro", "vendor/custom-a")     # duplicate ignored
+    check("app: custom model IDs are saved and categorized by provider",
+          _ms["custom_models"] == {"xkiro": ["vendor/custom-a"], "kira": ["glm-5.4-free"]})
+    for i in range(app_mod.MAX_SAVED_MODELS + 10):
+        app_mod.record_custom_model(_ms, "nvidia", f"vendor/m{i}")
+    check("app: saved model list is capped, most recent kept",
+          len(_ms["custom_models"]["nvidia"]) == app_mod.MAX_SAVED_MODELS
+          and _ms["custom_models"]["nvidia"][-1]
+          == f"vendor/m{app_mod.MAX_SAVED_MODELS + 9}")
+
+    _ms_state = app_mod.default_state()
+    app_mod.record_custom_model(_ms_state, "xkiro", "vendor/custom-a")
+    app_mod.record_custom_model(_ms_state, "kira", "glm-5.4-free")
+    check("app: saved custom model IDs survive a restart",
+          app_mod.load_state()["custom_models"]
+          == {"xkiro": ["vendor/custom-a"], "kira": ["glm-5.4-free"]})
+    _ms_state["custom_models"] = {"kira": ["ok-id", 42, "  "], "bad": "not-a-list"}
+    app_mod.save_state(_ms_state)
+    check("app: corrupt custom-model memory is sanitized on load",
+          app_mod.load_state()["custom_models"] == {"kira": ["ok-id"]})
+
+    # Generator wiring (no network: client construction only).
+    _prior_env = {k: os.environ.get(k) for k in ("KIRA_API_KEY", "XKIRO_API_KEY")}
+    os.environ["KIRA_API_KEY"] = "kira-test-key-1234567890"
+    os.environ["XKIRO_API_KEY"] = "xkiro-test-key-1234567890"
+    try:
+        _kira_state = app_mod.default_state()
+        _kira_state["answer"] = {"provider": "kira", "model": "glm-5.3-free"}
+        _gen = app_mod.build_generator(app_mod.build_lab_config(_kira_state))
+        check("app: kira generator uses the kiraai.vn gateway",
+              _gen.model == "glm-5.3-free"
+              and _gen.client.base_url == "https://kiraai.vn/api/v1"
+              and _gen.client.api_key == "kira-test-key-1234567890"
+              and _gen.client.provider_label == "KIRA")
+
+        _xk_state = app_mod.default_state()
+        _xk_state["answer"] = {"provider": "xkiro", "model": "vendor/experimental-id"}
+        _gen = app_mod.build_generator(app_mod.build_lab_config(_xk_state))
+        check("app: custom xKiro SKU is an experimental gateway call",
+              _gen.model == "vendor/experimental-id"
+              and _gen.client.base_url == "https://api.xkiro.com/v1"
+              and _gen.client.provider_label == "XKIRO")
+    finally:
+        for _name, _value in _prior_env.items():
+            if _value is None:
+                os.environ.pop(_name, None)
+            else:
+                os.environ[_name] = _value
+finally:
+    app_mod.STATE_PATH = _mem_state_path
+
 sys.exit(0 if ok else 1)
