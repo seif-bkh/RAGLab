@@ -151,8 +151,8 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 34119301432 on HEAD `eb025d2` (offline suite: 180 unittests +
-  60 checks + inspect + pip check).
+- **CI green**: run 34235486111 on HEAD `4d758cb` (offline suite: 180 unittests +
+  72 checks + inspect + pip check; the app.py section added 12 of those checks).
 - **BM25-only A/B** (45 evaluable of 50; k=20; full table in
   `raglab/results/harness50/comparison.md`, regenerable via `harness50.py`):
   - overall hit@1/3/5: size-220/40 `40/69/80` → restructure `47/78/89`
