@@ -54,7 +54,9 @@ refusals), `POST /ingest` (background job) + `/ingest/status`. No menus, no
 prompts, no `app_state.json`; keys come from the environment. Deployment
 notes (single replica, no built-in auth — front it with your gateway) and the
 full env-var table: [SERVICE.md](SERVICE.md). Offline tests:
-`python -m unittest test_service`.
+`python -m unittest test_service`. To test the running service from the
+outside, the way another microservice would: `python local_front.py`
+(state-aware smoke suite), `--ask`, `--search`, `--ingest`, `--interactive`.
 
 ## The console (continued): `python app.py`
 

@@ -38,6 +38,16 @@ python -m uvicorn service:app --host 0.0.0.0 --port 8000
 # interactive OpenAPI docs: http://localhost:8000/docs
 ```
 
+Test it from another terminal (pure HTTP client — imports nothing from the
+lab, so it exercises exactly the boundary another microservice would):
+
+```bash
+python local_front.py                   # state-aware smoke suite over every endpoint
+python local_front.py --ingest          # build the index, wait for the job
+python local_front.py --ask "What is Murabaha?"
+python local_front.py --interactive     # small REPL over the API
+```
+
 Docker (from the repo root):
 
 ```bash
@@ -139,4 +149,8 @@ start), not on the fifth request.
 ## Tests
 
 `python -m unittest -v test_service` (offline: stubbed embeddings + injected
-chat client; no network, no keys). It is part of CI via `run_tests.sh`.
+chat client; no network, no keys). It is part of CI via `run_tests.sh`, and
+its last test case boots a REAL uvicorn server on an ephemeral port and runs
+`local_front.py`'s smoke suite against it over actual HTTP — with no keys and
+an empty index, so the tested behavior is the full refusal contract
+(503/403/422) plus greetings, exactly the state a fresh deployment is in.

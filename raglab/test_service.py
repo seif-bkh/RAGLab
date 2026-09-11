@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import service  # noqa: E402
+import profiles  # noqa: E402
 from answer import AnswerGenerator  # noqa: E402
 from profiles import build_lab_config  # noqa: E402
 
@@ -258,6 +259,52 @@ class ServiceTest(unittest.TestCase):
         bad = enabled.post("/profile", json={"answer": {"provider": "nope"}})
         self.assertEqual(bad.status_code, 400)
         self.assertIn("xkiro", bad.json()["detail"]["registered"])
+
+
+class LocalFrontOverHttp(unittest.TestCase):
+    """local_front.py's smoke suite against a REAL HTTP server.
+
+    Boots uvicorn on an ephemeral port (thread) with the default profile, no
+    keys and an empty index — exactly the state a fresh deployment is in —
+    and requires the front's state-aware suite to pass end-to-end: the
+    refusal paths (503 missing key, 403 switching, 422 validation) ARE the
+    correct behavior being tested. local_front imports nothing from the lab,
+    so this exercises the whole HTTP boundary.
+    """
+
+    def test_smoke_suite_over_real_http(self):
+        import threading
+        import local_front
+        try:
+            import uvicorn
+        except ImportError:  # pragma: no cover
+            self.skipTest("uvicorn not installed")
+        key_names = ("NVIDIA_API_KEY", "XKIRO_API_KEY", "GOOGLE_API_KEY",
+                     "GEMINI_API_KEY", "KIRA_API_KEY", "JINA_API_KEY",
+                     "OPENAI_API_KEY", "COHERE_API_KEY", "VOYAGE_API_KEY")
+        saved = {name: os.environ.pop(name, None) for name in key_names}
+        app = service.create_app(profiles.default_state(), generator=object(),
+                                 allow_profile_switch=False)
+        server = uvicorn.Server(uvicorn.Config(
+            app, host="127.0.0.1", port=0, log_level="warning"))
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and not server.started:
+                time.sleep(0.05)
+            self.assertTrue(server.started, "uvicorn did not start")
+            port = server.servers[0].sockets[0].getsockname()[1]
+            api = local_front.Api(f"http://127.0.0.1:{port}")
+            passed, failed = local_front.run_suite(api, spend=False)
+            self.assertEqual(failed, 0, f"{failed} smoke check(s) failed")
+            self.assertGreaterEqual(passed, 12)
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)
+            for name, value in saved.items():
+                if value is not None:
+                    os.environ[name] = value
 
 
 if __name__ == "__main__":

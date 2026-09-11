@@ -82,6 +82,16 @@ Current state of the work:
   TestClient) added to run_tests.sh and ci.yml; requirements-benchmark.txt
   gained fastapi+httpx for it. Full docs with the env-var table:
   `raglab/SERVICE.md`.
+- **`raglab/local_front.py`** (same session): a pure-HTTP test client for the
+  service — imports NOTHING from the lab, only urllib + JSON. Default mode is
+  a state-aware smoke suite (13 checks) that reads /health + /models to decide
+  what /search, /answer and /ingest SHOULD do in the current state: keyless →
+  expects 503 missing_api_key, keys + empty index → expects 409 empty_index,
+  ready → one live /search + /answer (skip with --no-spend). Also --ask,
+  --search, --ingest (polls /ingest/status), --interactive REPL; exit codes
+  0/1/2 (ok / failed / unreachable). `test_service.py::LocalFrontOverHttp`
+  boots a real uvicorn on port 0 and requires the suite to pass over actual
+  HTTP in CI.
 
 ## 2. Hard constraints (never violate)
 
