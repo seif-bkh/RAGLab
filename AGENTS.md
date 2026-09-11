@@ -61,6 +61,27 @@ Current state of the work:
   checks. Known subtlety: `config.active_embedding_model()` is
   a closure over module globals, so the lab copy MUST override it with a lambda
   returning the selected model or store.py mislabels chunks.
+- **HTTP microservice** (added 2026-09-11, same session): `raglab/service.py`
+  (FastAPI+uvicorn, `requirements-service.txt`) exposes the SAME runtime as the
+  console over REST: `/health`, `/models`, `/profile` (+ optional
+  `POST /profile` behind `RAGLAB_ALLOW_PROFILE_SWITCH=1`), `/search`,
+  `/answer` (greetings answered locally, refusals are HTTP 200 + reason),
+  `/ingest` as a background thread + `/ingest/status`. Profile from
+  `RAGLAB_*` env vars at boot (validated loudly, SystemExit on bad combos);
+  keys from env only; Dockerfile + docker-compose.yml at the repo root
+  (`RAGLAB_CACHE_DIR` relocates caches into a volume). Single replica by
+  design (local ChromaDB); no built-in auth — must sit behind a gateway.
+  **The refactor to know about**: the runtime half of app.py moved to
+  `raglab/profiles.py` (registries, SUPPORTED_*, build_lab_config,
+  Gateway/Google chat clients, build_generator, collection naming, ingest,
+  greeting logic, collection_count/stored_index_info); app.py re-exports it
+  (existing callers/tests unchanged) and keeps only the console (menus, key
+  prompts, app_state.json, model-ID memory). profiles.py imports chat.py;
+  service.py imports profiles.py and NOTHING from app.py. Offline coverage:
+  `test_service.py` (12 tests, stubbed HF embedder + injected fake generator,
+  TestClient) added to run_tests.sh and ci.yml; requirements-benchmark.txt
+  gained fastapi+httpx for it. Full docs with the env-var table:
+  `raglab/SERVICE.md`.
 
 ## 2. Hard constraints (never violate)
 

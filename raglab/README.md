@@ -40,6 +40,24 @@ storage or retrieval. Embedding model changes require a collection reset.
 
 ## The console: `python app.py`
 
+The console's runtime half lives in `profiles.py`, shared with the HTTP
+microservice below — the two frontends can never disagree about providers,
+models, collections or validation rules.
+
+## The service: `python -m uvicorn service:app`
+
+RAGLab as ONE standalone microservice for a larger architecture: REST + JSON,
+OpenAPI docs at `/docs`, env-configured (12-factor), Docker-packaged
+(`docker compose up --build` from the repo root). Endpoints: `/health`,
+`/models`, `/profile`, `POST /search`, `POST /answer` (grounded, cited, safe
+refusals), `POST /ingest` (background job) + `/ingest/status`. No menus, no
+prompts, no `app_state.json`; keys come from the environment. Deployment
+notes (single replica, no built-in auth — front it with your gateway) and the
+full env-var table: [SERVICE.md](SERVICE.md). Offline tests:
+`python -m unittest test_service`.
+
+## The console (continued): `python app.py`
+
 One interactive entry point for everything above, with two extra powers:
 
 * **Provider & model switching.** The embedding slot offers every provider

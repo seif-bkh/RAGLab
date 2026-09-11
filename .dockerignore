@@ -1,0 +1,16 @@
+# Local artifacts and secrets never enter the image.
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/.venv
+**/venv
+raglab/.env
+raglab/app_state.json
+raglab/chroma_db
+raglab/results
+raglab/logs
+raglab/embeddings_cache*.json
+raglab/answers_cache*.json
+raglab/translations_cache.json
+raglab/.venv

@@ -1,0 +1,7 @@
+# RAGLab service dependencies (raglab/service.py — the HTTP microservice).
+# The core lab stays on requirements.txt (pinned, provider-SDK-free); this file
+# adds only the HTTP layer. Versions are the ones tested in this session
+# (Python 3.11, with test_service.py green under them).
+-r requirements.txt
+fastapi==0.141.1
+uvicorn==0.52.4

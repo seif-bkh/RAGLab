@@ -46,6 +46,9 @@ pip install -r requirements.txt
 cp .env.example .env  # configure only NVIDIA_API_KEY and XKIRO_API_KEY
 python app.py          # OR the interactive console: menus, provider/model
                        # switching, key keep/change/add, chat — everything
+python -m uvicorn service:app   # OR the standalone HTTP microservice
+                                # (pip install -r requirements-service.txt;
+                                #  docs at /docs — see raglab/SERVICE.md)
 python main.py inspect --data-dir ../docs
 python main.py ingest --reset --data-dir ../docs
 python main.py query "What is Murabaha?" --query-lang en

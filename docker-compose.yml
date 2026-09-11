@@ -1,0 +1,32 @@
+# RAGLab as one microservice, the minimal-local-orchestration way.
+#   cp raglab/.env.example raglab/.env   # fill NVIDIA_API_KEY / XKIRO_API_KEY / ...
+#   docker compose up --build
+#   open http://localhost:8000/docs
+#
+# The index (chroma_db) lives in a named volume so a restart does not
+# re-embed the corpus. Keys come from raglab/.env via env_file — compose
+# reads it, the image never contains it.
+services:
+  raglab:
+    build: .
+    image: raglab-service
+    ports:
+      - "8000:8000"
+    env_file:
+      - raglab/.env
+    environment:
+      # Profile defaults = the supported pipeline pair; override per deployment:
+      # RAGLAB_EMBEDDING_PROVIDER: nvidia
+      # RAGLAB_ANSWER_PROVIDER: xkiro
+      # RAGLAB_CHUNKING_MODE: restructure
+      # RAGLAB_TOP_K: "5"
+      RAGLAB_CACHE_DIR: /app/raglab/caches   # embedding/answer caches -> volume
+      RAGLAB_ALLOW_PROFILE_SWITCH: "0"       # 1 to allow POST /profile at runtime
+    volumes:
+      - raglab-index:/app/raglab/chroma_db
+      - raglab-embed-cache:/app/raglab/caches
+    restart: unless-stopped
+
+volumes:
+  raglab-index:
+  raglab-embed-cache:

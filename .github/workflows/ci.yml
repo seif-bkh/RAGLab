@@ -35,7 +35,7 @@ jobs:
       - name: Offline regression tests (no API, stubbed HF provider)
         run: |
           python tests_offline.py
-          python -m unittest -v test_nvidia_pipeline test_hard_harness
+          python -m unittest -v test_nvidia_pipeline test_hard_harness test_service
         working-directory: raglab
 
       # This sandbox cannot fetch workflow logs, and that cost a whole round trip once already: a
@@ -46,7 +46,7 @@ jobs:
         run: |
           cd raglab
           set +e
-          { python tests_offline.py; python -m unittest test_nvidia_pipeline test_hard_harness; } \
+          { python tests_offline.py; python -m unittest test_nvidia_pipeline test_hard_harness test_service; } \
             > /tmp/offline.txt 2>&1
           message=$(tail -c 1400 /tmp/offline.txt | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
           echo "::error::offline reproduction: $message"
