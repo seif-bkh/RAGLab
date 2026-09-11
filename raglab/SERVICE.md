@@ -22,10 +22,11 @@ rules exist.
           └───────────────────┘
 ```
 
-What is deliberately NOT in the service: the console's menus and prompts,
-`app_state.json` persistence, the benchmark harnesses, the diagnostics
-utilities. Configuration is 12-factor — environment at boot, keys from the
-environment, no interactive anything.
+What is deliberately NOT in the service: the console's interactive UX
+(that now lives in `local_front.py`, which drives THIS service over HTTP),
+`app_state.json` persistence, and ad-hoc model plumbing. Configuration is
+12-factor — environment at boot, keys from the environment or `POST /keys`,
+no interactive anything inside the service process.
 
 ## Quick start
 
@@ -38,15 +39,27 @@ python -m uvicorn service:app --host 0.0.0.0 --port 8000
 # interactive OpenAPI docs: http://localhost:8000/docs
 ```
 
-Test it from another terminal (pure HTTP client — imports nothing from the
-lab, so it exercises exactly the boundary another microservice would):
+Test it from another terminal — `local_front.py` is the console's twin over
+REST: same 13 menus as `app.py` (status/doctor, providers & models, API keys,
+inspect, chunk search, sanity, ingest, retrieval, answer, chat, evaluate,
+settings, diagnostics), every action an endpoint call. It imports nothing
+from the lab (pure stdlib HTTP), so it exercises exactly the boundary another
+microservice would:
 
 ```bash
-python local_front.py                   # state-aware smoke suite over every endpoint
+python local_front.py                   # the console — menus, prompts, everything
+python local_front.py --smoke           # state-aware smoke suite over every endpoint
+python local_front.py --status          # one-shot doctor (profile, index, keys)
 python local_front.py --ingest          # build the index, wait for the job
 python local_front.py --ask "What is Murabaha?"
-python local_front.py --interactive     # small REPL over the API
+python local_front.py --search "murabaha"   # retrieval only, no chat model
+python local_front.py --base-url http://raglab:8000   # against the compose stack
 ```
+
+The front is stateless except `front_state.json` (its custom model-ID memory,
+capped at 20 IDs per provider). The profile — providers, models, chunking,
+retrieval, corpus — lives in the service; keys set from the front live in the
+service process (`persist=true` also writes the service host's `raglab/.env`).
 
 Docker (from the repo root):
 
@@ -60,13 +73,22 @@ docker compose up --build            # http://localhost:8000/docs
 | Method | Path | What it does |
 |---|---|---|
 | GET | `/health` | liveness, active profile, index count + fingerprint/tokenizer match, which keys are set (presence only, never values) |
-| GET | `/models` | registered models per provider (embedding + answer slots) |
-| GET | `/profile` | the active profile, its collection name, switching state |
-| POST | `/profile` | switch embedding/answer provider+model (or retrieval knobs) at runtime — **only when `RAGLAB_ALLOW_PROFILE_SWITCH=1`** |
+| GET | `/models` | registered models per provider (embedding + answer slots, + the key env each one needs) |
+| GET | `/profile` | the active profile (embedding/answer/chunking/retrieval/corpus), its collection name, switching state |
+| POST | `/profile` | switch provider+model per slot, chunking (`mode`/`size`/`overlap`), retrieval knobs, corpus dirs — **only when `RAGLAB_ALLOW_PROFILE_SWITCH=1`** |
+| GET | `/keys` | the known key env vars, what each unlocks, masked presence (first 8 chars, never the value) |
+| POST | `/keys` | set a key in the service process (`{key_env, value, persist?}`; placeholders/quotes/spaces rejected; `persist=true` also writes the service host's `raglab/.env`) |
+| DELETE | `/keys/{env}` | drop a key from the process (and from `raglab/.env` with `?persist=true`) |
 | POST | `/search` | retrieval only: `{question, k?, mode?, lang_filter?, query_lang?}` → ranked chunks with scores |
-| POST | `/answer` | grounded answer: `{question, k?, include_excerpts?}` → claims with verbatim-cited evidence, or a safe refusal. Greetings ("bonjour", "السلام عليكم") are answered locally with zero calls |
+| POST | `/answer` | grounded answer: `{question, k?, mode?, lang_filter?, query_lang?, include_excerpts?}` → claims with verbatim-cited evidence, or a safe refusal. Greetings ("bonjour", "السلام عليكم") are answered locally with zero calls |
 | POST | `/ingest?reset=false` | build/rebuild this profile's index as a background job (embeds every chunk; the cache makes re-runs cheap) |
 | GET | `/ingest/status` | what the ingest job is doing / last did |
+| GET | `/inspect?limit=` | the chunking preview: documents, chunk/token totals, sample chunks (no model calls) |
+| POST | `/chunks/search` | quote-vs-chunk diagnostic: is this text inside ONE chunk (`full` — a verbatim quote can pass the citation gate) or does it cross a boundary (`head`/`tail` in different chunks — it can never validate). No model calls |
+| POST | `/embeddings/sanity` | one batched embedding call, 3 phrases (en/fr/ar), cosine-similarity report |
+| POST | `/evaluate` | run a question set (`questions.json` / `questions_50.json` / `questions_real.json` or an absolute host path): metrics + per-question outcomes; the full run is saved under `results/` |
+| POST | `/diagnostics/harness50` | the offline 50-question harness as a subprocess job (slow — minutes) |
+| POST | `/diagnostics/catalog` | the xKiro provider catalog snapshot (read-only, live) |
 
 Semantics worth knowing before you integrate:
 
@@ -94,6 +116,9 @@ curl -s -X POST localhost:8000/answer \
   -H 'content-type: application/json' \
   -d '{"question": "ما هي المرابحة؟"}' | jq '{status, reason, answer}'
 curl -s -X POST 'localhost:8000/ingest?reset=true' ; curl -s localhost:8000/ingest/status
+curl -s localhost:8000/inspect?limit=2 | jq '.chunks'
+curl -s -X POST localhost:8000/keys -H 'content-type: application/json' \
+  -d '{"key_env": "NVIDIA_API_KEY", "value": "nvapi-...", "persist": false}' | jq
 ```
 
 ## Environment variables
@@ -113,7 +138,7 @@ NVIDIA `nvidia/nemotron-3-embed-1b` embeddings + xKiro
 | `RAGLAB_LANG_FILTER` | restrict retrieval to `ar`/`fr`/`en` | none |
 | `RAGLAB_NEIGHBOR_RADIUS` | widen hits with adjacent chunks (0–2) | `0` |
 | `RAGLAB_DATA_DIRS` | comma-separated corpus dirs | `../docs + raglab/data/` |
-| `RAGLAB_ALLOW_PROFILE_SWITCH` | enable `POST /profile` | `0` |
+| `RAGLAB_ALLOW_PROFILE_SWITCH` | enable `POST /profile` | `1` (docker-compose pins `0`) |
 | `RAGLAB_CORS_ORIGINS` | comma-separated allowed origins | `*` |
 | `RAGLAB_CACHE_DIR` | relocate embedding/answer caches (Docker volume) | next to the code |
 | `RAGLAB_HOST` / `RAGLAB_PORT` | used by `python service.py` | `0.0.0.0` / `8000` |
@@ -143,14 +168,21 @@ start), not on the fifth request.
    chunks (`409 retrieval_refused`, rebuild with `/ingest?reset=true`).
 4. **Non-pinned answer models are experimental surfaces**: the live free-price
    check and benchmark attribution belong to the pinned xKiro SKU only.
-5. **Same standing as the rest of the lab**: not production-ready for a
+5. **`POST /keys` with `persist=true` inside Docker** writes the container's
+   own `raglab/.env` — not the bind-mounted one you copied keys from — so it
+   is lost when the container is recreated. Give compose the keys via
+   `env_file` and treat `/keys` as a process-level convenience.
+6. **Same standing as the rest of the lab**: not production-ready for a
    banking service (see README.md) — suitable for a supervised pilot.
 
 ## Tests
 
 `python -m unittest -v test_service` (offline: stubbed embeddings + injected
-chat client; no network, no keys). It is part of CI via `run_tests.sh`, and
-its last test case boots a REAL uvicorn server on an ephemeral port and runs
-`local_front.py`'s smoke suite against it over actual HTTP — with no keys and
-an empty index, so the tested behavior is the full refusal contract
-(503/403/422) plus greetings, exactly the state a fresh deployment is in.
+chat client; no network, no keys). It is part of CI via `run_tests.sh`. Its
+last test case boots a REAL uvicorn server on an ephemeral port and runs
+`local_front.py`'s state-aware smoke suite against it over actual HTTP — with
+no keys and an empty index, so the tested behavior is the full refusal
+contract (503/403/422) plus greetings, exactly the state a fresh deployment
+is in. The rest of the cases cover the console-parity endpoints directly
+(keys round-trip and redaction, inspect, chunk-search verdicts, embedding
+sanity, evaluate, profile switching with chunking/corpus validation).

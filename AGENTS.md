@@ -78,20 +78,25 @@ Current state of the work:
   (existing callers/tests unchanged) and keeps only the console (menus, key
   prompts, app_state.json, model-ID memory). profiles.py imports chat.py;
   service.py imports profiles.py and NOTHING from app.py. Offline coverage:
-  `test_service.py` (12 tests, stubbed HF embedder + injected fake generator,
+  `test_service.py` (19 tests, stubbed HF embedder + injected fake generator,
   TestClient) added to run_tests.sh and ci.yml; requirements-benchmark.txt
   gained fastapi+httpx for it. Full docs with the env-var table:
   `raglab/SERVICE.md`.
-- **`raglab/local_front.py`** (same session): a pure-HTTP test client for the
-  service — imports NOTHING from the lab, only urllib + JSON. Default mode is
-  a state-aware smoke suite (13 checks) that reads /health + /models to decide
-  what /search, /answer and /ingest SHOULD do in the current state: keyless →
-  expects 503 missing_api_key, keys + empty index → expects 409 empty_index,
-  ready → one live /search + /answer (skip with --no-spend). Also --ask,
-  --search, --ingest (polls /ingest/status), --interactive REPL; exit codes
-  0/1/2 (ok / failed / unreachable). `test_service.py::LocalFrontOverHttp`
-  boots a real uvicorn on port 0 and requires the suite to pass over actual
-  HTTP in CI.
+- **`raglab/local_front.py`** (same session): the console's twin over REST —
+  same 13 menus as app.py (status/doctor, providers & models, keys, inspect,
+  chunk search, sanity, ingest, retrieval, answer, chat, evaluate, settings,
+  diagnostics), every action an endpoint call. Imports NOTHING from the lab,
+  only urllib + JSON; stateless except front_state.json (custom model-ID
+  memory, 20/provider). Also one-shot flags: --status, --ask, --search,
+  --ingest (polls /ingest/status), --smoke, --interactive, --no-keycheck,
+  --base-url. `--smoke` runs the state-aware suite (20 checks keyless) that
+  reads /health + /models to decide what /search, /answer and /ingest SHOULD
+  do in the current state: keyless → expects 503 missing_api_key, keys +
+  empty index → expects 409 empty_index, ready → one live /search + /answer.
+  `test_service.py::LocalFrontOverHttp` boots a real uvicorn on port 0 and
+  requires the suite to pass over actual HTTP in CI; `ConsoleEndpointsTest`
+  covers the keys/inspect/chunks-search/sanity/evaluate/profile-switch
+  endpoints directly (stubbed). Exit codes 0/1/2 (ok / failed / unreachable).
 
 ## 2. Hard constraints (never violate)
 

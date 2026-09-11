@@ -17,3 +17,6 @@ raglab/benchmark_cache/
 
 # Local tokenizer/package cache
 .cache/
+
+# local front state (custom model IDs)
+raglab/front_state.json

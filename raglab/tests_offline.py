@@ -990,7 +990,18 @@ finally:
     sys.modules.pop("sentence_transformers", None)
 
 # --- app.py: .env writer/reader and state round-trip (pure file logic) ------
-_app_env, app_mod.ENV_PATH = app_mod.ENV_PATH, _app_tmp / ".env"
+# The env writers live in profiles.py now (shared with service /keys); they
+# resolve ENV_PATH at call time, so the retarget must patch profiles, not just
+# the console's re-exported name.
+import profiles as profiles_mod  # noqa: E402
+_app_env = profiles_mod.ENV_PATH
+# Guard: these tests must never touch the developer's real raglab/.env (a
+# retargeting bug once wrote test keys there, and the next service boot
+# happily loaded them). Snapshot the real file and assert it is unchanged.
+_real_env_before = (_app_env.read_text(encoding="utf-8")
+                    if _app_env.exists() else None)
+profiles_mod.ENV_PATH = _app_tmp / ".env"
+app_mod.ENV_PATH = profiles_mod.ENV_PATH
 _app_state_path, app_mod.STATE_PATH = app_mod.STATE_PATH, _app_tmp / "app_state.json"
 try:
     app_mod.write_env_assignment("XKIRO_API_KEY", "xki-abc123")
@@ -1019,8 +1030,14 @@ try:
     check("app: unknown provider resets to the default slot",
           app_mod.load_state()["embedding"] == app_mod.default_state()["embedding"])
 finally:
+    profiles_mod.ENV_PATH = _app_env
     app_mod.ENV_PATH = _app_env
     app_mod.STATE_PATH = _app_state_path
+_real_env_after = (_app_env.read_text(encoding="utf-8")
+                   if _app_env.exists() else None)
+check("app: env tests never touched the real raglab/.env",
+      _real_env_after == _real_env_before,
+      "the real .env changed during the env-writer tests")
 
 # --- app.py: locate_text (the quote-vs-chunk-boundary diagnostic) -----------
 # Same normalization as the citation gate (answer.normalized_quote), so 'full'

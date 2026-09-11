@@ -21,12 +21,24 @@ Endpoints:
     GET  /health          liveness + profile + index + key presence (no secrets)
     GET  /models          registered models per provider
     GET  /profile         the active profile (embedding/answer/chunking/retrieval)
-    POST /profile         switch provider/model at runtime
+    POST /profile         switch provider/model/chunking/retrieval/corpus at runtime
                           (only when RAGLAB_ALLOW_PROFILE_SWITCH=1)
+    GET  /keys            known API-key env vars, descriptions, masked presence
+    POST /keys            set a key in the service process (optionally persist to .env)
+    DELETE /keys/{env}    drop a key from the process (optionally from .env)
     POST /search          retrieval only: top-k chunks for a question
     POST /answer          grounded, cited answer (or refusal) for a question
     POST /ingest          build/rebuild this profile's index (background job)
     GET  /ingest/status   what the ingest job is doing / last did
+    GET  /inspect         chunking preview over the corpus (no model calls)
+    POST /chunks/search   is a quote inside ONE chunk? (citation-gate diagnostic)
+    POST /embeddings/sanity  one batched embedding call + 3-language cosine report
+    POST /evaluate        run a question set against the index (embeddings!)
+    POST /diagnostics/harness50  offline BM25 chunking A/B (subprocess, ~10-20s)
+    POST /diagnostics/catalog    read-only xKiro model catalog (no inference)
+
+The console-parity surface (local_front.py) drives exactly these endpoints:
+same menus as app.py, every action an HTTP call.
 
 Policy: the supported benchmark pipeline stays pinned in pipeline_policy.py.
 The default profile IS the supported pair (NVIDIA nemotron embeddings + xKiro
@@ -53,7 +65,8 @@ Environment (all optional; defaults = the supported pipeline pair):
     RAGLAB_CHUNKING_MODE, RAGLAB_CHUNK_SIZE_TOKENS, RAGLAB_CHUNK_OVERLAP_TOKENS
     RAGLAB_TOP_K, RAGLAB_RETRIEVAL_MODE, RAGLAB_LANG_FILTER, RAGLAB_NEIGHBOR_RADIUS
     RAGLAB_DATA_DIRS               comma-separated corpus dirs (default: ../docs + data/)
-    RAGLAB_ALLOW_PROFILE_SWITCH    1 to enable POST /profile (default 0)
+    RAGLAB_ALLOW_PROFILE_SWITCH    1 to enable POST /profile (default 1 locally;
+                                   docker-compose.yml pins 0 — enable consciously)
     RAGLAB_CORS_ORIGINS            comma-separated allowed origins (default *)
     plus the provider keys: NVIDIA_API_KEY, XKIRO_API_KEY, GOOGLE_API_KEY /
     GEMINI_API_KEY, KIRA_API_KEY, JINA_API_KEY, ... (see raglab/.env.example)
@@ -62,12 +75,14 @@ Environment (all optional; defaults = the supported pipeline pair):
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -289,12 +304,37 @@ class AnswerRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     k: Optional[int] = Field(None, ge=1, le=20)
     include_excerpts: bool = False
+    query_lang: Optional[str] = None    # ar | fr | en — write claims in this language
+    mode: Optional[str] = None          # vector | rrf | blend
+    lang_filter: Optional[str] = None   # ar | fr | en — restrict retrieval
+
+
+class KeySetRequest(BaseModel):
+    key_env: str = Field(min_length=1, max_length=64)
+    value: str = Field(min_length=1, max_length=4096)
+    persist: bool = Field(False,
+                          help="also write it to raglab/.env on the service host "
+                               "(like the console does); default: process env only")
+
+
+class ChunkSearchRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class EvaluateRequest(BaseModel):
+    questions: str = Field(
+        "questions.json",
+        description="a known set name (questions.json, questions_50.json, "
+                    "questions_real.json) or an absolute path on the service host")
+    top_k: Optional[int] = Field(None, ge=1, le=50)
 
 
 class ProfileSwitchRequest(BaseModel):
     embedding: Optional[dict] = None   # {"provider": ..., "model": ...}
     answer: Optional[dict] = None
+    chunking: Optional[dict] = None    # {"mode", "size", "overlap"}
     retrieval: Optional[dict] = None   # {"top_k", "mode", "lang_filter", "neighbor_radius"}
+    data_dirs: Optional[list[str]] = None   # corpus dirs on the SERVICE host
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +355,8 @@ def create_app(profile: dict | None = None, *, generator=None,
     if profile is None:
         profile = profile_from_env()
     if allow_profile_switch is None:
-        allow_profile_switch = os.environ.get("RAGLAB_ALLOW_PROFILE_SWITCH", "0") == "1"
+        # Console parity by default for local runs; docker-compose pins "0".
+        allow_profile_switch = os.environ.get("RAGLAB_ALLOW_PROFILE_SWITCH", "1") == "1"
     if cors_origins is None:
         raw = os.environ.get("RAGLAB_CORS_ORIGINS", "*")
         cors_origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
@@ -385,6 +426,7 @@ def create_app(profile: dict | None = None, *, generator=None,
         def slot_models(registry):
             return [{"provider": name,
                      "label": info["label"],
+                     "key_envs": list(info.get("key_envs", ())),
                      "key_set": bool(profiles.first_set_env(info.get("key_envs", ()) or ("",))[1])
                      if info.get("key_envs") else True,
                      "models": [model["id"] for model in info["models"]]}
@@ -439,6 +481,25 @@ def create_app(profile: dict | None = None, *, generator=None,
             candidate["retrieval"]["top_k"] = retrieval["top_k"]
         if "neighbor_radius" in retrieval and retrieval["neighbor_radius"] in (0, 1, 2):
             candidate["retrieval"]["neighbor_radius"] = retrieval["neighbor_radius"]
+        chunking = request.chunking or {}
+        if "mode" in chunking:
+            if chunking["mode"] not in {"size", "restructure", "manual"}:
+                raise ServiceError(400, "bad_chunking_mode", mode=chunking["mode"],
+                                   allowed=["size", "restructure", "manual"])
+            candidate["chunking"]["mode"] = chunking["mode"]
+        for key in ("size", "overlap"):
+            if key in chunking:
+                value = chunking[key]
+                if not isinstance(value, int) or value <= 0:
+                    raise ServiceError(400, "bad_chunking_value", key=key, value=value)
+                candidate["chunking"][key] = value
+        if request.data_dirs is not None:
+            missing = [d for d in request.data_dirs
+                       if not Path(d.strip()).expanduser().is_dir()]
+            if missing:
+                raise ServiceError(400, "bad_data_dirs", missing=missing,
+                                   hint="paths must exist on the service host")
+            candidate["data_dirs"] = [d.strip() for d in request.data_dirs if d.strip()]
         runtime.switch(candidate)
         jobs.status.update(collection=profiles.collection_name(candidate))
         return {"profile": candidate,
@@ -491,7 +552,14 @@ def create_app(profile: dict | None = None, *, generator=None,
     @app.post("/answer")
     def answer(request: AnswerRequest):
         import chat as chat_mod
-        greeting = profiles.greeting_reply(request.question)
+        for field, allowed in (("mode", {"vector", "rrf", "blend"}),
+                               ("lang_filter", {None, "ar", "fr", "en"}),
+                               ("query_lang", {None, "ar", "fr", "en"})):
+            value = getattr(request, field)
+            if value is not None and value not in allowed:
+                raise ServiceError(400, f"bad_{field}", **{field: value},
+                                   allowed=sorted(v for v in allowed if v))
+        greeting = profiles.greeting_reply(request.question, language=request.query_lang)
         if greeting is not None:
             language, text = greeting
             return {"status": "greeting", "reason": "smalltalk", "answer": text,
@@ -506,8 +574,11 @@ def create_app(profile: dict | None = None, *, generator=None,
             result = chat_mod.ask(local, embedder, collection, generator,
                                   request.question, top_k=k,
                                   neighbor_radius=local.ANSWER_NEIGHBOR_RADIUS,
-                                  use_cache=True, mode=runtime.profile["retrieval"]["mode"],
-                                  lang_filter=runtime.profile["retrieval"]["lang_filter"])
+                                  use_cache=True,
+                                  mode=request.mode or runtime.profile["retrieval"]["mode"],
+                                  lang_filter=(request.lang_filter if request.lang_filter is not None
+                                               else runtime.profile["retrieval"]["lang_filter"]),
+                                  language=request.query_lang)
         except (ValueError, RuntimeError) as exc:
             raise ServiceError(409, "answer_refused", error=safe_error(exc)) from None
         except NvidiaAPIError as exc:
@@ -543,6 +614,213 @@ def create_app(profile: dict | None = None, *, generator=None,
     @app.get("/ingest/status")
     def ingest_status():
         return jobs.status
+
+    # -- API keys (the console's key manager, over HTTP) -------------------------
+    # Values are accepted (the console needs to paste them) but NEVER echoed:
+    # responses carry only presence and the masked first 8 characters. Setting
+    # a key affects the service process immediately; persist=true additionally
+    # writes it to raglab/.env on the service host, exactly like app.py.
+
+    @app.get("/keys")
+    def list_keys():
+        keys = []
+        for env_name, description in profiles.KEY_ENV_INFO.items():
+            value = os.environ.get(env_name, "").strip()
+            keys.append({"env": env_name, "description": description,
+                         "status": "set" if value else "missing",
+                         "masked": profiles.masked(value) if value else None})
+        return {"keys": keys}
+
+    @app.post("/keys")
+    def set_key(request: KeySetRequest):
+        if request.key_env not in profiles.KEY_ENV_INFO:
+            raise ServiceError(400, "unknown_key_env", key_env=request.key_env,
+                               registered=sorted(profiles.KEY_ENV_INFO))
+        if re.search(r"[\s\"']", request.value):
+            raise ServiceError(400, "bad_key_value",
+                               hint="a key cannot contain spaces or quotes")
+        if profiles.looks_like_placeholder(request.value):
+            raise ServiceError(400, "placeholder_value",
+                               hint="that looks like the .env.example template, "
+                                    "not a real key")
+        os.environ[request.key_env] = request.value
+        if request.persist:
+            profiles.write_env_assignment(request.key_env, request.value)
+        # A new key must invalidate anything built with the old/missing one.
+        with runtime.lock:
+            runtime._embedder = None
+            runtime._generator = None
+        return {"env": request.key_env, "status": "set",
+                "masked": profiles.masked(request.value),
+                "persisted": bool(request.persist)}
+
+    @app.delete("/keys/{env_name}")
+    def delete_key(env_name: str, persist: bool = False):
+        if env_name not in profiles.KEY_ENV_INFO:
+            raise ServiceError(400, "unknown_key_env", key_env=env_name,
+                               registered=sorted(profiles.KEY_ENV_INFO))
+        removed_file = profiles.remove_env_assignment(env_name) if persist else False
+        os.environ.pop(env_name, None)
+        with runtime.lock:
+            runtime._embedder = None
+            runtime._generator = None
+        return {"env": env_name, "status": "missing",
+                "removed_from_env_file": removed_file}
+
+    # -- corpus inspection (no model calls) ---------------------------------------
+
+    @app.get("/inspect")
+    def inspect(limit: int = 3):
+        import statistics
+        from chunker import chunk_all
+        from loader import load_all
+        if not 0 <= limit <= 50:
+            raise ServiceError(400, "bad_limit", limit=limit, allowed="0-50")
+        local = runtime.local()
+        try:
+            docs = load_all(profiles.data_dirs(runtime.profile))
+        except ValueError as exc:
+            raise ServiceError(409, "no_corpus", error=str(exc)) from None
+        if not docs:
+            raise ServiceError(409, "no_corpus",
+                               hint="no loadable documents in the configured data dirs")
+        chunks = chunk_all(docs, local)
+        counts = [chunk.token_count for chunk in chunks]
+        step = max(1, local.CHUNK_SIZE_TOKENS // 5)
+        histogram = [{"bucket": f"{low}-{low + step}",
+                      "chunks": sum(1 for c in counts if low <= c < low + step)}
+                     for low in range(0, max(counts) + 1, step)]
+        return {
+            "documents": [{"name": doc["name"], "language": doc["language"],
+                           "chars": len(doc["text"])} for doc in docs],
+            "chunking": {"mode": local.CHUNKING_MODE, "size": local.CHUNK_SIZE_TOKENS,
+                         "overlap": local.CHUNK_OVERLAP_TOKENS},
+            "chunks": {"count": len(chunks), "tokens_total": sum(counts),
+                       "tokens_min": min(counts), "tokens_max": max(counts),
+                       "tokens_median": statistics.median(counts),
+                       "tokens_mean": round(statistics.mean(counts), 1),
+                       "histogram": [row for row in histogram if row["chunks"]]},
+            "sample": [{"index": chunk.index, "source": chunk.source,
+                        "language": chunk.language, "tokens": chunk.token_count,
+                        "section": chunk.section_type, "heading": chunk.heading,
+                        "text": chunk.text} for chunk in chunks[:limit]],
+        }
+
+    # -- quote-vs-chunk diagnostic (no model calls) --------------------------------
+
+    @app.post("/chunks/search")
+    def chunks_search(request: ChunkSearchRequest):
+        description, rows = profiles.search_rows(runtime.profile)
+
+        def brief(row):
+            return {"source": row[1], "chunk_index": row[2], "heading": row[3] or None}
+
+        found = profiles.locate_text(request.text, rows)
+        payload = {"description": description, "needle": found["needle"],
+                   "full": [brief(row) for row in found["full"]],
+                   "head": [brief(row) for row in found["head"]],
+                   "tail": [brief(row) for row in found["tail"]]}
+        if found["full"]:
+            payload["first_full_text"] = found["full"][0][0]
+        return payload
+
+    # -- embedding sanity check (one batched embedding call) ------------------------
+
+    @app.post("/embeddings/sanity")
+    def embeddings_sanity():
+        # The same three phrases as BaseEmbedder._sanity_check (en/fr/ar), so
+        # the report says the same thing the console's sanity check says.
+        phrases = [("English", "savings account"),
+                   ("French", "compte épargne"),
+                   ("Arabic", "حساب التوفير")]
+        embedder = runtime.embedder()          # 503 when the key is missing
+        from embedder import cosine
+        vectors = embedder.embed_texts([phrase for _, phrase in phrases])
+        pairs = []
+        for i in range(len(phrases)):
+            for j in range(i + 1, len(phrases)):
+                pairs.append({"pair": f"{phrases[i][0]}/{phrases[j][0]}",
+                              "cosine": round(cosine(vectors[i], vectors[j]), 4)})
+        return {"provider": embedder.provider_name, "model": embedder.model,
+                "dimension": len(vectors[0]) if vectors else None,
+                "batch_size": embedder.batch_size,
+                "cache_entries": embedder.cache.size,
+                "api_calls": embedder.api_calls,
+                "phrases": [phrase for _, phrase in phrases],
+                "cosines": pairs,
+                "interpretation": "clearly positive similarities mean the model places "
+                                  "the languages in one shared space; negative/near-zero "
+                                  "values mean cross-lingual retrieval is likely to fail"}
+
+    # -- evaluation (embeds every question — provider calls) -------------------------
+
+    QUESTION_SETS = ("questions.json", "questions_50.json", "questions_real.json")
+
+    @app.post("/evaluate")
+    def evaluate(request: EvaluateRequest):
+        from evaluate import load_question_set, run_evaluation, save_run
+        path = Path(request.questions)
+        if not path.is_absolute():
+            path = profiles.PROJECT_DIR / request.questions
+        if request.questions not in QUESTION_SETS and not path.exists():
+            raise ServiceError(400, "unknown_question_set", questions=request.questions,
+                               known=list(QUESTION_SETS),
+                               hint="or pass an absolute path that exists on the service host")
+        try:
+            cases = load_question_set(path)
+        except FileNotFoundError as exc:
+            raise ServiceError(400, "unknown_question_set", error=str(exc)) from None
+        if not cases:
+            raise ServiceError(400, "empty_question_set", questions=request.questions)
+        local = runtime.local()
+        embedder = runtime.embedder()
+        collection = runtime.collection()
+        try:
+            run = run_evaluation(local, embedder, collection, cases,
+                                 mode=runtime.profile["retrieval"]["mode"],
+                                 top_k=request.top_k or 20, translator=None)
+        except (ValueError, RuntimeError) as exc:
+            raise ServiceError(409, "evaluation_refused", error=safe_error(exc)) from None
+        saved = save_run(run, local.RESULTS_DIR)
+        # The full run carries every question's hits — heavy. Give the caller
+        # the aggregates plus per-question outcomes, not the raw hit lists.
+        questions = [{"id": q.get("id"), "language": q.get("language"),
+                      "category": q.get("category"), "hit_at_1": q.get("hit_at_1"),
+                      "hit_at_3": q.get("hit_at_3"), "hit_at_5": q.get("hit_at_5"),
+                      "is_out_of_scope": q.get("is_out_of_scope")}
+                     for q in run.get("questions", [])]
+        return {"metrics": run["metrics"], "config": run["config"],
+                "questions": questions, "saved_to": str(saved),
+                "note": "lab measurement on " + local.CHROMA_COLLECTION_NAME +
+                        " — not a benchmark result"}
+
+    # -- diagnostics ---------------------------------------------------------------
+
+    @app.post("/diagnostics/harness50")
+    def diagnostics_harness50():
+        import subprocess
+        import sys as _sys
+        # Offline, deterministic, no provider calls — but it re-chunks the whole
+        # corpus twice, so it takes tens of seconds; that is why it is a POST.
+        try:
+            completed = subprocess.run(
+                [_sys.executable, "harness50.py"], cwd=profiles.PROJECT_DIR,
+                capture_output=True, text=True, timeout=900)
+        except subprocess.TimeoutExpired:
+            raise ServiceError(504, "harness50_timeout") from None
+        return {"exit_code": completed.returncode,
+                "output_tail": (completed.stdout or "").splitlines()[-20:],
+                "report": str(profiles.PROJECT_DIR / "results/harness50/comparison.md")
+                if completed.returncode == 0 else None}
+
+    @app.post("/diagnostics/catalog")
+    def diagnostics_catalog():
+        try:
+            from provider_catalog import collect
+            report = collect()
+        except (ValueError, RuntimeError, OSError, KeyError) as exc:
+            raise ServiceError(502, "catalog_failed", error=safe_error(exc)) from None
+        return report
 
     return app
 

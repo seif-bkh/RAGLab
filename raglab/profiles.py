@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -536,3 +537,132 @@ def greeting_language(text: str) -> str:
     if re.search(r"[\u0600-\u06FF]", lowered):
         return "ar"
     return "en"
+
+
+# ---------------------------------------------------------------------------
+# .env handling — keys are the ONLY thing written there (shared by the console
+# and the service's /keys endpoints).
+# ---------------------------------------------------------------------------
+
+ENV_PATH = PROJECT_DIR / ".env"
+
+
+PLACEHOLDER_PATTERNS = ("paste-your", "paste your", "your-key", "your_key",
+                        "your_kira", "changeme", "change-me", "xxx", "placeholder",
+                        "api_key")   # pasted templates like YOUR_KIRA_API_KEY
+
+
+def read_env_file(path=None) -> dict:
+    """KEY -> value map of the literal .env file (os.environ may hold more).
+
+    The path resolves at CALL time (a default argument would bind the constant
+    at import time and silently ignore a later retarget — tests caught exactly
+    that).
+    """
+    path = ENV_PATH if path is None else path
+    assignments: dict[str, str] = {}
+    if not path.exists():
+        return assignments
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.match(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
+        if match:
+            assignments[match.group(1)] = match.group(2).strip().strip('"').strip("'")
+    return assignments
+
+
+def write_env_assignment(name: str, value: str) -> None:
+    """Update or append one KEY=value in raglab/.env, preserving every other line.
+
+    Comments and ordering are kept: .env is a file humans also edit, and a
+    rewrite that dropped their notes would be a regression, not a convenience.
+    """
+    existed = ENV_PATH.exists()
+    lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if existed else []
+    pattern = re.compile(r"^\s*(?:export\s+)?" + re.escape(name) + r"\s*=")
+    for index, line in enumerate(lines):
+        if pattern.match(line):
+            lines[index] = f"{name}={value}"
+            break
+    else:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"# added by app.py {datetime.now(timezone.utc):%Y-%m-%d}")
+        lines.append(f"{name}={value}")
+    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if not existed:
+        ENV_PATH.chmod(0o600)   # a fresh .env should not be group/world-readable
+
+
+def remove_env_assignment(name: str) -> bool:
+    """Drop one assignment from .env (and the process env). True if it existed."""
+    if not ENV_PATH.exists():
+        return False
+    lines = ENV_PATH.read_text(encoding="utf-8").splitlines()
+    pattern = re.compile(r"^\s*(?:export\s+)?" + re.escape(name) + r"\s*=")
+    kept = [line for line in lines if not pattern.match(line)]
+    removed = len(kept) != len(lines)
+    if removed:
+        ENV_PATH.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    os.environ.pop(name, None)
+    return removed
+
+
+def looks_like_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    return any(token in lowered for token in PLACEHOLDER_PATTERNS) or len(value) < 8
+
+
+def search_rows(state: dict):
+    """(description, rows) with rows = [(text, source, index, heading), ...].
+
+    Prefers the STORED chunks of the current profile — they are literally what
+    retrieval supplied to the model — and falls back to a fresh offline
+    chunking with the current settings when that index is empty.
+    """
+    local = build_lab_config(state)
+    try:
+        from store import _client
+        client = _client(local)
+        collection = client.get_collection(local.CHROMA_COLLECTION_NAME)
+        count = collection.count()
+    except Exception:                                   # noqa: BLE001 — chroma absent/unbuilt
+        count = 0
+    if count:
+        got = collection.get(include=["documents", "metadatas"])
+        rows = [(text, (meta or {}).get("document") or (meta or {}).get("source") or "?",
+                 (meta or {}).get("chunk_index"), (meta or {}).get("heading") or "")
+                for text, meta in zip(got.get("documents") or [], got.get("metadatas") or [])]
+        return (f"{count} stored chunk(s) in {local.CHROMA_COLLECTION_NAME} "
+                "(exactly what retrieval supplies)"), rows
+    from chunker import chunk_all
+    from loader import load_all
+    chunks = chunk_all(load_all(data_dirs(state)), local)
+    rows = [(chunk.text, chunk.source, chunk.index, chunk.heading) for chunk in chunks]
+    return (f"{len(rows)} freshly chunked chunk(s) with the current settings "
+            "(the profile index is empty)"), rows
+
+
+def locate_text(needle: str, rows):
+    """Where does a quote/phrase live relative to the chunk boundaries?
+
+    Uses the citation gate's own normalization (answer.normalized_quote), so
+    'full' being non-empty means a verbatim quote of `needle` CAN pass the
+    gate from that chunk. 'head'/'tail' locate the first/last ~24 characters
+    when no single chunk holds the whole text (a quote crossing a chunk
+    boundary can never validate, however faithfully the model copies it).
+    """
+    from answer import normalized_quote
+    target = normalized_quote(needle)
+    if not target:
+        return {"needle": "", "full": [], "head": [], "tail": []}
+    normalized = [(normalized_quote(text), row) for row in rows for text in [row[0]]]
+    window = 24 if len(target) > 24 else len(target)
+    return {
+        "needle": target,
+        "full": [row for norm, row in normalized if target in norm],
+        "head": [row for norm, row in normalized if target[:window] in norm],
+        "tail": [row for norm, row in normalized if target[-window:] in norm],
+    }

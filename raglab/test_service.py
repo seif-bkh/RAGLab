@@ -298,13 +298,151 @@ class LocalFrontOverHttp(unittest.TestCase):
             api = local_front.Api(f"http://127.0.0.1:{port}")
             passed, failed = local_front.run_suite(api, spend=False)
             self.assertEqual(failed, 0, f"{failed} smoke check(s) failed")
-            self.assertGreaterEqual(passed, 12)
+            self.assertGreaterEqual(passed, 18)
         finally:
             server.should_exit = True
             thread.join(timeout=10)
             for name, value in saved.items():
                 if value is not None:
                     os.environ[name] = value
+
+
+class ConsoleEndpointsTest(unittest.TestCase):
+    """The console-parity endpoints: keys, inspect, chunk search, sanity,
+    evaluate, extended profile switching — stubbed providers, real app."""
+
+    CORPUS = ("# Products\n\nOverview of the Atlas retail range.\n\n## Prices\n\n"
+              + "".join(
+                  f"The Atlas card costs 10 dinars per year, and this price "
+                  f"sheet {i} confirms that annual maintenance is included "
+                  f"for every Atlas customer without exception, number {i}.\n\n"
+                  for i in range(30)))
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        (cls.tmp / "note.md").write_text(cls.CORPUS, encoding="utf-8")
+        cls.profile = _service_profile(cls.tmp)
+        cls.overrides = {
+            "CHROMA_DIR": cls.tmp / "chroma",
+            "EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+            "NVIDIA_EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+            "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
+            "RESULTS_DIR": cls.tmp,
+        }
+        local = build_lab_config(cls.profile)
+        for key, value in cls.overrides.items():
+            setattr(local, key, value)
+        generator = AnswerGenerator(local, client=_FakeChatClient(),
+                                    approved_models=(PROFILE_MODEL,))
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+        cls.client = TestClient(service.create_app(
+            cls.profile, generator=generator, allow_profile_switch=True,
+            config_overrides=cls.overrides))
+        accepted = cls.client.post("/ingest")
+        assert accepted.status_code == 200, accepted.text
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status = cls.client.get("/ingest/status").json()
+            if status["state"] != "running":
+                break
+            time.sleep(0.1)
+        assert status["state"] == "done", status
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.modules.pop("sentence_transformers", None)
+
+    def test_keys_endpoints(self):
+        saved = os.environ.get("KIRA_API_KEY")
+        os.environ.pop("KIRA_API_KEY", None)
+        try:
+            listed = self.client.get("/keys").json()["keys"]
+            self.assertIn("KIRA_API_KEY", {row["env"] for row in listed})
+            self.assertEqual(self.client.post("/keys", json={
+                "key_env": "NOT_A_KEY", "value": "whatever12345"}).status_code, 400)
+            self.assertEqual(self.client.post("/keys", json={
+                "key_env": "KIRA_API_KEY", "value": "YOUR_KIRA_API_KEY"}).status_code, 400)
+            response = self.client.post("/keys", json={
+                "key_env": "KIRA_API_KEY", "value": "kira-endpoint-test-123"})
+            self.assertEqual(response.status_code, 200, response.text)
+            body = response.json()
+            self.assertEqual(body["masked"], "kira-end…")
+            self.assertFalse(body["persisted"])
+            blob = json.dumps(self.client.get("/keys").json())
+            self.assertNotIn("kira-endpoint-test-123", blob)   # value never echoed
+            removed = self.client.delete("/keys/KIRA_API_KEY")
+            self.assertEqual(removed.status_code, 200)
+            self.assertEqual(removed.json()["status"], "missing")
+        finally:
+            if saved is not None:
+                os.environ["KIRA_API_KEY"] = saved
+
+    def test_inspect_reports_chunking_without_model_calls(self):
+        response = self.client.get("/inspect", params={"limit": 2})
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["documents"])
+        self.assertGreater(body["chunks"]["count"], 2)   # the repeated corpus splits
+        self.assertEqual(len(body["sample"]), 2)
+
+    def test_chunks_search_verdicts(self):
+        sample = self.client.get("/inspect", params={"limit": 8}).json()["sample"]
+        content = [row for row in sample if row["section"] != "front-matter"]
+        self.assertGreaterEqual(len(content), 2)
+        # Text inside ONE chunk: found in full.
+        first = " ".join(content[0]["text"].split())
+        body = self.client.post("/chunks/search",
+                                json={"text": first[:40]}).json()
+        self.assertTrue(body["full"], body)
+        self.assertIn("first_full_text", body)
+        # A phrase stitched from two DIFFERENT chunks crosses a boundary: no
+        # single chunk holds it, and both fragments are still locatable —
+        # exactly the "quote can never pass the citation gate" diagnostic.
+        second = " ".join(content[1]["text"].split())
+        body = self.client.post("/chunks/search", json={
+            "text": first[-32:] + " " + second[:32]}).json()
+        self.assertFalse(body["full"])
+        self.assertTrue(body["head"])
+        self.assertTrue(body["tail"])
+
+    def test_embeddings_sanity_report(self):
+        response = self.client.post("/embeddings/sanity")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["provider"], "huggingface")
+        self.assertEqual(body["dimension"], 8)
+        self.assertEqual(len(body["cosines"]), 3)   # 3 phrases -> 3 pairs
+
+    def test_evaluate_runs_a_question_set(self):
+        cases = {"cases": [{
+            "id": "t1", "question": "What does the Atlas card cost?",
+            "language": "en", "category": "verbatim",
+            "expected_substring": "10 dinars"}]}
+        path = self.tmp / "mini_questions.json"
+        path.write_text(json.dumps(cases), encoding="utf-8")
+        response = self.client.post("/evaluate", json={"questions": str(path)})
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["metrics"]["overall"]["n"], 1)
+        self.assertIn("hit@1", body["metrics"]["overall"])
+        self.assertEqual(len(body["questions"]), 1)
+        self.assertTrue(str(body["saved_to"]).startswith(str(self.tmp)))
+        bad = self.client.post("/evaluate", json={"questions": "nope.json"})
+        self.assertEqual(bad.status_code, 400)
+
+    def test_profile_switch_accepts_chunking_and_rejects_bad_dirs(self):
+        response = self.client.post("/profile", json={"chunking": {"mode": "size"}})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["profile"]["chunking"]["mode"], "size")
+        bad = self.client.post("/profile", json={"data_dirs": ["/no/such/dir"]})
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.json()["detail"]["reason"], "bad_data_dirs")
+        bad = self.client.post("/profile", json={"chunking": {"mode": "weird"}})
+        self.assertEqual(bad.status_code, 400)
+        # restore, so any test running after this one keeps the ingested profile
+        self.client.post("/profile", json={"chunking": {"mode": "restructure"}})
 
 
 if __name__ == "__main__":

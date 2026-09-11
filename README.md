@@ -49,6 +49,8 @@ python app.py          # OR the interactive console: menus, provider/model
 python -m uvicorn service:app   # OR the standalone HTTP microservice
                                 # (pip install -r requirements-service.txt;
                                 #  docs at /docs — see raglab/SERVICE.md)
+python local_front.py           # the same console, driving the service over
+                                # REST (menus, keys, ingest, chat, evaluate)
 python main.py inspect --data-dir ../docs
 python main.py ingest --reset --data-dir ../docs
 python main.py query "What is Murabaha?" --query-lang en
