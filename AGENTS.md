@@ -199,8 +199,9 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 34578458391 on HEAD `2a6dc18` (offline suite: 193 unittests
-  — 180 + 13 service, incl. the local_front-over-real-HTTP case — + 88 checks
+- **CI green**: run 34582141711 on HEAD `f73c2bd` (offline suite: 199 unittests
+  — 180 + 19 service, incl. the local_front-over-real-HTTP case and the new
+  ConsoleEndpointsTest — + 89 checks
   + inspect + pip check).
 - **BM25-only A/B** (45 evaluable of 50; k=20; full table in
   `raglab/results/harness50/comparison.md`, regenerable via `harness50.py`):
