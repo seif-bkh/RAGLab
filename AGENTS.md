@@ -226,6 +226,9 @@ Channels that WORK (use in this order):
 - Keep `./raglab/run_tests.sh --offline` green locally before pushing (it is what CI
   re-runs; a local red guarantees a CI red).
 - Do not run paid/live commands locally — the sandbox can't reach the endpoints anyway.
+- **Every reply to the user ends with a "run it locally" block** (standing
+  instruction, 2026-09-14): pull → install → run → verify, copy-pasteable on Linux,
+  reflecting what actually changed in that reply. Canonical commands: §9.
 
 ## 6. Corpus facts (do not re-diagnose)
 
@@ -400,3 +403,68 @@ Channels that WORK (use in this order):
   recreate it (`python3 -m venv .venv && .venv/bin/pip install -q -r
   requirements-benchmark.txt`, PyPI is reachable, ~2 min) before trusting any
   local gate.
+
+## 9. Runbook — the user's own Linux machine (verified, keep current)
+
+The user runs this locally and reports transcripts (`front chat>` = the service +
+`local_front.py`). Verified end-to-end on a **fresh clone of this branch**
+(`249977c`) on 2026-09-14: clone → venv → `main.py inspect` → `run_tests.sh
+--offline` (EXIT=0) → `uvicorn service:app` → `local_front.py --status`.
+
+```bash
+# --- 1. get the code (first time) -----------------------------------------
+git clone https://github.com/seif-bkh/RAGLab.git
+cd RAGLab
+git switch arena/01a09f30-raglab          # this session's branch
+
+# --- 1b. ...or update an existing clone -----------------------------------
+git fetch origin arena/01a09f30-raglab
+git switch arena/01a09f30-raglab
+git pull --ff-only
+
+# --- 2. Python env (3.11; the versions CI pins) ---------------------------
+python3 -m venv raglab/.venv
+raglab/.venv/bin/pip install -U pip
+raglab/.venv/bin/pip install -r raglab/requirements-benchmark.txt   # tests+service
+#   core CLI only:  -r raglab/requirements.txt
+#   service only:   -r raglab/requirements-service.txt
+#   hard harness:   -r raglab/requirements-harness.txt
+
+# --- 3. keys (never committed; masked to 8 chars everywhere) --------------
+cp raglab/.env.example raglab/.env        # fill NVIDIA_API_KEY / XKIRO_API_KEY / GOOGLE_API_KEY
+#   or ask the console: menu 3, or POST /keys on a running service
+
+# --- 4. no-key smoke (works with zero keys and no network) ----------------
+cd raglab
+.venv/bin/python main.py inspect
+PYTHON="$PWD/.venv/bin/python" ./run_tests.sh --offline     # must print EXIT=0
+
+# --- 5. run the service (what `front chat>` talks to) ---------------------
+.venv/bin/python -m uvicorn service:app --host 0.0.0.0 --port 8000
+#   docs UI: http://localhost:8000/docs
+
+# --- 6. drive it (second terminal, same folder) ---------------------------
+.venv/bin/python local_front.py --status          # doctor: profile, index state, keys
+.venv/bin/python local_front.py --ingest          # first run: build the index
+.venv/bin/python local_front.py --ingest --reset  # rebuild (stale index / new chunk size)
+.venv/bin/python local_front.py --interactive     # the chat REPL (front chat>)
+.venv/bin/python local_front.py --ask "ما هي المرابحة؟"
+.venv/bin/python local_front.py --smoke           # state-aware endpoint suite
+
+# --- 7. console without a service (same runtime, direct) ------------------
+.venv/bin/python app.py                           # the 13-menu console
+./chat.sh --ingest                                # chat.sh: its OWN collection (raglab_chat, 640/40)
+```
+
+Facts that save round trips:
+- `local_front.py` defaults to `http://localhost:8000` (override `--base-url`, env
+  `RAGLAB_SERVICE_URL`); exit codes 0 ok / 1 failed / 2 unreachable.
+- The **service profile must match the index**: `RAGLAB_CHUNK_SIZE_TOKENS`,
+  `RAGLAB_CHUNKING_MODE` and provider/model decide the fingerprint. `/health` shows
+  `index.stale`; a mismatch refuses with `409 stale_index` and the front offers the
+  rebuild (§1, §8). Console and service sharing one `chroma_db/` is the usual trap.
+- Docker path (`docker compose up --build`, repo root, port 8000) is documented in
+  README/docker-compose.yml but **was not verified in this sandbox** (no docker binary).
+- `tiktoken` downloads `cl100k_base` on first use; without network the chunker falls
+  back to the chars/4 estimator (marked in its logs, different boundaries — CI uses
+  the real BPE).
