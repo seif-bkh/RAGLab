@@ -207,9 +207,20 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 34855175811 on HEAD `ea27075` (offline suite: 200 unittests
-  + 89 checks + inspect + pip check; docs-only change — CONTRACT.md added,
-  no code touched).
+- **CI green**: run 34861888379 on HEAD `48bb30d` (offline suite: 209 unittests
+  — 180 core + 29 service — + 96 checks + inspect + pip check).
+- **Service 1.1.0 output guards** (48bb30d, from the fullstack team's review):
+  (1) `RAGLAB_SERVICE_TOKEN` → every request needs `X-Service-Token`
+  (constant-time; CORS preflights exempt; local_front sends it from env);
+  (2) `scrub.py` — post-gate PII scrub of /answer + /search outputs
+  ([EMAIL]/[PHONE]/[RIB]/[CIN]; diagnostics stay raw on purpose);
+  (3) numeric half of the citation gate in answer.py — every digit-form
+  number in a claim must exist in its evidence quotes (FR/EN/AR decimal +
+  thousands normalization; `unsourced_numbers`/`UnsourcedNumber`); violation
+  refuses as `unsourced_number`, and /answer now forwards `error` +
+  `raw_preview` (scrubbed) on refusal paths. Known test gotcha: the stub
+  embedder is hash-based and Python str hashes are per-process random, so
+  retrieval ORDER varies between runs — never assert on hits/sources[0].
 - **Service profile-switch contract** (eb32c74): an explicit
   `{provider, model}` in POST /profile is applied VERBATIM — custom model IDs
   included (the registries are known-good suggestions, not a whitelist). The
