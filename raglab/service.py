@@ -451,14 +451,17 @@ def create_app(profile: dict | None = None, *, generator=None,
         index = {"collection": local.CHROMA_COLLECTION_NAME, "count": state["count"],
                  "stale": state["stale"]}
         if state["current_chunk_fp"]:
-            index["current_chunk_fp"] = state["current_chunk_fp"][:16]
+            # The fingerprints are NOT truncated: `chunkv4:msize:s60` becomes
+            # `chunkv4:msize:s6` at 16 chars, hiding the very digits (60 vs 440)
+            # that explain a stale index to a human.
+            index["current_chunk_fp"] = state["current_chunk_fp"]
         if state["stale"]:
             index["rebuild"] = REBUILD_HINT
         import re as _re
         from chunker import tokenizer_identity
         if state["stored_chunk_fp"]:
             stored_tok = _re.search(r"tok([^:]+)", state["stored_chunk_fp"])
-            index["chunk_fp"] = state["stored_chunk_fp"][:16]
+            index["chunk_fp"] = state["stored_chunk_fp"]
             index["tokenizer_match"] = (stored_tok.group(1) == tokenizer_identity()
                                         if stored_tok else None)
         keys = {}

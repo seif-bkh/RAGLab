@@ -140,6 +140,9 @@ def detail_of(body) -> str:
 # Index freshness — reading /health so a stale index is never a surprise
 # ---------------------------------------------------------------------------
 
+REBUILD_COMMAND = "python local_front.py --ingest --reset"
+
+
 def index_freshness(index: dict) -> tuple[str, str]:
     """(state, sentence) for /health's index block.
 
@@ -158,14 +161,14 @@ def index_freshness(index: dict) -> tuple[str, str]:
     stale = index.get("stale")
     if stale is None:
         return "unknown", (f"{count} chunk(s) indexed, but the collection carries no chunk "
-                           "fingerprint (built by an older RAGLab) — rebuild to enable "
-                           "the staleness check:  python local_front.py --ingest --reset")
+                           f"fingerprint (built by an older RAGLab) — rebuild to enable "
+                           f"the staleness check:  {REBUILD_COMMAND}")
     if stale:
         return "stale", (
             f"{count} chunk(s) indexed, but they were built with fingerprint "
             f"{index.get('chunk_fp') or '?'} while this profile now produces "
             f"{index.get('current_chunk_fp') or '?'} — chunk texts changed, so retrieval "
-            f"would be wrong. Rebuild:  {index.get('rebuild') or 'python local_front.py --ingest --reset'}")
+            f"would be wrong. Rebuild:  {REBUILD_COMMAND}  (menu 7, or POST /ingest?reset=true)")
     return "fresh", f"{count} chunk(s) indexed, fingerprint matches this profile"
 
 
@@ -187,7 +190,8 @@ def failure_lines(status: int, body, *, rebuild_offer: bool = False) -> tuple[li
                      "chunks this profile would retrieve.")
         lines.append(f"[front] stored fingerprint:  {detail.get('stored')}")
         lines.append(f"[front] current fingerprint: {detail.get('current')}")
-        lines.append(f"[front] fix it: {detail.get('rebuild') or 'python local_front.py --ingest --reset'}")
+        lines.append(f"[front] fix it: {REBUILD_COMMAND}  (menu 7) — from any other client:  "
+                     f"POST /ingest?reset=true")
         return lines, bool(rebuild_offer)
     if reason == "empty_index":
         lines.append("[front] the index is empty — build it:  python local_front.py --ingest")
