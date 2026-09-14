@@ -87,7 +87,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import profiles
-from nvidia_api import NvidiaAPIError, safe_error
+from nvidia_api import ProviderCallError, safe_error
 
 SERVICE_VERSION = "1.0.0"
 
@@ -348,6 +348,9 @@ class AnswerRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     k: Optional[int] = Field(None, ge=1, le=20)
     include_excerpts: bool = False
+    include_diagnostics: bool = Field(
+        False, description="also return raw_preview: the rejected model reply "
+                           "(production calls can leave it off)")
     query_lang: Optional[str] = None    # ar | fr | en — write claims in this language
     mode: Optional[str] = None          # vector | rrf | blend
     lang_filter: Optional[str] = None   # ar | fr | en — restrict retrieval
@@ -648,8 +651,11 @@ def create_app(profile: dict | None = None, *, generator=None,
             raise stale_index_error(local.CHROMA_COLLECTION_NAME, exc) from None
         except (ValueError, RuntimeError) as exc:
             raise ServiceError(409, "answer_refused", error=safe_error(exc)) from None
-        except NvidiaAPIError as exc:
-            raise ServiceError(502, "provider_error", error=safe_error(exc)) from None
+        except ProviderCallError as exc:
+            # Any provider transport failure (NVIDIA endpoint, gateways, Google
+            # free tier) — the base type carries status_code/retry_after.
+            raise ServiceError(502, "provider_error", error=safe_error(exc),
+                               http_status=getattr(exc, "status_code", None)) from None
         sources = []
         for source in result.get("sources") or []:
             row = {"source_id": source["source_id"], "document": source["document"],
@@ -657,6 +663,11 @@ def create_app(profile: dict | None = None, *, generator=None,
             if request.include_excerpts:
                 row["text"] = source["text"]
             sources.append(row)
+        # The generator's diagnostics travel with the response on purpose. The
+        # console (app.py/chat.py) printed them from the beginning; the service
+        # used to drop them, so a provider failure reached the front as
+        # "status=error/provider_error" with no reason at all — the user could
+        # not tell a quota refusal from an unusable model ID.
         return {"status": result["status"], "reason": result.get("reason"),
                 "answer": result["answer"], "claims": result.get("claims") or [],
                 "sources": sources, "model": result["model"],
@@ -666,7 +677,14 @@ def create_app(profile: dict | None = None, *, generator=None,
                 "retrieved": result.get("retrieved", 0),
                 "dropped_for_budget": result.get("dropped_for_budget", 0),
                 "seconds": result.get("seconds", 0.0),
-                "inference_performed": result.get("status") not in (None, "refused", "greeting")}
+                "provider_ok": result.get("provider_ok", True),
+                "served_model": result.get("served_model"),
+                "error": result.get("error"),
+                "http_status": result.get("http_status"),
+                "retry_after_s": result.get("retry_after_s"),
+                "inference_performed": result.get("status") not in (None, "refused", "greeting"),
+                **({"raw_preview": result.get("raw_preview")}
+                   if request.include_diagnostics and result.get("raw_preview") else {})}
 
     # -- ingestion --------------------------------------------------------------
 

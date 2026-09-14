@@ -17,6 +17,7 @@ import time
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -445,6 +446,139 @@ class ConsoleEndpointsTest(unittest.TestCase):
         self.client.post("/profile", json={"chunking": {"mode": "restructure"}})
 
 
+class AnswerProviderFailureTest(unittest.TestCase):
+    """The reported chat failure: `status=error/provider_error` with no reason.
+
+    The transcript was a working conversation (greeting answered locally, 20
+    chunks retrieved) that died on the answer call to gemini-2.5-flash-lite in
+    0.45s. Everything needed to explain it — the provider's message, its HTTP
+    status, its retry hint — was computed by AnswerGenerator and then dropped
+    by the service response, so the front could only print "provider error".
+    These pin the fix: the diagnostics reach the client, the front classifies
+    them into an action, and the free-tier client tries the next candidate
+    instead of failing on the first model.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        (cls.tmp / "note.md").write_text(CORPUS, encoding="utf-8")
+        cls.overrides = {
+            "CHROMA_DIR": cls.tmp / "chroma",
+            "EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+            "NVIDIA_EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+            "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
+            "RESULTS_DIR": cls.tmp,
+        }
+
+    def _client(self, profile):
+        return TestClient(service.create_app(
+            profile, generator=None, allow_profile_switch=True,
+            config_overrides=self.overrides))
+
+    def _profile(self):
+        state = _service_profile(self.tmp)
+        state["answer"] = {"provider": "google", "model": "auto"}
+        return state
+
+    def _fail_with(self, message, status_code, retry_after=None):
+        import llm_smoke
+
+        def fake_call(model, key, messages, max_tokens):
+            return None, llm_smoke.GoogleCallError(message, status_code, retry_after)
+        return fake_call
+
+    def setUp(self):
+        import llm_smoke
+        self.llm_smoke = llm_smoke
+        self.saved_modules = sys.modules.get("sentence_transformers")
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+        self.saved_key = os.environ.get("GOOGLE_API_KEY")
+        os.environ["GOOGLE_API_KEY"] = "google-provider-failure-test-key"
+        self.client = self._client(self._profile())     # builds the REAL GoogleChatClient
+        accepted = self.client.post("/ingest")
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if self.client.get("/ingest/status").json()["state"] != "running":
+                break
+            time.sleep(0.1)
+
+    def tearDown(self):
+        if self.saved_key is None:
+            os.environ.pop("GOOGLE_API_KEY", None)
+        else:
+            os.environ["GOOGLE_API_KEY"] = self.saved_key
+        if self.saved_modules is None:
+            sys.modules.pop("sentence_transformers", None)
+        else:
+            sys.modules["sentence_transformers"] = self.saved_modules
+
+    def test_a_quota_failure_reaches_the_client_with_its_status_and_retry(self):
+        with patch("llm_smoke.google_candidates", return_value=["gemini-2.5-flash-lite"]), \
+             patch("llm_smoke.google_call", side_effect=self._fail_with(
+                 "google HTTP 429: RESOURCE_EXHAUSTED — Quota exceeded, please retry in 33.5s.",
+                 429, 33.5)):
+            response = self.client.post("/answer", json={"question": QUESTION})
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["status"], "error")
+        self.assertEqual(body["reason"], "provider_error")
+        self.assertFalse(body["provider_ok"])
+        self.assertFalse(body["validation_ok"])
+        self.assertEqual(body["http_status"], 429)
+        self.assertEqual(body["retry_after_s"], 33.5)
+        self.assertIn("RESOURCE_EXHAUSTED", body["error"])
+        self.assertEqual(body["retrieved"], 1)          # retrieval worked; only the call failed
+        self.assertEqual(body["model"], "gemini-2.5-flash-lite")
+        # The front turns that into an action instead of echoing JSON.
+        import local_front
+        hint = " ".join(local_front.provider_hint(body))
+        self.assertIn("rate-limited", hint)
+        self.assertIn("menu 2", hint)
+        self.assertIn("34s", hint)                      # the provider's own retry hint
+        # ...and the raw rejected reply is opt-in.
+        self.assertNotIn("raw_preview", body)
+
+    def test_the_next_free_model_answers_when_the_selected_one_is_unusable(self):
+        def fake_call(model, key, messages, max_tokens):
+            if model == "gemini-2.5-flash-lite":
+                return None, self.llm_smoke.GoogleCallError(
+                    "google HTTP 404: model not found for this API version", 404)
+            payload = json.loads(messages[1]["content"])
+            quote = " ".join(payload["sources"][0]["text"].split())[:40]
+            return json.dumps({"answerable": True, "claims": [
+                {"text": "The Atlas card costs 10 dinars per year.",
+                 "evidence": [{"source_id": payload["sources"][0]["source_id"],
+                               "quote": quote}]}]}), None
+
+        with patch("llm_smoke.google_candidates",
+                   return_value=["gemini-2.5-flash-lite", "gemini-3.1-flash-lite"]), \
+             patch("llm_smoke.google_call", side_effect=fake_call):
+            response = self.client.post("/answer", json={"question": QUESTION})
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["status"], "answered", body)
+        self.assertTrue(body["validation_ok"])
+        self.assertEqual(body["model"], "gemini-2.5-flash-lite")        # still the selected one
+        self.assertEqual(body["served_model"], "gemini-3.1-flash-lite")  # what actually answered
+        self.assertIn("dinars", body["answer"])
+
+    def test_the_rejected_reply_is_available_as_an_opt_in_diagnostic(self):
+        # A question of its own: validated replies are cached by (model, prompt,
+        # messages), and this test must reach the provider — not the cache.
+        question = "How much is the annual card fee?"
+        with patch("llm_smoke.google_candidates", return_value=["gemini-2.5-flash-lite"]), \
+             patch("llm_smoke.google_call", return_value=("Sure! Murabaha is a sale contract.", None)):
+            plain = self.client.post("/answer", json={"question": question}).json()
+            diagnostic = self.client.post(
+                "/answer", json={"question": question, "include_diagnostics": True}).json()
+        self.assertEqual(plain["status"], "refused")
+        self.assertEqual(plain["reason"], "invalid_output")
+        self.assertNotIn("raw_preview", plain)                 # a production call stays small
+        self.assertIn("Murabaha", diagnostic["raw_preview"])   # the console asks for it
+
+
 class StaleIndexTest(unittest.TestCase):
     """The stale-index contract, end to end — the reported failure.
 
@@ -558,7 +692,7 @@ class StaleIndexTest(unittest.TestCase):
         lines, offer = local_front.failure_lines(
             409, {"detail": {"reason": "stale_index", "stored": "old", "current": "new",
                              "rebuild": "POST /ingest?reset=true"}},
-            rebuild_offer=True)
+            interactive=True)
         self.assertTrue(offer)
         self.assertTrue(any("stored fingerprint" in line for line in lines))
         self.assertTrue(any("POST /ingest?reset=true" in line for line in lines))

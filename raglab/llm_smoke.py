@@ -123,21 +123,67 @@ def _model_rank(model_id: str):
 
 
 def google_candidates(key: str) -> list:
-    """Cheapest-first Gemini models available to this key (free tier)."""
+    """Cheapest-first Gemini models available to this key (free tier).
+
+    The listing says which models exist, not which ones this key may GENERATE
+    with: entries advertise `supportedGenerationMethods`, and a model listed
+    with only countTokens/embedContent fails every call with an HTTP error the
+    user cannot act on. Filter on it when the API provides it (some versions
+    omit the field — then keep the entry rather than guessing).
+    """
     req = urllib.request.Request(GOOGLE_API_ROOT + "/models?page_size=200",
                                  headers={"x-goog-api-key": key,
                                           "User-Agent": "RAGLab-llm-smoke/1.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-    ids = [m.get("name", "").removeprefix("models/")
-           for m in data.get("models", [])
-           if isinstance(m, dict) and str(m.get("name", "")).startswith("models/")]
+    entries = [m for m in data.get("models", []) if isinstance(m, dict)]
+    entries = [m for m in entries
+               if not m.get("supportedGenerationMethods")
+               or "generateContent" in (m.get("supportedGenerationMethods") or [])]
+    ids = [str(m.get("name", "")).removeprefix("models/") for m in entries
+           if str(m.get("name", "")).startswith("models/")]
     # Text-chat models only: drop other modalities (image/audio/video/tts/embed/...).
     non_text = ("image", "audio", "video", "tts", "embed", "live", "music", "veo", "imagen")
     ids = [i for i in ids if re.match(r"^gemini-[\w.\-]+$", i)
            and not any(f"-{t}" in i.lower() for t in non_text)
            and not i.lower().endswith(non_text)]
     return sorted(set(ids), key=_model_rank)[:GOOGLE_MAX_TRIES]
+
+
+class GoogleCallError(str):
+    """A google_call failure that still behaves like the plain string it logs.
+
+    `run_google_phase` prints it and stores it in the smoke JSON, so the string
+    form must stay exactly as before (it is a `str` subclass). The console path
+    additionally reads `.status_code`/`.retry_after` so a provider refusal is
+    reported as WHAT it was — 429 quota (wait and retry), 404/400 (that model
+    ID is not usable with this key), blocked prompt — instead of an opaque
+    "provider error".
+    """
+
+    def __new__(cls, message, status_code=None, retry_after=None):
+        self = super().__new__(cls, str(message))
+        self.status_code = status_code
+        self.retry_after = retry_after
+        return self
+
+
+def google_retry_after(exc, raw: str = ""):
+    """Seconds to wait, from the Retry-After header or Gemini's own wording.
+
+    Gemini's 429 body says "Please retry in 33.484763334s." without a header,
+    and that number is the only honest answer to "should I retry now?".
+    """
+    from nvidia_api import retry_after_seconds
+    seconds = retry_after_seconds((getattr(exc, "headers", None) or {}).get("Retry-After"))
+    if seconds is None:
+        match = re.search(r"retry in ([\d.]+)\s*s", raw or "", re.I)
+        if match:
+            try:
+                seconds = float(match.group(1))
+            except ValueError:
+                seconds = None
+    return seconds
 
 
 def google_call(model: str, key: str, messages: list, max_tokens: int):
@@ -156,16 +202,41 @@ def google_call(model: str, key: str, messages: list, max_tokens: int):
     try:
         with urllib.request.urlopen(req, timeout=180) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        candidate = data["candidates"][0]
-        if candidate.get("finishReason") in {"SAFETY", "RECITATION", "PROHIBITED_CONTENT"}:
-            return None, f"google filtered the response ({candidate['finishReason']})"
-        text = "".join(p.get("text", "") for p in candidate.get("content", {}).get("parts", []))
-        return text, None
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
-        return None, f"google HTTP {exc.code}: {safe_error(raw)[:400]}"
-    except (urllib.error.URLError, TimeoutError, ConnectionError, KeyError, IndexError) as exc:
-        return None, f"google call error: {safe_error(exc)}"
+        return None, GoogleCallError(f"google HTTP {exc.code}: {safe_error(raw)[:400]}",
+                                     exc.code, google_retry_after(exc, raw))
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        return None, GoogleCallError(f"google call error: {safe_error(exc)}")
+    except ValueError as exc:                     # unreadable JSON in a 200 response
+        return None, GoogleCallError(f"google returned invalid JSON: {safe_error(exc)}")
+    try:
+        # A blocked prompt never produces candidates. Indexing [0] first turned
+        # that into "google call error: 'candidates'" — a KeyError string that
+        # said nothing about the safety/policy block that actually happened.
+        block = (data.get("promptFeedback") or {}).get("blockReason")
+        if block:
+            return None, GoogleCallError(
+                f"google blocked the prompt (blockReason={block}); no generation ran")
+        candidates = data.get("candidates")
+        if not candidates:
+            return None, GoogleCallError(
+                "google returned no candidates and no blockReason (empty response)")
+        candidate = candidates[0]
+        finish = candidate.get("finishReason")
+        if finish in {"SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST",
+                      "SPII", "IMAGE_SAFETY"}:
+            return None, GoogleCallError(f"google filtered the response ({finish})")
+        text = "".join(p.get("text", "") for p in candidate.get("content", {}).get("parts", []))
+        if not text.strip() and finish:
+            # An empty body with a finishReason is a provider-side outcome, not a
+            # citation-gate rejection: MAX_TOKENS means the ceiling was spent
+            # (thinking tokens included) before any JSON came out.
+            return None, GoogleCallError(
+                f"google returned no text (finishReason={finish})", 422)
+        return text, None
+    except (AttributeError, TypeError) as exc:
+        return None, GoogleCallError(f"google call error: {safe_error(exc)}")
 
 
 def run_google_phase(ns, question, language, hits, sources, prior_error):

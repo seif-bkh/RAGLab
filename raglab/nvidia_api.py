@@ -28,7 +28,16 @@ _PACE_LOCK = threading.Lock()
 _LAST_REQUEST = {}
 
 
-class NvidiaAPIError(RuntimeError):
+class ProviderCallError(RuntimeError):
+    """A provider call failed, with the HTTP status when there was one.
+
+    The generic form: `answer.py` reports `http_status`/`retry_after_s` from
+    these attributes for ANY provider, and the console/front turn them into
+    advice ("quota — wait then retry" vs "that model ID is not available to
+    this key"). `status_code=0`/None means "no HTTP response at all" (timeout,
+    connection failure, or a client-side error).
+    """
+
     def __init__(self, message, status_code=0, retry_after=None):
         super().__init__(message)
         self.status_code = status_code
@@ -36,7 +45,11 @@ class NvidiaAPIError(RuntimeError):
 
     @property
     def retryable(self):
-        return self.status_code in {0, 408, 429, 500, 502, 503, 504}
+        return self.status_code in {0, None, 408, 429, 500, 502, 503, 504}
+
+
+class NvidiaAPIError(ProviderCallError):
+    """NVIDIA endpoint failure (kept as its own name: callers catch it)."""
 
 
 def safe_error(value):

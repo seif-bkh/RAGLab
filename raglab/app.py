@@ -858,6 +858,8 @@ def one_turn(state, runtime, question: str, *, show_context: bool = False) -> di
     print(f"\n[app] status={result['status']}/{result.get('reason')} · model={result['model']} · "
           f"{result.get('seconds', 0)}s · retrieved={result.get('retrieved', 0)} · "
           f"cached={result.get('cached', False)}"
+          + (f" · served by: {result['served_model']}"
+             if result.get("served_model") and result["served_model"] != result["model"] else "")
           + (f" · failed check: {result['error']}" if result.get("error") else ""))
     if result.get("reason") == "invalid_output":
         # The answer text can be factually right and still be refused: the contract

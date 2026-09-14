@@ -172,7 +172,47 @@ def index_freshness(index: dict) -> tuple[str, str]:
     return "fresh", f"{count} chunk(s) indexed, fingerprint matches this profile"
 
 
-def failure_lines(status: int, body, *, rebuild_offer: bool = False) -> tuple[list[str], bool]:
+def provider_hint(detail: dict) -> list[str]:
+    """What an answer-provider failure means and what to do about it.
+
+    `status=error/provider_error` is the one chat failure the user cannot read:
+    the answer text says "the service is temporarily unavailable" whatever the
+    cause, and a quota refusal, a rejected key and an unusable model ID need
+    three different actions. The service now returns the provider's own error,
+    its HTTP status and any retry_after, so the front can say which it is.
+    """
+    error = str(detail.get("error") or "")
+    code = detail.get("http_status") or detail.get("status_code")
+    retry_after = detail.get("retry_after_s")
+    lines = []
+    if code == 429 or "RESOURCE_EXHAUSTED" in error or "quota" in error.lower():
+        wait = f" It asks for {retry_after:.0f}s before the next attempt." if retry_after else ""
+        lines.append("[front] the answer provider rate-limited/quotas this key (HTTP 429)."
+                     + wait)
+        lines.append("[front] options: wait and retry, or pick another answer model "
+                     "(menu 2) / provider — free tiers are per-model and per-minute.")
+    elif code in (401, 403):
+        lines.append(f"[front] the answer provider rejected the key (HTTP {code}).")
+        lines.append("[front] check the key for this provider in menu 3 (keep/change/add) — "
+                     "a key that can list models is not always allowed to generate with them.")
+    elif code == 404:
+        lines.append("[front] the provider does not serve this model ID for this key (HTTP 404).")
+        lines.append("[front] pick another answer model in menu 2; the console remembers "
+                     "custom IDs you type.")
+    elif code in (400, 422):
+        lines.append(f"[front] the provider rejected the request (HTTP {code}) — usually the "
+                     "model ID or a parameter.")
+        lines.append("[front] pick another answer model in menu 2; the full provider message "
+                     "is on the line above.")
+    elif code in (500, 502, 503, 504) or code is None:
+        lines.append("[front] this is a provider-side/capacity failure, not a corpus or "
+                     "settings problem: the same question can succeed on a retry.")
+    if not lines:
+        lines.append("[front] the provider returned an error (see the message above).")
+    return lines
+
+
+def failure_lines(status: int, body, *, interactive: bool = False) -> tuple[list[str], bool]:
     """(lines to print, whether to offer a rebuild) for a refused request.
 
     A stale index arrives as reason="stale_index" carrying both fingerprints
@@ -192,7 +232,7 @@ def failure_lines(status: int, body, *, rebuild_offer: bool = False) -> tuple[li
         lines.append(f"[front] current fingerprint: {detail.get('current')}")
         lines.append(f"[front] fix it: {REBUILD_COMMAND}  (menu 7) — from any other client:  "
                      f"POST /ingest?reset=true")
-        return lines, bool(rebuild_offer)
+        return lines, bool(interactive)
     if reason == "empty_index":
         lines.append("[front] the index is empty — build it:  python local_front.py --ingest")
     return lines, False
@@ -728,7 +768,7 @@ class Console:
         k = int(raw) if raw.isdigit() and 1 <= int(raw) <= 20 else default_k
         status, body = self.api.post("/search", payload={"question": question, "k": k})
         if status != 200:
-            lines, may_rebuild = failure_lines(status, body, rebuild_offer=True)
+            lines, may_rebuild = failure_lines(status, body, interactive=True)
             for line in lines:
                 print(line)
             if may_rebuild and confirm("rebuild this index now (re-embeds every chunk)?"):
@@ -739,8 +779,13 @@ class Console:
     # -- 9 grounded answer / --ask -------------------------------------------------------
 
     def ask_once(self, question: str, *, k=None, show=False, query_lang=None,
-                 mode=None, offer_rebuild=False) -> int:
-        payload = {"question": question}
+                 mode=None, interactive=False) -> int:
+        """One POST /answer, rendered. Prompts only when `interactive`.
+
+        --ask is scriptable: it must report a failure and exit, never block on
+        a question about retrying (its stdin may be a pipe with nothing left).
+        """
+        payload = {"question": question, "include_diagnostics": True}
         if k:
             payload["k"] = k
         if show:
@@ -751,7 +796,7 @@ class Console:
             payload["mode"] = mode
         status, body = self.api.post("/answer", payload=payload)
         if status != 200:
-            lines, may_rebuild = failure_lines(status, body, rebuild_offer=offer_rebuild)
+            lines, may_rebuild = failure_lines(status, body, interactive=interactive)
             for line in lines:
                 print(line)
             # The one refusal the user can fix from here: rebuild, then ask the
@@ -760,24 +805,43 @@ class Console:
                                        "then ask again?"):
                 if self.action_ingest(reset=True) == 0:
                     return self.ask_once(question, k=k, show=show, query_lang=query_lang,
-                                         mode=mode, offer_rebuild=offer_rebuild)
+                                         mode=mode, interactive=interactive)
             return 1
         show_answer(body)
         if body.get("reason") == "invalid_output":
-            print("[front] the citation gate rejected the reply (the failed check is in "
-                  "the model's raw preview above, server-side).")
-            if confirm("ask the model again? (hosted models are not bit-deterministic)"):
+            print("[front] the citation gate rejected the reply: a claim's quote was not "
+                  "found verbatim in its cited chunk (the reply itself is above when "
+                  "diagnostics are available).")
+            if interactive and confirm("ask the model again? (hosted models are not "
+                                       "bit-deterministic)"):
                 return self.ask_once(question, k=k, show=show, query_lang=query_lang,
-                                     mode=mode, offer_rebuild=offer_rebuild)
-        if body.get("status") == "error" and confirm("provider error — ask again?"):
-            return self.ask_once(question, k=k, show=show, query_lang=query_lang, mode=mode,
-                                 offer_rebuild=offer_rebuild)
+                                     mode=mode, interactive=interactive)
+        if body.get("status") == "error":
+            # Not "ask again?" for every cause: a rejected key or an unknown
+            # model ID fails identically forever, and re-asking is exactly what
+            # the user did before reporting this.
+            for line in provider_hint(body):
+                print(line)
+            code = body.get("http_status")
+            retry_after = body.get("retry_after_s")
+            if code in (401, 403, 404):
+                if interactive and confirm("open the providers & models menu (2) to pick "
+                                             "another answer model?"):
+                    self.action_providers()
+                return 1
+            wait = f" (the provider suggested ~{retry_after:.0f}s)" if retry_after else ""
+            if interactive and confirm(f"provider error{wait} — ask again?"):
+                return self.ask_once(question, k=k, show=show, query_lang=query_lang,
+                                     mode=mode, interactive=interactive)
+        if body.get("served_model") and body["served_model"] != body.get("model"):
+            print(f"[front] note: the answer came from {body['served_model']}, not the "
+                  f"selected {body.get('model')} (the selected model failed).")
         return 0 if body.get("validation_ok", True) else 2
 
     def action_answer(self) -> None:
         question = prompt("\nquestion (blank to cancel): ")
         if question:
-            self.ask_once(question, offer_rebuild=True)
+            self.ask_once(question, interactive=True)
 
     # -- 10 chat ---------------------------------------------------------------------------
 
@@ -849,7 +913,7 @@ class Console:
                 continue
             try:
                 self.ask_once(line, k=k, show=show, query_lang=query_lang, mode=mode,
-                              offer_rebuild=True)
+                              interactive=True)
             except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
                 print(f"[front] request failed: {exc}")
 
@@ -1050,10 +1114,16 @@ def show_answer(body) -> None:
                 print(source["text"])
             else:
                 print("\n".join(f'    "{quote}"' for quote in used))
+    served = body.get("served_model")
+    if body.get("raw_preview"):
+        print(f"\n[model said, not accepted] {body['raw_preview']}")
     print(f"\n[front] status={body.get('status')}/{body.get('reason')}"
-          f" · model={body.get('model')} · {body.get('seconds', 0)}s"
+          f" · model={body.get('model')}"
+          + (f" (served by {served})" if served and served != body.get("model") else "")
+          + f" · {body.get('seconds', 0)}s"
           f" · retrieved={body.get('retrieved', 0)} · cached={body.get('cached', False)}"
-          + (f" · failed check: {body.get('error')}" if body.get("error") else ""))
+          + (f" · failed check: {body.get('error')}" if body.get("error") else "")
+          + (f" · provider HTTP {body['http_status']}" if body.get("http_status") else ""))
 
 
 def show_search(body) -> None:

@@ -119,6 +119,32 @@ Current state of the work:
   `tests_offline.py`'s staleness checks now pin the real command and the typed
   attributes; `test_service.StaleIndexTest` + `LocalFrontStaleIndexOverHttp`
   pin the whole contract over TestClient and real HTTP.
+- **Provider-failure diagnosis, fixed 2026-09-14 (same session)**, after a chat
+  where the greeting and retrieval worked (20 chunks) and the answer came back
+  as `[front] status=error/provider_error · model=gemini-2.5-flash-lite ·
+  0.453s` with NO reason. Cause: `AnswerGenerator.answer` returns `error`,
+  `http_status`, `retry_after_s`, `provider_ok`, `raw_preview` and
+  `served_model` for exactly this, `app.py`/`chat.py` print them — and
+  `service.py`'s `/answer` response dropped every one of them, so the front
+  (and any REST caller) could not tell a 429 quota from a 404 model ID. Fixed:
+  the response now carries them (`raw_preview` only with the new
+  `include_diagnostics=true`), `nvidia_api.ProviderCallError` is the shared
+  base for provider transport errors (status_code/retry_after; `NvidiaAPIError`
+  subclasses it, service.py catches the base), `llm_smoke.google_call` returns
+  `GoogleCallError` (a `str` subclass, so phase B's logging/JSON is unchanged)
+  with `.status_code`/`.retry_after` parsed from the Retry-After header or
+  Gemini's own "retry in 33.5s" wording, names a blocked prompt instead of
+  leaking `KeyError: 'candidates'`, reports an empty MAX_TOKENS reply as a
+  provider outcome, and filters candidates on `supportedGenerationMethods`
+  containing `generateContent`; `profiles.GoogleChatClient` raises
+  `ProviderCallError`, and when the selected model fails it tries the remaining
+  free-tier candidates (llm_smoke phase B behaviour) reporting `served_model`;
+  `local_front.provider_hint()` classifies the status into an action (429 →
+  wait/other model, 401/403 → menu 3 keys, 404/400 → menu 2 model), one-shot
+  `--ask`/`--search` never prompt. Tests: `test_service.AnswerProviderFailureTest`
+  (stubbed Gemini through the real client) + `test_nvidia_pipeline.GoogleFreeTier`
+  (7 checks: 429/Retry-After classification, blocked prompt, MAX_TOKENS
+  ceiling, candidate filtering, fallback + all-fail reporting).
 
 ## 2. Hard constraints (never violate)
 
@@ -322,6 +348,21 @@ Channels that WORK (use in this order):
   SAME collection and invalidates the index by design. That is the guard
   working, not a bug; `/health.index.stale` and `409 stale_index` are how you
   see it before asking.
+- **The console is the reference for what a REST response must carry.** Two
+  bugs in a row came from `service.py` dropping fields the console already
+  printed (`raw_preview`, `error`, `http_status`, `retry_after_s`,
+  `provider_ok`, `served_model`): the front showed `status=error/provider_error`
+  with nothing else. When adding a result field in answer.py/chat.py, check
+  the service response the same day.
+- **A provider failure must never read as an answer.** `status=error` +
+  `provider_ok=false` is the contract; the answer TEXT in that case is a
+  localized "service temporarily unavailable" placeholder (ERRORS in
+  answer.py). A test that only asserts HTTP 200 on `/answer` passes on a dead
+  model — assert the status field too.
+- **`llm_smoke.google_call` returns its error as a `str` SUBCLASS**
+  (`GoogleCallError`) with `.status_code`/`.retry_after`: phase B prints it and
+  stores it in the smoke JSON, so it must stay string-shaped. `GoogleChatClient`
+  is the only code that reads the attributes.
 - **`Runtime.switch()` and `POST`/`DELETE /keys` set `_generator = None`** (a
   new key/profile must invalidate clients built with the old one), so a test
   that injects `generator=object()` loses it the moment it switches the

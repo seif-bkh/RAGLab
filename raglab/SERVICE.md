@@ -80,7 +80,7 @@ docker compose up --build            # http://localhost:8000/docs
 | POST | `/keys` | set a key in the service process (`{key_env, value, persist?}`; placeholders/quotes/spaces rejected; `persist=true` also writes the service host's `raglab/.env`) |
 | DELETE | `/keys/{env}` | drop a key from the process (and from `raglab/.env` with `?persist=true`) |
 | POST | `/search` | retrieval only: `{question, k?, mode?, lang_filter?, query_lang?}` → ranked chunks with scores |
-| POST | `/answer` | grounded answer: `{question, k?, mode?, lang_filter?, query_lang?, include_excerpts?}` → claims with verbatim-cited evidence, or a safe refusal. Greetings ("bonjour", "السلام عليكم") are answered locally with zero calls |
+| POST | `/answer` | grounded answer: `{question, k?, mode?, lang_filter?, query_lang?, include_excerpts?, include_diagnostics?}` → claims with verbatim-cited evidence, or a safe refusal. Provider failures come back as `status=error` **with the diagnosis** (`error`, `http_status`, `retry_after_s`, `provider_ok`, `served_model`); `include_diagnostics=true` adds `raw_preview` (the rejected model reply), which production callers can leave off. Greetings ("bonjour", "السلام عليكم") are answered locally with zero calls |
 | POST | `/ingest?reset=false` | build/rebuild this profile's index as a background job (embeds every chunk; the cache makes re-runs cheap) |
 | GET | `/ingest/status` | what the ingest job is doing / last did |
 | GET | `/inspect?limit=` | the chunking preview: documents, chunk/token totals, sample chunks (no model calls) |
@@ -108,6 +108,19 @@ Semantics worth knowing before you integrate:
   refusals: `409 answer_refused` / `409 retrieval_refused` /
   `409 evaluation_refused`, `502 provider_error`, `503 missing_api_key` (says
   which env var), `422` request validation.
+* **A provider failure is diagnosed, not just reported.** `status=error` with
+  `reason=provider_error` (HTTP 200 — the request was valid, the provider
+  refused) carries `http_status` and `retry_after_s` when the provider gave
+  one, and `error` holds its message. That is what distinguishes a 429 quota
+  (wait, or use another model) from a 404/403 (that model ID or key cannot
+  generate) — `local_front` prints the matching advice. A `2xx` answer that the
+  citation gate rejected is `reason=invalid_output` instead, and its
+  `raw_preview` is returned only with `include_diagnostics=true`.
+* **The Google profile tries the other free-tier candidates.** The selected
+  model is attempted first; if it fails, the next cheapest chat model visible to
+  the key is tried (llm_smoke's phase-B behaviour, logged) and `served_model`
+  reports which one actually answered — `model` stays the selected ID. Nothing
+  is substituted silently.
 * **First `/answer` on the xKiro profile** performs the live free-price check
   the supported pipeline requires — expect slightly higher latency once.
 * Every response is redacted: provider errors pass through `safe_error`, keys
@@ -179,7 +192,10 @@ start), not on the fifth request.
    `POST /profile` (or `RAGLAB_CHUNK_SIZE_TOKENS` on restart) invalidates the
    existing index on purpose — that is the guard doing its job, not a bug.
 4. **Non-pinned answer models are experimental surfaces**: the live free-price
-   check and benchmark attribution belong to the pinned xKiro SKU only.
+   check and benchmark attribution belong to the pinned xKiro SKU only. A
+   provider error is never allowed to read as an answer: the response says
+   `provider_ok=false` and the console prints the provider's own message —
+   a green-looking front on a dead key is exactly what this guards against.
 5. **`POST /keys` with `persist=true` inside Docker** writes the container's
    own `raglab/.env` — not the bind-mounted one you copied keys from — so it
    is lost when the container is recreated. Give compose the keys via
@@ -201,7 +217,12 @@ suite to pass over HTTP: `409 stale_index` with both fingerprints and the
 rebuild, and no live call. `StaleIndexTest` pins the contract directly —
 `index.stale` flips with the profile, `/search`, `/answer` and `/evaluate`
 refuse with the structured reason, the front's helpers turn it into the right
-command, and a rebuild heals it. The rest of the cases cover the
+command, and a rebuild heals it. `AnswerProviderFailureTest` and
+`test_nvidia_pipeline.GoogleFreeTier` pin the provider-failure contract with a
+stubbed Gemini path: a 429 reaches the client as `http_status=429` +
+`retry_after_s` (with the front's advice), a dead model falls back to the next
+free-tier candidate and reports it as `served_model`, and `raw_preview` appears
+only when asked for. The rest of the cases cover the
 console-parity endpoints (keys round-trip and redaction, inspect, chunk-search
 verdicts, embedding sanity, evaluate, profile switching with chunking/corpus
 validation).

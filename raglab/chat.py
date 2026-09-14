@@ -612,7 +612,9 @@ def main(argv=None):
         print(json.dumps(result, ensure_ascii=False, indent=2) if args.as_json
               else format_turn(result, show_context=settings['show_context']))
         print(f"\n[chat] status={result['status']} reason={result.get('reason')} model={result['model']} "
-              f"cached={result.get('cached', False)} {result.get('seconds', 0)}s "
+              + (f"served_by={result['served_model']} "
+                 if result.get("served_model") and result["served_model"] != result["model"] else "")
+              + f"cached={result.get('cached', False)} {result.get('seconds', 0)}s "
               f"retrieved={result.get('retrieved', 0)}")
         return 0 if result.get('validation_ok', True) else 2
 

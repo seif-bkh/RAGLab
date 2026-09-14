@@ -58,6 +58,15 @@ full env-var table: [SERVICE.md](SERVICE.md). Offline tests:
 outside, the way another microservice would: `python local_front.py`
 (state-aware smoke suite), `--ask`, `--search`, `--ingest`, `--interactive`.
 
+Failures travel with their diagnosis on both surfaces: a stale index reports
+`index.stale` in `/health` (and `409 stale_index` with both fingerprints), and
+an answer-provider failure returns `provider_ok=false` with the provider's own
+message, `http_status` and `retry_after_s` — so `status=error/provider_error`
+in the console is followed by what actually happened (quota? rejected key?
+model ID this key cannot generate with?) and the action that fits. The Google
+free-tier profile additionally tries the next cheapest chat model when the
+selected one fails, and `served_model` says which one answered.
+
 ## The console (continued): `python app.py`
 
 One interactive entry point for everything above, with two extra powers:

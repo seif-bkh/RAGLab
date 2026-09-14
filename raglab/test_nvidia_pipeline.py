@@ -716,6 +716,120 @@ class ProviderCatalogs(unittest.TestCase):
             NoCredentialRedirects().redirect_request(request, None, 302, 'Found', {}, 'https://untrusted.example/models')
 
 
+class GoogleFreeTier(unittest.TestCase):
+    """llm_smoke's Google path: the failures a user meets, named.
+
+    A bare "provider error" is unrunnable advice: a 429 quota, a model the key
+    cannot generate with, and a policy-blocked prompt need different actions.
+    These pin the classification (status + retry hint + a message that says
+    what happened), which the console and the /answer diagnostics build on.
+    """
+
+    def _messages(self):
+        return [{'role': 'system', 'content': 'system'}, {'role': 'user', 'content': '{}'}]
+
+    @staticmethod
+    def _http_error(code, body, headers=None):
+        return urllib.error.HTTPError('https://generativelanguage.googleapis.com/v1beta/x', code,
+                                      'err', headers or {}, io.BytesIO(body.encode()))
+
+    def test_http_error_carries_status_and_gemini_retry_hint(self):
+        import llm_smoke
+        body = json.dumps({'error': {'code': 429, 'status': 'RESOURCE_EXHAUSTED',
+                                     'message': 'Quota exceeded for model. Please retry in 33.5s.'}})
+        with patch('urllib.request.urlopen', side_effect=self._http_error(429, body)):
+            text, error = llm_smoke.google_call('gemini-2.5-flash-lite', 'k', self._messages(), 512)
+        self.assertIsNone(text)
+        self.assertIsInstance(error, str)              # phase B prints/stores it as text
+        self.assertIn('google HTTP 429', error)
+        self.assertIn('RESOURCE_EXHAUSTED', error)
+        self.assertEqual(error.status_code, 429)
+        self.assertAlmostEqual(error.retry_after, 33.5, places=1)
+
+    def test_retry_after_header_wins_over_the_body_wording(self):
+        import llm_smoke
+        error = self._http_error(429, 'quota exceeded, retry in 90s.', {'Retry-After': '2'})
+        with patch('urllib.request.urlopen', side_effect=error):
+            _, failure = llm_smoke.google_call('gemini-2.5-flash-lite', 'k', self._messages(), 512)
+        self.assertEqual(failure.retry_after, 2.0)
+
+    def test_a_blocked_prompt_names_the_block_not_a_keyerror(self):
+        import llm_smoke
+        payload = {'promptFeedback': {'blockReason': 'SAFETY'}}
+        with patch('urllib.request.urlopen', return_value=Response(payload)):
+            text, error = llm_smoke.google_call('gemini-2.5-flash-lite', 'k', self._messages(), 512)
+        self.assertIsNone(text)
+        self.assertIn('blockReason=SAFETY', error)
+        self.assertNotIn("'candidates'", error)        # the old, unactionable KeyError string
+
+    def test_output_ceiling_is_reported_as_the_provider_outcome(self):
+        import llm_smoke
+        payload = {'candidates': [{'finishReason': 'MAX_TOKENS', 'content': {'parts': []}}]}
+        with patch('urllib.request.urlopen', return_value=Response(payload)):
+            text, error = llm_smoke.google_call('gemini-2.5-flash-lite', 'k', self._messages(), 512)
+        self.assertIsNone(text)
+        self.assertIn('MAX_TOKENS', error)
+        self.assertEqual(error.status_code, 422)
+
+    def test_candidates_must_advertise_generate_content(self):
+        import llm_smoke
+        payload = {'models': [
+            {'name': 'models/gemini-2.5-flash-lite', 'supportedGenerationMethods': ['generateContent']},
+            {'name': 'models/gemini-2.5-embedding', 'supportedGenerationMethods': ['embedContent']},
+            {'name': 'models/gemini-legacy-chat'},          # listing omitted the field: keep it
+        ]}
+        with patch('urllib.request.urlopen', return_value=Response(payload)):
+            candidates = llm_smoke.google_candidates('k')
+        self.assertEqual(candidates, ['gemini-2.5-flash-lite', 'gemini-legacy-chat'])
+
+    def test_the_client_falls_back_to_the_next_candidate_and_reports_it(self):
+        from profiles import GoogleChatClient
+        calls = []
+
+        def fake_call(model, key, messages, max_tokens):
+            calls.append(model)
+            if model == 'gemini-2.5-flash-lite':
+                return None, llm_smoke_error('google HTTP 429: quota')
+            return '{"answerable": true, "claims": []}', None
+
+        def llm_smoke_error(message):
+            import llm_smoke
+            return llm_smoke.GoogleCallError(message, 429, 12.0)
+
+        with patch('llm_smoke.google_call', side_effect=fake_call), \
+             patch('llm_smoke.google_candidates', return_value=['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite']):
+            client = GoogleChatClient('test-key')
+            client.resolve_model()
+            reply = client.chat('gemini-2.5-flash-lite', self._messages(), max_tokens=128)
+        self.assertEqual(calls, ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite'])
+        self.assertEqual(reply['requested_model'], 'gemini-2.5-flash-lite')
+        self.assertEqual(reply['served_model'], 'gemini-3.1-flash-lite')
+        self.assertEqual(client.attempts[0]['ok'], False)
+
+    def test_the_client_reports_the_selected_models_failure_when_all_fail(self):
+        from nvidia_api import ProviderCallError
+        from profiles import GoogleChatClient
+
+        def llm_smoke_error(message, code, retry):
+            import llm_smoke
+            return llm_smoke.GoogleCallError(message, code, retry)
+
+        def fake_call(model, key, messages, max_tokens):
+            return None, llm_smoke_error(f'google HTTP 429: quota for {model}', 429, 30.0)
+
+        with patch('llm_smoke.google_call', side_effect=fake_call), \
+             patch('llm_smoke.google_candidates', return_value=['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite']):
+            client = GoogleChatClient('test-key')
+            client.resolve_model()
+            with self.assertRaises(ProviderCallError) as raised:
+                client.chat('gemini-2.5-flash-lite', self._messages(), max_tokens=128)
+        error = raised.exception
+        self.assertEqual(error.status_code, 429)       # the SELECTED model's status, not the last try
+        self.assertEqual(error.retry_after, 30.0)
+        self.assertIn('gemini-2.5-flash-lite', str(error))
+        self.assertIn('also tried', str(error))        # the other attempts are never hidden
+
+
 class MeasurementReports(unittest.TestCase):
     def test_source_invalid_literal_constraints_are_rejected(self):
         from nvidia_benchmark import BENCHMARKS, validate_translation_references

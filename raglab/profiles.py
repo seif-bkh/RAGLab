@@ -31,7 +31,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import config as cfg
-from nvidia_api import ANSWER_MODELS, NvidiaAPIError, NvidiaClient, safe_error
+from nvidia_api import (ANSWER_MODELS, NvidiaAPIError, NvidiaClient,
+                        ProviderCallError, safe_error)
 from pipeline_policy import (ANSWER_MODEL as POLICY_ANSWER_MODEL,
                              ANSWER_PROVIDER as POLICY_ANSWER_PROVIDER,
                              EMBEDDING_MODEL as POLICY_EMBEDDING_MODEL,
@@ -324,12 +325,25 @@ class GoogleChatClient:
     Reusing llm_smoke's tested request shape (systemInstruction + JSON mime
     type + cheapest-first model ranking) instead of writing a second Google
     client means the app and the CI smoke test make literally the same calls.
+
+    Two behaviours the CI fallback has and this client needs too, because the
+    console is where a user meets the failure:
+
+    * the error is a ProviderCallError carrying `.status_code`/`.retry_after`,
+      so `answer.py` can report http_status/retry_after_s and the console can
+      say what to do (quota → wait; unknown model → pick another);
+    * when the selected model refuses, the remaining free-tier candidates are
+      tried (llm_smoke phase B does exactly this), and the reply reports the
+      model that actually answered in `served_model`. A silent substitution
+      would be dishonest, so the console prints it whenever it differs.
     """
 
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = GOOGLE_API_ROOT
         self.calls = 0
+        self.candidates: list[str] = []      # filled by resolve_model()
+        self.attempts: list[dict] = []       # one row per (model, outcome)
 
     def resolve_model(self) -> str:
         from llm_smoke import google_candidates
@@ -337,18 +351,55 @@ class GoogleChatClient:
         if not candidates:
             raise RuntimeError("no gemini chat model is visible to this key "
                                "(the /models listing returned nothing usable)")
+        self.candidates = list(candidates)
         return candidates[0]
+
+    def model_chain(self, requested: str) -> list[str]:
+        """The requested model first, then the other free-tier candidates.
+
+        The others are only used when the requested one FAILS — never to
+        substitute a working model — and each fallback is printed."""
+        if not self.candidates:
+            try:
+                self.candidates = []
+                from llm_smoke import google_candidates
+                self.candidates = list(google_candidates(self.api_key))
+            except Exception as exc:                       # noqa: BLE001 — ranking is best-effort
+                print(f"[google] could not list model candidates ({safe_error(exc)}); "
+                      f"trying {requested} alone")
+                return [requested]
+        chain = [requested] + [c for c in self.candidates if c != requested]
+        return chain
 
     def chat(self, model, messages, *, max_tokens=4096):
         import time
         from llm_smoke import google_call
-        self.calls += 1
         started = time.monotonic()
-        text, error = google_call(model, self.api_key, messages, max_tokens)
-        if error:
-            raise RuntimeError(error)
-        return {"text": text, "requested_model": model, "served_model": model,
-                "usage": {}, "seconds": round(time.monotonic() - started, 3)}
+        errors: list[tuple[str, object]] = []
+        for index, candidate in enumerate(self.model_chain(model)):
+            self.calls += 1
+            text, error = google_call(candidate, self.api_key, messages, max_tokens)
+            self.attempts.append({"model": candidate,
+                                  "ok": error is None,
+                                  "error": str(error) if error else None})
+            if error is None:
+                if candidate != model:
+                    print(f"[google] {model} failed; answered with {candidate} instead "
+                          f"(served_model reports it)")
+                return {"text": text, "requested_model": model, "served_model": candidate,
+                        "usage": {}, "seconds": round(time.monotonic() - started, 3)}
+            errors.append((candidate, error))
+            if index + 1 < len(self.model_chain(model)):
+                print(f"[google] {candidate} -> {error}")
+        # Report the SELECTED model's failure as the headline (that is the one the
+        # profile asks for); the rest travel in the message, never hidden.
+        first_model, first_error = errors[0]
+        detail = "; ".join(f"{name}: {err}" for name, err in errors)
+        raise ProviderCallError(
+            f"google {first_model} failed ({first_error})"
+            + (f" — also tried: {detail}" if len(errors) > 1 else ""),
+            getattr(first_error, "status_code", None),
+            getattr(first_error, "retry_after", None))
 
 class GatewayChatClient(NvidiaClient):
     """OpenAI-compatible gateway chat over the lab's tested stdlib HTTPS
