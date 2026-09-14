@@ -11,6 +11,8 @@ Run:  python -m unittest -v test_service
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -788,6 +790,51 @@ class LocalFrontStaleIndexOverHttp(unittest.TestCase):
                 sys.modules.pop("sentence_transformers", None)
             else:
                 sys.modules["sentence_transformers"] = saved_modules
+
+
+class RunLocalScript(unittest.TestCase):
+    """`raglab/run_local.sh` — the one-command runner's CLI surface.
+
+    The script starts the service, waits for /health, drives local_front.py and
+    stops the service again; the full behaviour was exercised by hand in a fresh
+    clone (status/smoke/menu/reuse/--keep/--no-start/keyless-ingest/venv-missing).
+    What must never rot silently in CI is the part scripts depend on: the usage
+    text renders, unknown front flags pass THROUGH to local_front.py (not to the
+    shell), and a missing venv is a clear setup message with exit 2 rather than a
+    stack of failed commands.
+    """
+
+    SCRIPT = Path(__file__).resolve().parent / "run_local.sh"
+
+    def test_help_renders_and_documents_every_flag(self):
+        done = subprocess.run(["bash", str(self.SCRIPT), "--help"],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        for flag in ("--status", "--ingest", "--ask", "--interactive", "--smoke",
+                     "--no-start", "--keep", "--port", "--host"):
+            self.assertIn(flag, done.stdout, f"{flag} vanished from the usage text")
+
+    def test_no_start_without_a_service_exits_2_with_instructions(self):
+        # RAGLAB_PYTHON makes this deterministic in CI (no venv there): an
+        # explicit interpreter is all the script needs, and nothing listens on
+        # the chosen port, so this is the "start it yourself" branch.
+        env = {**os.environ, "RAGLAB_PYTHON": sys.executable}
+        done = subprocess.run(["bash", str(self.SCRIPT), "--no-start", "--port", "1"],
+                              capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("nothing answers", done.stdout)
+        self.assertIn("uvicorn service:app", done.stdout)
+
+    def test_missing_venv_is_a_setup_message_not_a_crash(self):
+        env = {key: value for key, value in os.environ.items() if key != "RAGLAB_PYTHON"}
+        with tempfile.TemporaryDirectory() as empty:
+            shutil.copy(self.SCRIPT, Path(empty) / "run_local.sh")
+            done = subprocess.run(["bash", str(Path(empty) / "run_local.sh"), "--status"],
+                                  capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("no virtualenv found", done.stdout)
+        self.assertIn("python3 -m venv", done.stdout)
+        self.assertNotIn("Traceback", done.stderr)
 
 
 if __name__ == "__main__":

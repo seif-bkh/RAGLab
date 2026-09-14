@@ -411,7 +411,22 @@ The user runs this locally and reports transcripts (`front chat>` = the service 
 (`249977c`) on 2026-09-14: clone → venv → `main.py inspect` → `run_tests.sh
 --offline` (EXIT=0) → `uvicorn service:app` → `local_front.py --status`.
 
+**The user's standing request is ONE command**, so the shipped answer is
+`raglab/run_local.sh` (added 2026-09-14): it starts the service, waits for
+/health, runs the requested front action, stops the service again (or reuses
+one already listening, or keeps it with `--keep`), passes unknown flags through
+to `local_front.py`, and honors `RAGLAB_PYTHON` for an interpreter outside the
+two default venv locations. Verified by hand on a fresh clone in 8 states
+(status / smoke / default menu / reuse / --keep / --no-start / keyless --ingest
+/ venv-missing) and by 3 tests (`test_service.RunLocalScript`). The manual
+two-terminal sequence below remains the fallback and the debugging path.
+
 ```bash
+# --- 0. the one command (after the clone + setup below) -------------------
+./raglab/run_local.sh --status          # doctor; also: --ingest [--reset], --ask "…",
+                                        # --search "…", --interactive, --smoke, --keep,
+                                        # --port N, --no-start, and any local_front flag
+
 # --- 1. get the code (first time) -----------------------------------------
 git clone -b arena/01a09f30-raglab https://github.com/seif-bkh/RAGLab.git RAGLab
 cd RAGLab
@@ -454,6 +469,7 @@ cp raglab/.env.example raglab/.env        # fill NVIDIA_API_KEY / XKIRO_API_KEY 
 cd raglab
 .venv/bin/python main.py inspect
 PYTHON="$PWD/.venv/bin/python" ./run_tests.sh --offline     # must print EXIT=0
+./run_local.sh --smoke                                      # endpoint suite over real HTTP
 
 # --- 5. run the service (what `front chat>` talks to) ---------------------
 .venv/bin/python -m uvicorn service:app --host 0.0.0.0 --port 8000

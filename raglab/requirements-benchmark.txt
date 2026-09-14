@@ -6,3 +6,9 @@
 sacrebleu==2.5.1
 fastapi==0.141.1
 httpx==0.28.1
+# uvicorn is pinned EXPLICITLY even though chromadb pulls it in as a dependency
+# today: test_service's two real-HTTP cases (LocalFrontOverHttp,
+# LocalFrontStaleIndexOverHttp) skipTest without it, so a chromadb release that
+# drops it would silently turn those cases into green skips. Same pin as
+# requirements-service.txt (the file the service is deployed with).
+uvicorn==0.52.4

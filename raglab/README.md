@@ -58,6 +58,11 @@ full env-var table: [SERVICE.md](SERVICE.md). Offline tests:
 outside, the way another microservice would: `python local_front.py`
 (state-aware smoke suite), `--ask`, `--search`, `--ingest`, `--interactive`.
 
+One command runs the pair for you (starts the service, waits for `/health`,
+runs the front action, stops it again): `./raglab/run_local.sh --status`,
+`--ingest [--reset]`, `--ask "…"`, `--interactive`, `--smoke`, `--keep`,
+`--port N`, `--no-start`; any other flag goes to `local_front.py`.
+
 Failures travel with their diagnosis on both surfaces: a stale index reports
 `index.stale` in `/health` (and `409 stale_index` with both fingerprints), and
 an answer-provider failure returns `provider_ok=false` with the provider's own
