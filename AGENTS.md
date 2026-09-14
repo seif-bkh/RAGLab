@@ -82,6 +82,14 @@ Current state of the work:
   TestClient) added to run_tests.sh and ci.yml; requirements-benchmark.txt
   gained fastapi+httpx for it. Full docs with the env-var table:
   `raglab/SERVICE.md`.
+- **`raglab/CONTRACT.md`** (same session): the HTTP contract for client/fullstack
+  teams — ground rules (status ladder, error envelope, spend table), the state
+  model (profile → collection → index lifecycle, keys, switching), full
+  endpoint reference with real example payloads (captured from the offline
+  fixture via a throwaway script), a 24-reason error catalog, and integration
+  recipes (boot sequence, answer rendering incl. refused/greeting, chat =
+  client-side history, provider picker, long-op polling). MACHINE-truth for
+  field names is /openapi.json; CONTRACT.md is the behavior contract.
 - **`raglab/local_front.py`** (same session): the console's twin over REST —
   same 13 menus as app.py (status/doctor, providers & models, keys, inspect,
   chunk search, sanity, ingest, retrieval, answer, chat, evaluate, settings,

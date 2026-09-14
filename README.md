@@ -51,6 +51,8 @@ python -m uvicorn service:app   # OR the standalone HTTP microservice
                                 #  docs at /docs — see raglab/SERVICE.md)
 python local_front.py           # the same console, driving the service over
                                 # REST (menus, keys, ingest, chat, evaluate)
+                                # full HTTP contract for client teams:
+                                # raglab/CONTRACT.md
 python main.py inspect --data-dir ../docs
 python main.py ingest --reset --data-dir ../docs
 python main.py query "What is Murabaha?" --query-lang en

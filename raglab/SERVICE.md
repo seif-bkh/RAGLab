@@ -7,6 +7,11 @@ microservice architecture. It runs the SAME runtime as the interactive console
 can never disagree about which providers, models, collections and validation
 rules exist.
 
+**Building a client against this service?** The full HTTP contract for client
+teams — request/response schemas with real examples, the state model, the
+error catalog, and integration recipes — is `raglab/CONTRACT.md`. This file
+is the operator's/deployer's doc.
+
 ```
             ┌──────────────┐
             │ your gateway │  (auth, rate limits, CORS — NOT included here)
