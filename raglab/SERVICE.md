@@ -99,12 +99,25 @@ Semantics worth knowing before you integrate:
 
 * **A refusal is a valid answer.** `/answer` returns HTTP 200 with
   `status=refused` and a `reason` (`insufficient_evidence`,
-  `invalid_output`, `private_or_live_request`, …) when the corpus does not
-  support the question or the reply failed the verbatim-citation gate.
+  `invalid_output`, `unsourced_number`, `private_or_live_request`, …) when
+  the corpus does not support the question or the reply failed the citation
+  gate. `invalid_output`/`unsourced_number` responses also carry `error` and
+  `raw_preview` (the model's rejected reply, PII-scrubbed) as diagnostics.
   That is the product working, not an error.
-* **Errors**: `409 empty_index` (POST `/ingest` first), `409 retrieval_refused`
-  (stale index vs current settings — rebuild it), `502 provider_error`,
-  `503 missing_api_key` (says which env var), `422` request validation.
+* **The gate verifies numbers, not just quotes.** Every digit-form number in
+  a claim must appear in that claim's evidence quotes (French/English/Arabic
+  decimal and thousands forms normalize to the same digits) — a model that
+  computes, converts or renames a figure is refused as `unsourced_number`.
+* **Outputs are PII-scrubbed (post-gate).** `/answer` fields and `/search`
+  hit texts replace emails, phone numbers, RIB/IBAN and CIN numbers with
+  `[EMAIL]`/`[PHONE]`/`[RIB]`/`[CIN]` placeholders; the gate still validates
+  the raw verbatim text. Diagnostics (`/inspect`, `/chunks/search`) show raw
+  text on purpose (admin-facing).
+* **Errors**: `401 unauthorized` (missing `X-Service-Token` when
+  `RAGLAB_SERVICE_TOKEN` is set), `409 empty_index` (POST `/ingest` first),
+  `409 retrieval_refused` (stale index vs current settings — rebuild it),
+  `502 provider_error`, `503 missing_api_key` (says which env var),
+  `422` request validation.
 * **First `/answer` on the xKiro profile** performs the live free-price check
   the supported pipeline requires — expect slightly higher latency once.
 * Every response is redacted: provider errors pass through `safe_error`, keys
@@ -144,6 +157,7 @@ NVIDIA `nvidia/nemotron-3-embed-1b` embeddings + xKiro
 | `RAGLAB_NEIGHBOR_RADIUS` | widen hits with adjacent chunks (0–2) | `0` |
 | `RAGLAB_DATA_DIRS` | comma-separated corpus dirs | `../docs + raglab/data/` |
 | `RAGLAB_ALLOW_PROFILE_SWITCH` | enable `POST /profile` | `1` (docker-compose pins `0`) |
+| `RAGLAB_SERVICE_TOKEN` | require `X-Service-Token` on every request (constant-time check, `401 unauthorized` otherwise) | unset = open (local/dev) |
 | `RAGLAB_CORS_ORIGINS` | comma-separated allowed origins | `*` |
 | `RAGLAB_CACHE_DIR` | relocate embedding/answer caches (Docker volume) | next to the code |
 | `RAGLAB_HOST` / `RAGLAB_PORT` | used by `python service.py` | `0.0.0.0` / `8000` |
@@ -158,9 +172,14 @@ start), not on the fifth request.
 
 ## Deployment notes — read before exposing this
 
-1. **No auth is built in.** Put the service behind your own gateway / auth
-   sidecar. `POST /ingest` and (if enabled) `POST /profile` spend money and
-   change behavior — they must not be publicly reachable as-is.
+1. **No user auth is built in — but there is a shared-secret token.** Setting
+   `RAGLAB_SERVICE_TOKEN` requires every request to carry it in the
+   `X-Service-Token` header (constant-time compare; CORS preflights exempt).
+   That removes the footgun of `POST /ingest`, `POST /profile` and
+   `/keys` being reachable by anyone who can reach the port — it is NOT user
+   authentication. Still put the service behind your own gateway / auth
+   sidecar; `POST /ingest` and (if enabled) `POST /profile` spend money and
+   change behavior.
 2. **Single replica by design.** The index is a local ChromaDB directory and
    ingestion runs in one background thread per process. Run one replica per
    profile; scale reads at the gateway, not by sharing nothing between
@@ -183,11 +202,13 @@ start), not on the fifth request.
 ## Tests
 
 `python -m unittest -v test_service` (offline: stubbed embeddings + injected
-chat client; no network, no keys). It is part of CI via `run_tests.sh`. Its
+chat clients; no network, no keys). It is part of CI via `run_tests.sh`. Its
 last test case boots a REAL uvicorn server on an ephemeral port and runs
 `local_front.py`'s state-aware smoke suite against it over actual HTTP — with
 no keys and an empty index, so the tested behavior is the full refusal
 contract (503/403/422) plus greetings, exactly the state a fresh deployment
-is in. The rest of the cases cover the console-parity endpoints directly
-(keys round-trip and redaction, inspect, chunk-search verdicts, embedding
-sanity, evaluate, profile switching with chunking/corpus validation).
+is in — and a second case does the same behind an `X-Service-Token`. The rest
+of the cases cover the console-parity endpoints directly (keys round-trip and
+redaction, inspect, chunk-search verdicts, embedding sanity, evaluate,
+profile switching with chunking/corpus validation), the output guards (PII
+scrub after the gate, `unsourced_number` refusals) and the auth middleware.

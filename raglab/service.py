@@ -67,6 +67,9 @@ Environment (all optional; defaults = the supported pipeline pair):
     RAGLAB_DATA_DIRS               comma-separated corpus dirs (default: ../docs + data/)
     RAGLAB_ALLOW_PROFILE_SWITCH    1 to enable POST /profile (default 1 locally;
                                    docker-compose.yml pins 0 — enable consciously)
+    RAGLAB_SERVICE_TOKEN           if set, every request must carry it in the
+                                   X-Service-Token header (constant-time check,
+                                   401 otherwise); unset = open (local/dev)
     RAGLAB_CORS_ORIGINS            comma-separated allowed origins (default *)
     plus the provider keys: NVIDIA_API_KEY, XKIRO_API_KEY, GOOGLE_API_KEY /
     GEMINI_API_KEY, KIRA_API_KEY, JINA_API_KEY, ... (see raglab/.env.example)
@@ -74,6 +77,7 @@ Environment (all optional; defaults = the supported pipeline pair):
 
 from __future__ import annotations
 
+import hmac
 import os
 import re
 import threading
@@ -88,8 +92,9 @@ from pydantic import BaseModel, Field
 
 import profiles
 from nvidia_api import NvidiaAPIError, safe_error
+from scrub import scrub_pii
 
-SERVICE_VERSION = "1.0.0"
+SERVICE_VERSION = "1.1.0"
 
 
 # ---------------------------------------------------------------------------
@@ -338,25 +343,66 @@ class ProfileSwitchRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Optional service token (defense in depth — the service still expects to sit
+# behind a gateway that does real auth; this just removes the footgun of
+# /profile, /ingest and /keys being reachable by anyone who can reach the port)
+# ---------------------------------------------------------------------------
+
+class ServiceTokenMiddleware:
+    """Rejects requests that do not carry the exact X-Service-Token header.
+
+    Compared with hmac.compare_digest (constant time). Registered BELOW the
+    CORS middleware so browser preflights still pass — only real requests
+    need the token. Enabled by RAGLAB_SERVICE_TOKEN (or the create_app
+    argument); unset = open, the local/dev default.
+    """
+
+    def __init__(self, app, token: str):
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            supplied = ""
+            for name, value in scope.get("headers") or []:
+                if name == b"x-service-token":
+                    supplied = value.decode("utf-8", "replace")
+                    break
+            if not hmac.compare_digest(supplied, self.token):
+                from fastapi.responses import JSONResponse
+                response = JSONResponse(status_code=401, content={"detail": {
+                    "reason": "unauthorized",
+                    "hint": "send the service token in the X-Service-Token header"}})
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
 def create_app(profile: dict | None = None, *, generator=None,
                allow_profile_switch: bool | None = None,
                cors_origins: list[str] | None = None,
-               config_overrides: dict | None = None) -> FastAPI:
+               config_overrides: dict | None = None,
+               service_token: str | None = None) -> FastAPI:
     """Build the service app.
 
     `profile` defaults to the environment (profile_from_env). The remaining
     keyword arguments exist for tests and embedded deployments: an injected
-    generator (no provider calls), a switch flag override, CORS origins, and
-    lab-config overrides (e.g. redirecting CHROMA_DIR to a temp dir).
+    generator (no provider calls), a switch flag override, CORS origins,
+    lab-config overrides (e.g. redirecting CHROMA_DIR to a temp dir), and a
+    service token (RAGLAB_SERVICE_TOKEN) enabling the X-Service-Token check.
     """
     if profile is None:
         profile = profile_from_env()
     if allow_profile_switch is None:
         # Console parity by default for local runs; docker-compose pins "0".
         allow_profile_switch = os.environ.get("RAGLAB_ALLOW_PROFILE_SWITCH", "1") == "1"
+    if service_token is None:
+        service_token = os.environ.get("RAGLAB_SERVICE_TOKEN", "")
+    service_token = service_token.strip()
     if cors_origins is None:
         raw = os.environ.get("RAGLAB_CORS_ORIGINS", "*")
         cors_origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
@@ -368,6 +414,12 @@ def create_app(profile: dict | None = None, *, generator=None,
         description=__doc__.split("Endpoints:")[0],
         version=SERVICE_VERSION,
     )
+    # Token check FIRST, CORS second: Starlette makes the LAST added
+    # middleware the OUTERMOST layer, so CORS must be added after the token
+    # check — browser preflights (which never carry custom headers) are then
+    # answered by CORS, and only real requests must present the token.
+    if service_token:
+        app.add_middleware(ServiceTokenMiddleware, token=service_token)
     app.add_middleware(CORSMiddleware, allow_origins=cors_origins or ["*"],
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -562,7 +614,7 @@ def create_app(profile: dict | None = None, *, generator=None,
                           "heading": (hit.get("metadata") or {}).get("heading"),
                           "source": (hit.get("metadata") or {}).get("source"),
                           "chunk_index": (hit.get("metadata") or {}).get("chunk_index"),
-                          "text": hit.get("text")} for hit in hits]}
+                          "text": scrub_pii(hit.get("text"))} for hit in hits]}
 
     # -- grounded answers ------------------------------------------------------
 
@@ -605,10 +657,19 @@ def create_app(profile: dict | None = None, *, generator=None,
             row = {"source_id": source["source_id"], "document": source["document"],
                    "chunk_id": source["chunk_id"], "heading": source.get("heading", "")}
             if request.include_excerpts:
-                row["text"] = source["text"]
+                row["text"] = scrub_pii(source["text"])
             sources.append(row)
+        # PII scrub happens HERE, after the citation gate: the gate validated
+        # the raw verbatim quotes; the user sees [EMAIL]/[PHONE]/[RIB]/[CIN]
+        # placeholders instead of identifier values. Greeting/refusal answers
+        # are canned text (scrub is a no-op, run for uniformity).
+        claims = [{**claim,
+                   "text": scrub_pii(claim.get("text", "")),
+                   "evidence": [{**ev, "quote": scrub_pii(ev.get("quote", ""))}
+                                for ev in claim.get("evidence") or []]}
+                  for claim in result.get("claims") or []]
         return {"status": result["status"], "reason": result.get("reason"),
-                "answer": result["answer"], "claims": result.get("claims") or [],
+                "answer": scrub_pii(result["answer"]), "claims": claims,
                 "sources": sources, "model": result["model"],
                 "language": result.get("language"),
                 "validation_ok": result.get("validation_ok", True),
@@ -616,6 +677,13 @@ def create_app(profile: dict | None = None, *, generator=None,
                 "retrieved": result.get("retrieved", 0),
                 "dropped_for_budget": result.get("dropped_for_budget", 0),
                 "seconds": result.get("seconds", 0.0),
+                # refusal diagnostics (None on the answered/greeting paths):
+                # error = the gate's finding (safe-redacted), raw_preview =
+                # the model's rejected reply, shown to the caller the same
+                # way the console shows "[model said, not accepted]"
+                "error": result.get("error"),
+                "raw_preview": (scrub_pii(result["raw_preview"])
+                                if result.get("raw_preview") else None),
                 "inference_performed": result.get("status") not in (None, "refused", "greeting")}
 
     # -- ingestion --------------------------------------------------------------

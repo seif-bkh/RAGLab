@@ -1168,4 +1168,58 @@ try:
 finally:
     app_mod.STATE_PATH = _mem_state_path
 
+# -- answer: numeric half of the citation gate + output PII scrub -----------
+import answer as answer_mod  # noqa: E402
+from scrub import scrub_pii  # noqa: E402
+
+check("answer: numbers_in normalizes FR/EN/AR decimals and thousands",
+      answer_mod.numbers_in("2.75 vs 2,75 vs ٢٫٧٥ vs 50 000")
+      == ["275", "275", "275", "50000"])
+check("answer: unsourced_numbers catches a converted figure",
+      answer_mod.unsourced_numbers("the rate is 5%", ["rate of 0,5 %"]) == ["5"])
+check("answer: unsourced_numbers accepts re-grouped thousands",
+      answer_mod.unsourced_numbers("cap 50000 EUR", ["cap of 50 000 EUR"]) == [])
+check("answer: unsourced_numbers ignores prose without digits",
+      answer_mod.unsourced_numbers("no numbers here", ["none at all"]) == [])
+
+_gate_sources = [{"source_id": "S1",
+                  "text": "The Atlas card costs 10 dinars per year."}]
+try:
+    _claims = answer_mod.validate_answer(
+        {"answerable": True, "claims": [
+            {"text": "The Atlas card costs 10 dinars.",
+             "evidence": [{"source_id": "S1",
+                           "quote": "Atlas card costs 10 dinars"}]}]},
+        _gate_sources)
+    check("answer: gate accepts a claim whose numbers are in its evidence",
+          len(_claims) == 1)
+except ValueError as _exc:
+    check("answer: gate accepts a claim whose numbers are in its evidence",
+          False, str(_exc))
+try:
+    answer_mod.validate_answer(
+        {"answerable": True, "claims": [
+            {"text": "The Atlas card costs 99 dinars.",
+             "evidence": [{"source_id": "S1",
+                           "quote": "Atlas card costs 10 dinars"}]}]},
+        _gate_sources)
+    check("answer: gate refuses a claim with a number its evidence lacks",
+          False, "the gate accepted 99")
+except answer_mod.UnsourcedNumber as _exc:
+    check("answer: gate refuses a claim with a number its evidence lacks",
+          "99" in str(_exc))
+
+_scrub_cases = [
+    ("mail support@atlas.tn", "mail [EMAIL]"),
+    ("call +216 71 123 456", "call [PHONE]"),
+    ("RIB 08 0000 0000 0000 0000 12", "RIB [RIB]"),
+    ("CIN: 09123456", "CIN: [CIN]"),
+    ("rate 2,75 % in 2016", "rate 2,75 % in 2016"),
+    ("10 dinars, 50 000 EUR cap", "10 dinars, 50 000 EUR cap"),
+]
+check("scrub: identifier patterns become [LABEL]s, amounts stay",
+      all(scrub_pii(src) == want for src, want in _scrub_cases),
+      str([(src, scrub_pii(src), want) for src, want in _scrub_cases
+           if scrub_pii(src) != want]))
+
 sys.exit(0 if ok else 1)

@@ -272,11 +272,30 @@ class LocalFrontOverHttp(unittest.TestCase):
     so this exercises the whole HTTP boundary.
     """
 
-    def test_smoke_suite_over_real_http(self):
+    @staticmethod
+    def _boot(app):
+        """Run a REAL uvicorn on an ephemeral port (in-thread); (api-url, stop)."""
         import threading
+        import uvicorn
+        server = uvicorn.Server(uvicorn.Config(
+            app, host="127.0.0.1", port=0, log_level="warning"))
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not server.started:
+            time.sleep(0.05)
+        assert server.started, "uvicorn did not start"
+        port = server.servers[0].sockets[0].getsockname()[1]
+
+        def stop():
+            server.should_exit = True
+            thread.join(timeout=10)
+        return f"http://127.0.0.1:{port}", stop
+
+    def test_smoke_suite_over_real_http(self):
         import local_front
         try:
-            import uvicorn
+            import uvicorn  # noqa: F401
         except ImportError:  # pragma: no cover
             self.skipTest("uvicorn not installed")
         key_names = ("NVIDIA_API_KEY", "XKIRO_API_KEY", "GOOGLE_API_KEY",
@@ -285,26 +304,39 @@ class LocalFrontOverHttp(unittest.TestCase):
         saved = {name: os.environ.pop(name, None) for name in key_names}
         app = service.create_app(profiles.default_state(), generator=object(),
                                  allow_profile_switch=False)
-        server = uvicorn.Server(uvicorn.Config(
-            app, host="127.0.0.1", port=0, log_level="warning"))
-        thread = threading.Thread(target=server.run, daemon=True)
-        thread.start()
+        url, stop = self._boot(app)
         try:
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline and not server.started:
-                time.sleep(0.05)
-            self.assertTrue(server.started, "uvicorn did not start")
-            port = server.servers[0].sockets[0].getsockname()[1]
-            api = local_front.Api(f"http://127.0.0.1:{port}")
+            api = local_front.Api(url)
             passed, failed = local_front.run_suite(api, spend=False)
             self.assertEqual(failed, 0, f"{failed} smoke check(s) failed")
             self.assertGreaterEqual(passed, 18)
         finally:
-            server.should_exit = True
-            thread.join(timeout=10)
+            stop()
             for name, value in saved.items():
                 if value is not None:
                     os.environ[name] = value
+
+    def test_front_sends_the_service_token(self):
+        import local_front
+        try:
+            import uvicorn  # noqa: F401
+        except ImportError:  # pragma: no cover
+            self.skipTest("uvicorn not installed")
+        app = service.create_app(profiles.default_state(), generator=object(),
+                                 allow_profile_switch=False,
+                                 service_token="front-secret-1")
+        url, stop = self._boot(app)
+        try:
+            locked = local_front.Api(url, token="")     # no header -> 401
+            status, body = locked.get("/health")
+            self.assertEqual(status, 401)
+            self.assertEqual(body["detail"]["reason"], "unauthorized")
+            api = local_front.Api(url, token="front-secret-1")
+            status, body = api.get("/health")
+            self.assertEqual(status, 200)
+            self.assertEqual(body["status"], "ok")
+        finally:
+            stop()
 
 
 class ConsoleEndpointsTest(unittest.TestCase):
@@ -485,6 +517,182 @@ class ConsoleEndpointsTest(unittest.TestCase):
                                        "model": "nvidia/nemotron-3-embed-1b"}}):
             back = self.client.post("/profile", json=payload)
             self.assertEqual(back.status_code, 200, back.text)
+
+
+class _ScriptedChatClient:
+    """Answers with a scripted claim; the evidence quote is a verbatim prefix
+    of the source containing `marker` — enough to drive the citation gate
+    (quote membership + the numeric check) and the output scrubber."""
+    base_url = "https://fake.test/v1"
+    api_key = "fake"
+    marker = "10 dinars"
+    claim = "The Atlas card costs 10 dinars per year."
+
+    def chat(self, model, messages, *, max_tokens=4096):
+        payload = json.loads(messages[1]["content"])
+        source = next(s for s in payload["sources"]
+                      if type(self).marker in s["text"])
+        quote = " ".join(source["text"].split())[:200]
+        return {"text": json.dumps({"answerable": True, "claims": [
+            {"text": type(self).claim,
+             "evidence": [{"source_id": source["source_id"], "quote": quote}]}]}),
+            "served_model": model, "usage": {}, "seconds": 0.0}
+
+
+class _ContactQuoteClient(_ScriptedChatClient):
+    marker = "support@atlas.tn"
+    claim = ("Atlas support is support@atlas.tn, phone +216 71 123 456, "
+             "RIB 08 0000 0000 0000 0000 12, CIN 09123456.")
+
+
+class _LyingNumberClient(_ScriptedChatClient):
+    marker = "10 dinars"
+    claim = "The Atlas card costs 99 dinars per year."
+
+
+class ServiceAuthTest(unittest.TestCase):
+    """X-Service-Token: when configured, every request must carry it; CORS
+    preflights stay open so browsers can still negotiate."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        overrides = {"CHROMA_DIR": cls.tmp / "chroma"}
+        cls.open_client = TestClient(service.create_app(
+            profiles.default_state(), generator=object(), service_token="",
+            config_overrides=overrides))
+        cls.locked_client = TestClient(service.create_app(
+            profiles.default_state(), generator=object(),
+            service_token="test-service-token",
+            config_overrides=overrides))
+
+    def test_open_when_no_token_configured(self):
+        self.assertEqual(self.open_client.get("/health").status_code, 200)
+
+    def test_locked_without_and_with_wrong_token(self):
+        for headers in ({}, {"X-Service-Token": "wrong"},
+                        {"X-Service-Token": "test-service-token "}):
+            response = self.locked_client.get("/health", headers=headers)
+            self.assertEqual(response.status_code, 401, headers)
+            self.assertEqual(response.json()["detail"]["reason"], "unauthorized")
+        # mutating routes are protected by the same check
+        denied = self.locked_client.post("/keys", json={
+            "key_env": "KIRA_API_KEY", "value": "kira-x-123456789"})
+        self.assertEqual(denied.status_code, 401)
+
+    def test_locked_accepts_the_right_token(self):
+        response = self.locked_client.get(
+            "/health", headers={"X-Service-Token": "test-service-token"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+
+    def test_preflight_passes_without_token(self):
+        response = self.locked_client.options(
+            "/answer", headers={"Origin": "https://front.example",
+                                "Access-Control-Request-Method": "POST"})
+        self.assertEqual(response.status_code, 200)   # CORS answers preflight
+
+
+class OutputGuardsTest(unittest.TestCase):
+    """The output-side guards: PII scrubbing after the citation gate, and the
+    numeric half of the gate (a claim number absent from its evidence quote
+    refuses as unsourced_number)."""
+
+    CORPUS = ("# Atlas Bank\n\n"
+              "Product sheet for testing.\n\n"
+              "## Contact\n\n"
+              "Atlas support: email support@atlas.tn, phone +216 71 123 456, "
+              "RIB 08 0000 0000 0000 0000 12, CIN 09123456 for verification.\n\n"
+              "## Fees\n\n"
+              "The Atlas card costs 10 dinars per year.\n")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        (cls.tmp / "note.md").write_text(cls.CORPUS, encoding="utf-8")
+        profile = _service_profile(cls.tmp)
+        overrides = {"CHROMA_DIR": cls.tmp / "chroma",
+                     "EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+                     "NVIDIA_EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+                     "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
+                     "RESULTS_DIR": cls.tmp}
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+
+        def build(client_class):
+            local = build_lab_config(profile)
+            for key, value in overrides.items():
+                setattr(local, key, value)
+            generator = AnswerGenerator(local, client=client_class(),
+                                        approved_models=(PROFILE_MODEL,))
+            return TestClient(service.create_app(
+                profile, generator=generator, allow_profile_switch=False,
+                config_overrides=overrides))
+
+        cls.contact_client = build(_ContactQuoteClient)
+        cls.lying_client = build(_LyingNumberClient)
+        accepted = cls.contact_client.post("/ingest")
+        assert accepted.status_code == 200, accepted.text
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status = cls.contact_client.get("/ingest/status").json()
+            if status["state"] != "running":
+                break
+            time.sleep(0.1)
+        assert status["state"] == "done", status
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.modules.pop("sentence_transformers", None)
+
+    def test_answer_output_is_pii_scrubbed_after_the_gate(self):
+        response = self.contact_client.post(
+            "/answer", json={"question": "How do I contact Atlas support?",
+                             "k": 5, "include_excerpts": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        # the gate validated the RAW verbatim quotes; only the output is scrubbed
+        self.assertEqual(body["status"], "answered", body)
+        for label in ("[EMAIL]", "[PHONE]", "[RIB]", "[CIN]"):
+            self.assertIn(label, body["answer"], label)
+        claim = body["claims"][0]
+        self.assertIn("[EMAIL]", claim["text"])
+        self.assertIn("[RIB]", claim["evidence"][0]["quote"])
+        blob = json.dumps(body)
+        for raw in ("support@atlas.tn", "+216 71 123 456",
+                    "08 0000 0000 0000 0000 12", "09123456"):
+            self.assertNotIn(raw, blob, raw)
+        # excerpts too (order-independent: the stub embedder's ranking varies
+        # with the per-process hash seed)
+        self.assertTrue(any("[EMAIL]" in row.get("text", "")
+                            for row in body["sources"]), body["sources"])
+
+    def test_search_hits_are_pii_scrubbed(self):
+        response = self.contact_client.post(
+            "/search", json={"question": "Atlas support contact email"})
+        self.assertEqual(response.status_code, 200, response.text)
+        blob = json.dumps(response.json())
+        self.assertNotIn("support@atlas.tn", blob)
+        self.assertIn("[EMAIL]", blob)
+
+    def test_inspect_shows_raw_text(self):
+        # diagnostics display the raw truth on purpose (admin-facing); the
+        # scrub boundary is the user-facing /answer and /search outputs
+        response = self.contact_client.get("/inspect", params={"limit": 10})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("support@atlas.tn", json.dumps(response.json()))
+
+    def test_unsourced_number_refuses(self):
+        response = self.lying_client.post(
+            "/answer", json={"question": "What does the Atlas card cost?"})
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["status"], "refused")
+        self.assertEqual(body["reason"], "unsourced_number")
+        self.assertFalse(body["inference_performed"])
+        self.assertIn("99", body.get("raw_preview") or "")
+        self.assertIn("10", body.get("raw_preview") or "")     # the honest quote
+        self.assertIn("99", body.get("error") or "")
 
 
 if __name__ == "__main__":

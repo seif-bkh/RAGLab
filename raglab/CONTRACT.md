@@ -1,7 +1,7 @@
 # RAGLab service — HTTP contract
 
 **Audience:** the fullstack team building against this service.
-**Service version:** `1.0.0` (reported by `GET /health` → `version`).
+**Service version:** `1.1.0` (reported by `GET /health` → `version`).
 **Machine-readable schema:** FastAPI generates OpenAPI 3 at `/openapi.json` and
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
@@ -11,9 +11,11 @@ names; this doc is truth for behavior.
 **What the service is:** a grounded Q&A engine over a fixed document corpus.
 You send a question; it retrieves chunks from its local vector index, asks a
 chat model to answer **as verbatim-cited claims**, validates every citation
-quote against the source chunk, and returns claims + evidence or a safe
-refusal. It is one stateful worker (one profile, one index, one ingest at a
-time) — not a stateless API. Read §2 before wiring anything.
+quote against the source chunk **and every number in every claim against its
+evidence** — then scrubs known PII patterns from the output — and returns
+claims + evidence or a safe refusal. It is one stateful worker (one profile,
+one index, one ingest at a time) — not a stateless API. Read §2 before wiring
+anything.
 
 ---
 
@@ -23,7 +25,7 @@ time) — not a stateless API. Read §2 before wiring anything.
 |---|---|
 | Transport | HTTP/1.1, JSON bodies (`content-type: application/json`), UTF-8 everywhere. The corpus is Arabic + French — never transcode or transliterate. |
 | Base URL | One deployment, one port (default `:8000`). All paths are root-relative (`/search`, not `/api/v1/search`). |
-| Auth | **None.** The service trusts its network. Put it behind your gateway (auth, rate limits, CORS tightening). `RAGLAB_CORS_ORIGINS` configures browser CORS (default: `*`). |
+| Auth | **Optional shared-secret token.** When `RAGLAB_SERVICE_TOKEN` is set on the service, every request must carry it in the `X-Service-Token` header (constant-time compare) → `401 unauthorized` otherwise. Unset = open (the local/dev default). This is defense in depth, not user auth — the service still expects to sit behind your gateway (real auth, rate limits, CORS tightening). `RAGLAB_CORS_ORIGINS` configures browser CORS (default: `*`); CORS preflights are exempt from the token check by design. |
 | Timestamps | UTC, ISO-8601 with offset, second precision (`2026-09-14T14:18:01+00:00`). |
 | Idempotency | `GET`s are safe. `POST /answer` and `POST /search` are read-only w.r.t. state (but may spend provider budget). `POST /ingest`, `POST /profile`, `POST /keys`, `DELETE /keys/{env}` mutate state. Nothing is transactional across calls. |
 | Sessions | **There are none.** No cookies, no conversation state, no per-client storage. Every request is judged against the current global profile + index. Chat history is the client's job (§5.4). |
@@ -32,8 +34,9 @@ time) — not a stateless API. Read §2 before wiring anything.
 
 | Code | Meaning here |
 |---|---|
-| `200` | Success — **including a refusal** (§3.9: `status: "refused"` is a valid answer, not an error). |
+| `200` | Success — **including a refusal** (§3.10: `status: "refused"` is a valid answer, not an error). |
 | `400` | Semantic error — the request is well-formed JSON but violates a rule. Body: error envelope with a `reason` (§4). |
+| `401` | Missing/wrong `X-Service-Token` — only on deployments where `RAGLAB_SERVICE_TOKEN` is set (`unauthorized`). |
 | `403` | Profile switching is disabled on this deployment (`profile_switching_disabled`). |
 | `404` / `405` | Unknown path / wrong method. |
 | `409` | State conflict — empty index, stale index, ingest already running, corpus missing, provider refused mid-request. |
@@ -175,7 +178,7 @@ The endpoint your UI polls. No secrets — key values never appear, only
 `set`/`missing` per env var.
 
 ```json
-{"status": "ok", "version": "1.0.0",
+{"status": "ok", "version": "1.1.0",
  "profile": {"embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
              "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
              "chunking": {"mode": "restructure", "size": 220, "overlap": 40},
@@ -336,6 +339,10 @@ invalid enum values → `400 bad_mode` / `bad_lang_filter` / `bad_query_lang`.
 Errors: `503 missing_api_key` (embedding), `409 empty_index` (ingest first),
 `409 retrieval_refused` (stale index — rebuild with `?reset=true`).
 
+`hits[].text` is PII-scrubbed like `/answer` outputs (§3.10): emails, phone
+numbers, RIB/IBAN and CIN numbers come back as `[EMAIL]` / `[PHONE]` /
+`[RIB]` / `[CIN]` placeholders.
+
 ### 3.10 `POST /answer` — the product endpoint
 Request:
 
@@ -362,9 +369,14 @@ answered locally, zero provider calls:
 
 **(b) refused** — the safe answer. `status: "refused"` with a `reason`:
 `private_or_live_request` (asked for personal/live data — decided locally),
-`insufficient_evidence` / `no_context` (corpus doesn't support it), or
-`invalid_output` (the model's reply failed the citation gate — its raw reply
-is in `answer`). Render `answer` as-is; it is a user-safe explanation:
+`insufficient_evidence` / `no_context` (corpus doesn't support it),
+`invalid_output` (the model's reply failed the citation gate's structural or
+quote-membership checks), or `unsourced_number` (a claim stated a number its
+evidence quotes don't contain — a computed/converted/renamed figure). On the
+`invalid_output`/`unsourced_number` paths the response also carries `error`
+(the gate's finding, safe-redacted) and `raw_preview` (the model's rejected
+reply, PII-scrubbed) for display like "[model said, not accepted]". Render
+`answer` as-is; it is a user-safe explanation:
 
 ```json
 {"status": "refused", "reason": "private_or_live_request",
@@ -386,7 +398,8 @@ is in `answer`). Render `answer` as-is; it is a user-safe explanation:
               "chunk_id": "note.md::chunk_0001", "heading": "## Fees"}],
  "model": "nvidia/nemotron-3.5-lightning-30b-a3b", "language": "en",
  "validation_ok": true, "cached": false, "retrieved": 1,
- "dropped_for_budget": 0, "seconds": 1.8, "inference_performed": true}
+ "dropped_for_budget": 0, "seconds": 1.8, "error": null, "raw_preview": null,
+ "inference_performed": true}
 ```
 
 Field contract for (c):
@@ -394,15 +407,33 @@ Field contract for (c):
 | Field | Meaning / UI rule |
 |---|---|
 | `answer` | Human-readable summary with `[S#]` markers. Safe to render as text. |
-| `claims[].text` | One concise factual claim, written in the **user's language**. |
+| `claims[].text` | One concise factual claim, written in the **user's language**. Every digit-form number in it is machine-verified to exist in its evidence quotes (else the whole reply refuses as `unsourced_number`). |
 | `claims[].evidence[].source_id` | Links to `sources[].source_id` (`S1`, `S2`, …). |
 | `claims[].evidence[].quote` | The verbatim supporting words, in the **document's original language** (may differ from the claim's language — do not "fix" this). Quote membership in the cited chunk is machine-verified before you see it. |
 | `sources[]` | The retrieved chunks the model could cite. With `include_excerpts: true`, each also has `text` (the full chunk). `source_id`s not cited by any claim were retrieved but unused. |
-| `validation_ok` | `true` here **by construction** — invalid outputs come back as `refused/invalid_output`. |
+| `validation_ok` | `true` here **by construction** — invalid outputs come back as `refused/invalid_output` or `refused/unsourced_number`. |
 | `cached` | Answer served from cache (fast, free). |
 | `retrieved` / `dropped_for_budget` | Hits found / dropped to fit the model's context budget. |
 | `seconds` | Provider call duration. |
+| `error` / `raw_preview` | `null` on this path; populated only on `invalid_output`/`unsourced_number` refusals (see (b)). |
 | `inference_performed` | `false` for greetings and local refusals — use it to mark "no AI call" in your UI. |
+
+**What is machine-verified before you see an `answered` payload:** every
+evidence quote is a contiguous verbatim member of its cited chunk, AND every
+number in every claim appears in that claim's evidence (normalization covers
+French `2,75` vs English `2.75` vs Arabic `٢٫٧٥`, thousands grouping
+`50 000` vs `50000`, and Arabic-Indic digits). Claims prose itself is still
+model-written — render, don't re-parse.
+
+**Output PII scrubbing (post-gate):** `answer`, `claims[].text`,
+`claims[].evidence[].quote`, `sources[].text` (when requested) and `/search`
+`hits[].text` pass through a scrubber that replaces emails, phone numbers
+(Tunisian and international formats), RIB/IBAN (20-digit forms) and CIN
+numbers (8 digits in CIN context) with `[EMAIL]` / `[PHONE]` / `[RIB]` /
+`[CIN]`. Amounts, rates, dates and counts are deliberately untouched. The
+gate validates the RAW verbatim text; the scrubber rewrites only what you
+see. Diagnostics endpoints (`/inspect`, `/chunks/search`) intentionally show
+raw text — they are admin-facing truth, not user-facing output.
 
 Errors: `503 missing_api_key` (either slot — body says which), `409 empty_index`,
 `409 answer_refused` (mid-request provider/refusal error), `502 provider_error`.
@@ -467,6 +498,7 @@ the catalog snapshot as collected by `provider_catalog.collect()`.
 | `placeholder_value` | 400 | `/keys` | Value looks like the `.env.example` template. | Paste the real key. |
 | `unknown_question_set` | 400 | `/evaluate` | Unknown name and no such absolute path. | — |
 | `empty_question_set` | 400 | `/evaluate` | Set loaded but has no cases. | — |
+| `unauthorized` | 401 | every path | Missing/wrong `X-Service-Token` (only when `RAGLAB_SERVICE_TOKEN` is set). | Send the header; CORS preflights are exempt. |
 | `profile_switching_disabled` | 403 | `/profile` | This deployment locks switching. | Hide the switcher; configure via env at boot. |
 | `empty_index` | 409 | `/search`, `/answer`, `/evaluate` | Collection has no chunks. | `POST /ingest`, poll `/ingest/status`. |
 | `retrieval_refused` | 409 | `/search` | Stored chunks ≠ current settings (stale fingerprint). | `POST /ingest?reset=true`. |
@@ -499,6 +531,8 @@ Handle both shapes: `detail.reason` (string) vs `detail` (array).
 
 ```
 1. GET /health
+   401?                     → the deployment sets RAGLAB_SERVICE_TOKEN:
+                              send X-Service-Token on every request
 2. keys complete?           ← health.keys / GET /keys      → key UI (§5.2)
 3. index.count > 0?         ← health.index                 → else offer ingest
 4. POST /ingest             ← background job               → poll /ingest/status
@@ -537,7 +571,9 @@ There is **no server-side conversation state**. Build chat by holding the
 history in the client and calling `POST /answer` per turn (the service answers
 each question against the corpus independently — it does not see prior turns).
 For a transcript UI, append each response's claims/sources per turn. The
-reference implementation is `raglab/local_front.py` (menu 10).
+reference implementation is `raglab/local_front.py` (menu 10); it sends
+`X-Service-Token` automatically when `RAGLAB_SERVICE_TOKEN` is set in its
+environment.
 
 ### 5.5 Provider/model picker
 From `GET /models`: group by slot, show `key_set` state per provider, and
@@ -565,6 +601,7 @@ Config is environment-only at boot (12-factor). Full table + Docker notes:
 `RAGLAB_TOP_K`, `RAGLAB_RETRIEVAL_MODE`, `RAGLAB_LANG_FILTER`,
 `RAGLAB_NEIGHBOR_RADIUS`, `RAGLAB_DATA_DIRS`,
 `RAGLAB_ALLOW_PROFILE_SWITCH` (default `1` locally, compose pins `0`),
+`RAGLAB_SERVICE_TOKEN` (require `X-Service-Token` on every request),
 `RAGLAB_CORS_ORIGINS` (default `*`), plus provider keys
 (`NVIDIA_API_KEY`, `XKIRO_API_KEY`, `GOOGLE_API_KEY`/`GEMINI_API_KEY`,
 `KIRA_API_KEY`, …). Invalid combinations fail at boot, not on request 5.

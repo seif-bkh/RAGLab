@@ -68,11 +68,18 @@ QUESTION_SETS = ("questions.json", "questions_50.json", "questions_real.json")
 
 class Api:
     """GET/POST/DELETE JSON against the service. Never raises on HTTP errors:
-    returns (status, body) so callers can assert on the error contract."""
+    returns (status, body) so callers can assert on the error contract.
 
-    def __init__(self, base_url: str, timeout: float = 60.0):
+    If RAGLAB_SERVICE_TOKEN is set in the front's environment (or a token is
+    passed explicitly), every request carries X-Service-Token — the service's
+    optional shared-secret check (401 unauthorized without it).
+    """
+
+    def __init__(self, base_url: str, timeout: float = 60.0, token: str | None = None):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.token = (token if token is not None
+                      else os.environ.get("RAGLAB_SERVICE_TOKEN", "")).strip()
 
     def request(self, method: str, path: str, payload=None, params=None, timeout=None):
         url = self.base_url + path
@@ -82,6 +89,8 @@ class Api:
         data = None
         headers = {"Accept": "application/json",
                    "User-Agent": "RAGLab-local-front/1.0"}
+        if self.token:
+            headers["X-Service-Token"] = self.token
         if payload is not None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"

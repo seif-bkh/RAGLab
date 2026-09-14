@@ -132,8 +132,90 @@ def validate_answer(output, sources):
                 raise ValueError("Evidence quote is empty or too short")
             if normalized_quote(quote) not in normalized_quote(source_map[ev["source_id"]]["text"]):
                 raise ValueError("Evidence quote is not in the cited source")
+        missing = unsourced_numbers(claim["text"],
+                                    [ev["quote"] for ev in evidence])
+        if missing:
+            raise UnsourcedNumber(
+                "claim states number(s) " + ", ".join(missing)
+                + " that its evidence quotes do not contain")
         clean.append({"text": claim["text"].strip(), "evidence": evidence})
     return clean
+
+
+# ---------------------------------------------------------------------------
+# Numeric half of the citation gate
+# ---------------------------------------------------------------------------
+# Quote membership proves the WORDS are the source's; the checks below prove
+# the NUMBERS are the source's. A model that computes, converts, rounds or
+# renames a figure ("the rate is 5%" from a source saying "0,5 %") fails even
+# though its prose is otherwise faithful — that claim must be refused, not
+# served. Digit-form numbers only (word numbers are prose, not data).
+
+
+class UnsourcedNumber(ValueError):
+    """A claim states a number that does not appear in its evidence quotes.
+
+    Raised by validate_answer; AnswerGenerator.answer turns it into the
+    distinct 'unsourced_number' refusal (same family as invalid_output, but
+    the diagnosis — a number the sources never said — is worth its own name).
+    """
+
+
+_ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹",
+                               "01234567890123456789")
+# A number: a digit run (French/English/Arabic decimal and thousands
+# separators allowed inside), optionally followed by space-separated groups
+# of exactly three digits (French/Arabic thousands: "50 000", "1 000 000").
+_NUMBER_RE = re.compile(
+    r"[0-9٠-٩۰-۹][0-9٠-٩۰-۹.,\u066B\u066C]*(?:[ \u00A0\u202F][0-9٠-٩۰-۹]{3})*")
+
+
+def numbers_in(text: str) -> list:
+    """Normalized digit forms of every number in `text`, in order.
+
+    Arabic-Indic digits are mapped to Western ones; '.', ',', the Arabic
+    decimal (٫) and thousands (٬) separators are dropped, so '2.75', '2,75'
+    and '٢٫٧٥' all normalize to '275'; space-separated 3-digit groups are
+    treated as thousands ('50 000' -> '50000').
+    """
+    out = []
+    for match in _NUMBER_RE.finditer(text):
+        raw = re.sub(r"[\s.,\u066B\u066C]", "",
+                     match.group(0).translate(_ARABIC_DIGITS))
+        if raw:
+            out.append(raw)
+    return out
+
+
+def _all_runs(tokens) -> set:
+    """All contiguous concatenations, e.g. ['2', '75'] -> {'2', '75', '275'}.
+
+    Lets a claim number match a quote written with different grouping
+    (claim '50000' vs quote '50 000', or a French decimal split by a space).
+    """
+    return {"".join(tokens[i:j]) for i in range(len(tokens))
+            for j in range(i + 1, len(tokens) + 1)}
+
+
+def unsourced_numbers(claim_text: str, quotes) -> list:
+    """The claim's numbers that no evidence quote contains, in order.
+
+    Empty list = every number in the claim is present in (a run of) its
+    evidence quotes — the numeric contract holds.
+    """
+    claim_numbers = numbers_in(claim_text)
+    if not claim_numbers:
+        return []
+    quote_forms = set()
+    for quote in quotes:
+        quote_forms |= _all_runs(numbers_in(quote))
+    covered = set()
+    for i in range(len(claim_numbers)):
+        for j in range(i, len(claim_numbers)):
+            if "".join(claim_numbers[i:j + 1]) in quote_forms:
+                covered.update(range(i, j + 1))
+                break
+    return [number for i, number in enumerate(claim_numbers) if i not in covered]
 
 
 def local_private_refusal(cfg, question, language=None):
@@ -247,6 +329,15 @@ class AnswerGenerator:
                     "retry_after_s": getattr(exc, 'retry_after', None)}
         try:
             claims = validate_answer(response["text"], sources)
+        except UnsourcedNumber as exc:
+            reply = response.get("text") if isinstance(response, dict) else None
+            return {**base, "status": "refused", "reason": "unsourced_number",
+                    "validation_ok": False, "answer": REFUSALS[language],
+                    "error": safe_error(exc),
+                    # the model's reply, so the offending claim/number is visible
+                    "raw_preview": str(reply or "")[:1200],
+                    "seconds": response.get('seconds', 0) if isinstance(response, dict) else 0,
+                    "served_model": response.get('served_model') if isinstance(response, dict) else None}
         except (ValueError, KeyError, TypeError) as exc:
             reply = response.get("text") if isinstance(response, dict) else None
             return {**base, "status": "refused", "reason": "invalid_output", "validation_ok": False,
