@@ -413,15 +413,31 @@ The user runs this locally and reports transcripts (`front chat>` = the service 
 
 ```bash
 # --- 1. get the code (first time) -----------------------------------------
-git clone https://github.com/seif-bkh/RAGLab.git
+git clone -b arena/01a09f30-raglab https://github.com/seif-bkh/RAGLab.git RAGLab
 cd RAGLab
-git switch arena/01a09f30-raglab          # this session's branch
 
-# --- 1b. ...or update an existing clone -----------------------------------
-git fetch origin arena/01a09f30-raglab
-git switch arena/01a09f30-raglab
+# --- 1b. ...or switch an EXISTING clone (older/shallow/single-branch) ------
+git remote set-branches origin '*' && git fetch origin && git switch arena/01a09f30-raglab
 git pull --ff-only
 
+```
+
+**`fatal: invalid reference: arena/01a09f30-raglab` is expected on a clone made
+before this branch existed, or on any `--single-branch` / `--depth 1` clone**:
+`git switch` only reaches refs the clone already has, and a shallow clone maps
+`origin/main` alone (`remote.origin.fetch` is that single branch) — fetching the
+branch is not enough there, git even refuses `--track` with "starting point
+'origin/...' is not a branch" until the refspec covers it. `git remote
+set-branches origin '*'` widens the refspec, `git fetch origin` then creates the
+remote-tracking ref, and the DWIM switch (with tracking) works. Verified on this
+branch against a normal clone, a clone with the branch ref removed, a
+`--single-branch` clone and a `--depth 1` clone: all four land on `f983d95`
+with upstream set and `git pull --ff-only` clean. If `git fetch origin` answers
+`couldn't find remote ref`, `origin` is not seif-bkh/RAGLab — check
+`git remote -v` and add it: `git remote add upstream
+https://github.com/seif-bkh/RAGLab.git`.
+
+```bash
 # --- 2. Python env (3.11; the versions CI pins) ---------------------------
 python3 -m venv raglab/.venv
 raglab/.venv/bin/pip install -U pip
