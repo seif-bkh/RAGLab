@@ -158,6 +158,16 @@ def index_freshness(index: dict) -> tuple[str, str]:
     count = index.get("count") or 0
     if not count:
         return "empty", "no index yet — build it:  python local_front.py --ingest"
+    if "stale" not in index:
+        # This version of /health ALWAYS carries `stale` (null is a legitimate
+        # "cannot compare"). Its absence is therefore about the SERVICE, not the
+        # index: an older process is answering, and its other diagnostics are
+        # equally absent — which is how a provider failure gets reported as a
+        # capacity problem instead of "your key is wrong".
+        return "unknown", (f"{count} chunk(s) indexed, but this service did not report whether "
+                           f"they match the active profile — that is an older service process. "
+                           f"Restart it (./raglab/run_local.sh --restart), then rebuild if it "
+                           f"says stale:  {REBUILD_COMMAND}")
     stale = index.get("stale")
     if stale is None:
         return "unknown", (f"{count} chunk(s) indexed, but the collection carries no chunk "
@@ -170,6 +180,32 @@ def index_freshness(index: dict) -> tuple[str, str]:
             f"{index.get('current_chunk_fp') or '?'} — chunk texts changed, so retrieval "
             f"would be wrong. Rebuild:  {REBUILD_COMMAND}  (menu 7, or POST /ingest?reset=true)")
     return "fresh", f"{count} chunk(s) indexed, fingerprint matches this profile"
+
+
+TRANSPORT_HINTS = ("urlopen error", "ssl", "tls", "timed out", "timeout",
+                   "name or service not known", "temporary failure in name resolution",
+                   "connection refused", "connection reset", "certificate", "getaddrinfo")
+
+
+def looks_like_transport(error: str) -> bool:
+    """Did the request fail BEFORE the provider could answer it?
+
+    The difference matters: "quota exceeded" is the provider talking (wait, or
+    change model), while a TLS/DNS failure is this machine (retrying the same
+    question forever cannot help — that is the loop the user reported).
+    """
+    blob = (error or "").lower()
+    return any(token in blob for token in TRANSPORT_HINTS)
+
+
+def transient(detail: dict) -> bool:
+    """Is a retry a sensible offer for this failure?"""
+    code = detail.get("http_status") or detail.get("status_code")
+    if code == 429 or code in (500, 502, 503, 504):
+        return True
+    if looks_like_transport(str(detail.get("error") or "")):
+        return False
+    return code is None
 
 
 def provider_hint(detail: dict) -> list[str]:
@@ -185,6 +221,20 @@ def provider_hint(detail: dict) -> list[str]:
     code = detail.get("http_status") or detail.get("status_code")
     retry_after = detail.get("retry_after_s")
     lines = []
+    if not error and code is None and detail.get("provider_ok") is None:
+        # A provider failure in this version ALWAYS carries `error` and/or an
+        # HTTP status. Nothing at all means the payload was built by an older
+        # service process — saying "capacity, retry" there is a guess, and the
+        # retry it invites can never work.
+        lines.append("[front] the service returned no provider detail — no message, no HTTP "
+                     "status. That is an older service process, not a provider verdict.")
+        lines.append("[front] restart it so the provider's own error reaches this front "
+                     "(the service log also gets a line per model tried):")
+        lines.append("[front]   ./raglab/run_local.sh --restart     "
+                     "· log: raglab/logs/service_<port>.log")
+        lines.append("[front] to ask the providers directly, with no service involved:  "
+                     "./raglab/run_local.sh --provider-check")
+        return lines
     if code == 429 or "RESOURCE_EXHAUSTED" in error or "quota" in error.lower():
         wait = f" It asks for {retry_after:.0f}s before the next attempt." if retry_after else ""
         lines.append("[front] the answer provider rate-limited/quotas this key (HTTP 429)."
@@ -204,6 +254,11 @@ def provider_hint(detail: dict) -> list[str]:
                      "model ID or a parameter.")
         lines.append("[front] pick another answer model in menu 2; the full provider message "
                      "is on the line above.")
+    elif code is None and looks_like_transport(error):
+        lines.append("[front] the call never reached the provider — this is a network / DNS / "
+                     "TLS problem on this machine, not a provider verdict.")
+        lines.append("[front] a retry fails identically: find the blocked layer first with "
+                     "./raglab/run_local.sh --provider-check")
     elif code in (500, 502, 503, 504) or code is None:
         lines.append("[front] this is a provider-side/capacity failure, not a corpus or "
                      "settings problem: the same question can succeed on a retry.")
@@ -275,6 +330,15 @@ def record_custom_model(state: dict, provider: str, model_id: str) -> None:
 
 def prompt(text: str) -> str:
     return input(text).strip()
+
+
+def interactive_stdin() -> bool:
+    """Is a human on stdin? `--ask`/`--search` read pipes and /dev/null, where a
+    prompt raises EOFError — a traceback in the middle of a scripted report."""
+    try:
+        return sys.stdin.isatty()
+    except Exception:                                            # noqa: BLE001
+        return False
 
 
 def confirm(question: str) -> bool:
@@ -419,12 +483,21 @@ class Console:
               + (" — written to the service's .env too" if body.get("persisted") else ""))
 
     def startup_key_check(self) -> None:
-        """Ask keep/change/add for the selected providers' keys (app.py parity)."""
+        """Ask keep/change/add for the selected providers' keys (app.py parity).
+
+        Only when a human is on stdin: this prompt used to fire for `--ask` too,
+        where stdin is a pipe or /dev/null — the run died with EOFError before
+        the question was even sent.
+        """
+        if not interactive_stdin():
+            return
         health = self.health()
         models = self.models()
         for slot in ("embedding", "answer"):
             provider = health["profile"][slot]["provider"]
-            row = next((r for r in models[slot] if r["provider"] == provider), None)
+            # A service that answers /models without the expected slots (a very
+            # old build, or something else on the port) must not traceback here.
+            row = next((r for r in models.get(slot) or [] if r.get("provider") == provider), None)
             if row and row.get("key_envs"):
                 self.key_flow(slot, row)
 
@@ -438,6 +511,9 @@ class Console:
         print("=" * 78)
         p = health["profile"]
         print(f"service     : {self.api.base_url} (version {health.get('version')})")
+        revision, started = health.get("revision"), health.get("started_at")
+        print(f"code        : revision {revision or '(none)'} · started {started or 'unknown'}"
+              + ("" if started else "   ← older service: it predates the revision stamp"))
         print(f"embedding   : {p['embedding']['provider']}/{p['embedding']['model']}")
         print(f"answer      : {p['answer']['provider']}/{p['answer']['model']}")
         print(f"chunking    : {p['chunking']['mode']}"
@@ -830,7 +906,10 @@ class Console:
                     self.action_providers()
                 return 1
             wait = f" (the provider suggested ~{retry_after:.0f}s)" if retry_after else ""
-            if interactive and confirm(f"provider error{wait} — ask again?"):
+            # Only offer the retry when it can plausibly help: a blind prompt
+            # that reappears after three identical 0.4s failures is exactly what
+            # the user reported. The hint above names the real next step.
+            if interactive and transient(body) and confirm(f"provider error{wait} — ask again?"):
                 return self.ask_once(question, k=k, show=show, query_lang=query_lang,
                                      mode=mode, interactive=interactive)
         if body.get("served_model") and body["served_model"] != body.get("model"):

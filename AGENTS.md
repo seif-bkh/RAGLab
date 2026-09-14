@@ -418,6 +418,19 @@ The user runs this locally and reports transcripts (`front chat>` = the service 
 (`249977c`) on 2026-09-14: clone → venv → `main.py inspect` → `run_tests.sh
 --offline` (EXIT=0) → `uvicorn service:app` → `local_front.py --status`.
 
+**A pull does not restart the service.** The front is a REST client; if a
+service process is already up, `run_local.sh` reuses it — and code from before
+the pull keeps answering. That produced a real misdiagnosis (2026-09-14): an old
+service returned `status=error/provider_error` with no `error`/`http_status`,
+and the front guessed "capacity failure, retry" three times in a row. `/health`
+now carries `revision` + `started_at`, the wrapper warns on a mismatch and
+switches with `--restart`, and `local_front` names a detail-less payload as an
+old service instead of guessing. When a user reports a provider failure, check
+the revision first, then `./raglab/run_local.sh --provider-check` — it separates
+"key wrong" / "country blocked" / "network blocked" without the service in the
+way (a provider error with no HTTP status is usually DNS/TLS, where retrying
+forever cannot help).
+
 **Never hand the user a command that starts with a bare `cd RAGLab`** — their
 clone is wherever it is, and they ran one such command from `~` and hit
 `bash: cd: RAGLab/raglab: No such file or directory`. Prefix with the locator
@@ -491,6 +504,7 @@ cd raglab
 .venv/bin/python main.py inspect
 PYTHON="$PWD/.venv/bin/python" ./run_tests.sh --offline     # must print EXIT=0
 ./run_local.sh --smoke                                      # endpoint suite over real HTTP
+./run_local.sh --provider-check                             # live provider verdicts (network!)
 
 # --- 5. run the service (what `front chat>` talks to) ---------------------
 .venv/bin/python -m uvicorn service:app --host 0.0.0.0 --port 8000

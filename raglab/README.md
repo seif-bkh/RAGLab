@@ -61,8 +61,12 @@ outside, the way another microservice would: `python local_front.py`
 One command runs the pair for you (starts the service, waits for `/health`,
 runs the front action, stops it again): `./raglab/run_local.sh --status`,
 `--ingest [--reset]`, `--ask "…"`, `--interactive`, `--smoke`, `--keep`,
-`--port N`, `--no-start`, `--keys` (hidden-prompt key setup in `.env`, no
-service started); any other flag goes to `local_front.py`.
+`--port N`, `--no-start`, `--restart` (a `pull` does not reload a running
+service — this stops it and starts the current code), `--provider-check` (asks
+each provider directly what it says about your keys, no service involved),
+`--keys` (hidden-prompt key setup in `.env`, no service started); any other flag
+goes to `local_front.py`. The wrapper prints the service's `revision` and warns
+when it does not match the checkout.
 
 Failures travel with their diagnosis on both surfaces: a stale index reports
 `index.stale` in `/health` (and `409 stale_index` with both fingerprints), and

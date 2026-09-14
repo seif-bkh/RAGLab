@@ -22,6 +22,11 @@
 #   ./raglab/run_local.sh --keys             set/replace the keys in raglab/.env (hidden prompt,
 #                                            nothing in shell history) — no service is started
 #   ./raglab/run_local.sh --keys NVIDIA_API_KEY        just one key
+#   ./raglab/run_local.sh --provider-check   ask each provider directly what it says about the
+#                                            keys (no service, no index) and act on the answer
+#   ./raglab/run_local.sh --restart          stop a running RAGLab service, then start fresh —
+#                                            use it after a pull: the service is a PROCESS and
+#                                            pulling does not restart it
 #
 # Your shell does not have to be in the repo. This finds the clone wherever it
 # lives under ~ (guarding the empty result: a bare `cd ""` would silently stay
@@ -48,6 +53,8 @@ HOST="127.0.0.1"
 START=1
 KEEP=0
 KEYS=0
+PROVIDER_CHECK=0
+RESTART=0
 FRONT_ARGS=()
 
 while [ $# -gt 0 ]; do
@@ -57,6 +64,8 @@ while [ $# -gt 0 ]; do
         --no-start) START=0; shift ;;
         --keep) KEEP=1; shift ;;
         --keys) KEYS=1; shift ;;
+        --provider-check) PROVIDER_CHECK=1; shift ;;
+        --restart) RESTART=1; shift ;;
         -h|--help) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 0 ;;
         *) FRONT_ARGS+=("$1"); shift ;;
     esac
@@ -76,10 +85,37 @@ if [ -z "$PY" ] || [ ! -x "$PY" ]; then
     echo "[run] (or point RAGLAB_PYTHON at an existing interpreter)"
     exit 2
 fi
-# Key setup needs the interpreter, not the service — and must not start one.
+# Key setup and the provider check need the interpreter, not the service —
+# and neither may start one.
 if [ "$KEYS" = "1" ]; then
     "$PY" "$HERE/set_keys.py" "${FRONT_ARGS[@]}"
     exit $?
+fi
+
+if [ "$PROVIDER_CHECK" = "1" ]; then
+    "$PY" "$HERE/provider_check.py" "${FRONT_ARGS[@]}"
+    exit $?
+fi
+
+# --restart: the service is a process, so a pull does not reload it. Stop the
+# old one by PID (never `pkill -f <pattern>`: that can match this very shell).
+if [ "$RESTART" = "1" ]; then
+    mapfile -t OLD_PIDS < <(pgrep -f "uvicorn service:app" 2>/dev/null || true)
+    if [ "${#OLD_PIDS[@]}" -gt 0 ]; then
+        echo "[run] --restart: stopping ${#OLD_PIDS[@]} running service process(es): ${OLD_PIDS[*]}"
+        kill "${OLD_PIDS[@]}" 2>/dev/null || true
+        for _ in $(seq 1 40); do
+            pgrep -f "uvicorn service:app" >/dev/null 2>&1 || break
+            sleep 0.25
+        done
+        if pgrep -f "uvicorn service:app" >/dev/null 2>&1; then
+            echo "[run] they did not exit — stop them by PID and retry:  kill ${OLD_PIDS[*]}"
+            exit 2
+        fi
+        echo "[run] old service stopped"
+    else
+        echo "[run] --restart: no running service to stop"
+    fi
 fi
 
 BASE_URL="http://127.0.0.1:${PORT}"
@@ -136,6 +172,32 @@ else
     echo "[run] start it yourself:  cd $HERE && $PY -m uvicorn service:app --host 0.0.0.0 --port $PORT"
     exit 2
 fi
+
+# Which code is answering? A service started before your last `git pull` is
+# still the old code: it lacks the provider diagnostics, so a provider failure
+# reaches the front as "no detail at all" and reads like a capacity problem.
+LOCAL_REV=""
+command -v git >/dev/null 2>&1 && LOCAL_REV="$(git -C "$HERE/.." rev-parse --short HEAD 2>/dev/null || true)"
+"$PY" - "$BASE_URL" "$LOCAL_REV" <<'PYSTAMP'
+import json, sys, urllib.request
+base, local = sys.argv[1], sys.argv[2]
+try:
+    with urllib.request.urlopen(base + "/health", timeout=5) as resp:
+        health = json.loads(resp.read().decode())
+except Exception:
+    raise SystemExit(0)
+revision, started = health.get("revision"), health.get("started_at")
+if not started:
+    print("[run] WARNING: that service predates the revision stamp — it is running OLDER code")
+    print("[run]          than this checkout, so its answers/diagnostics are the old ones.")
+    print("[run]          restart it:  ./raglab/run_local.sh --restart")
+elif local and revision and revision != local:
+    print(f"[run] WARNING: the service runs revision {revision}, this checkout is {local} —")
+    print("[run]          the service did not follow your pull. Restart it:  "
+          "./raglab/run_local.sh --restart")
+else:
+    print(f"[run] code       : revision {revision or '(no git)'} · started {started}")
+PYSTAMP
 
 # No front flag: open the console menu (same 13 menus as app.py, over REST).
 "$PY" "$HERE/local_front.py" --base-url "$BASE_URL" "${FRONT_ARGS[@]}"

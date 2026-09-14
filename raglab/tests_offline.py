@@ -1053,6 +1053,42 @@ check("app: env tests never touched the real raglab/.env",
       _real_env_after == _real_env_before,
       "the real .env changed during the env-writer tests")
 
+# --- key redaction + provider_check (pure logic, stubbed transport) ---------
+# Provider errors get echoed to humans and into logs; a Gemini error can carry
+# the key in a URL. Both Google shapes must be redacted, like nvapi-/sk-.
+import os as _os_mod  # noqa: E402
+from nvidia_api import safe_error as _safe_error  # noqa: E402
+_google_key = "AQ.Ab8RN6TESTfake0123456789ABCDEFGHIJKLMNOPQRSTUV"
+_os_mod.environ["GOOGLE_API_KEY"] = _google_key
+check("redaction: an AQ.-style Google key never survives safe_error",
+      _google_key not in _safe_error(f"API key not valid: .../generateContent?key={_google_key}"),
+      "a provider error can echo the key in a URL")
+check("redaction: an AIza-style Google key never survives safe_error",
+      "AIzaSyD-abcdefghijklmnopqrstuvwx" not in
+      _safe_error("bad key AIzaSyD-abcdefghijklmnopqrstuvwx"))
+_os_mod.environ.pop("GOOGLE_API_KEY", None)
+
+import provider_check as provider_mod  # noqa: E402
+_rows = [
+    provider_mod.probe("google (models list)", "https://x/models", {},
+                       fetch=lambda *a, **k: {"code": 400, "text": json.dumps({"error": {
+                           "message": "User location is not supported for the API use."}}),
+                           "error": ""}),
+    provider_mod.probe("nvidia (models list)", "https://x/models", {},
+                       fetch=lambda *a, **k: {"code": 0, "text": "",
+                                              "error": "urlopen error TLS handshake failed"}),
+]
+check("provider-check: an HTTP error is a row, not an exception",
+      _rows[0]["code"] == 400 and not _rows[0]["ok"]
+      and "location is not supported" in _rows[0]["message"])
+check("provider-check: a country block turns into 'switch provider', not 'fix the key'",
+      any("blocked from this country" in line for line in provider_mod.interpret(_rows[0])))
+check("provider-check: a call that never connected is named as network, not quota",
+      any("never reached the provider" in line and "not a key problem" in line
+          for line in provider_mod.interpret(_rows[1])))
+check("provider-check: JSON provider errors are reduced to the human line",
+      provider_mod.first_line('{"error": {"message": "Quota exceeded"}}') == "Quota exceeded")
+
 # --- set_keys.py: the hidden-prompt key writer (pure logic, stubbed writer) -
 # `./raglab/run_local.sh --keys` must refuse a bad paste rather than store it:
 # a key with a stray space fails much later, as an opaque 401 from the

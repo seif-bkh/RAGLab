@@ -56,11 +56,17 @@ def safe_error(value):
     """Provider errors can echo requests: redact key-shaped strings defensively."""
     text = str(value)
     for name in ('NVIDIA_API_KEY', 'XKIRO_API_KEY', 'XKIRO_API_KEY_JINKO',
-                 'KIRA_API_KEY', 'HARNESS_API_KEY'):
+                 'KIRA_API_KEY', 'HARNESS_API_KEY',
+                 'GOOGLE_API_KEY', 'GEMINI_API_KEY'):
         key = os.environ.get(name, '').strip()
         if key:
             text = text.replace(key, '[REDACTED]')
-    return re.sub(r"(?:nvapi-|sk-)[A-Za-z0-9_-]{12,}", "[REDACTED]", text)[:600]
+    text = re.sub(r"(?:nvapi-|sk-)[A-Za-z0-9_-]{12,}", "[REDACTED]", text)
+    # Google's shapes were missing: a Gemini error can echo the key in a URL,
+    # and `AIza…`/`AQ.…` matched neither of the patterns above.
+    text = re.sub(r"AIza[A-Za-z0-9_-]{20,}", "[REDACTED]", text)
+    text = re.sub(r"AQ\.[A-Za-z0-9_.-]{20,}", "[REDACTED]", text)
+    return text[:600]
 
 
 def retry_after_seconds(value):

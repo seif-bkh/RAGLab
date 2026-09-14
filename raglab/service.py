@@ -92,6 +92,28 @@ from nvidia_api import ProviderCallError, safe_error
 SERVICE_VERSION = "1.0.0"
 
 
+def _code_revision() -> str:
+    """Short git SHA of the code THIS PROCESS loaded ("" when there is no repo).
+
+    The front and the service are two processes: `git pull` does not restart the
+    service. Without a stamp, an old service answering a new front is
+    indistinguishable from an "unknown" answer — which is exactly how a
+    provider failure with no diagnostics got reported as a capacity problem.
+    """
+    try:
+        import subprocess
+        root = Path(__file__).resolve().parent.parent
+        done = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True, timeout=5)
+        return done.stdout.strip() if done.returncode == 0 else ""
+    except Exception:                                            # noqa: BLE001
+        return ""
+
+
+CODE_REVISION = _code_revision()
+SERVICE_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 # ---------------------------------------------------------------------------
 # Errors that carry an HTTP status
 # ---------------------------------------------------------------------------
@@ -474,6 +496,9 @@ def create_app(profile: dict | None = None, *, generator=None,
             for env_name in envs:
                 keys[env_name] = "set" if profiles.first_set_env((env_name,))[1] else "missing"
         return {"status": "ok", "version": SERVICE_VERSION,
+                # Identity of the running code, not just its version string: a
+                # service older than the checkout must be visible as such.
+                "revision": CODE_REVISION, "started_at": SERVICE_STARTED_AT,
                 "profile": {
                     "embedding": runtime.profile["embedding"],
                     "answer": runtime.profile["answer"],

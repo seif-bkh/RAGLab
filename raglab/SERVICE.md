@@ -108,6 +108,19 @@ Semantics worth knowing before you integrate:
   refusals: `409 answer_refused` / `409 retrieval_refused` /
   `409 evaluation_refused`, `502 provider_error`, `503 missing_api_key` (says
   which env var), `422` request validation.
+  A payload with `status=error` and NO `error`/`http_status` can only come from a
+  service older than this contract; the front names it as such (and points at
+  `raglab/logs/service_<port>.log`) instead of guessing "capacity, retry".
+  For a failure that never reached the provider (DNS/TLS/timeout) it says so:
+  retrying cannot fix a blocked network, and `./raglab/run_local.sh
+  --provider-check` asks each provider directly, with no service involved.
+* **`/health` says which code is answering.** `revision` (git short SHA of the
+  process, `""` outside a repo) and `started_at`. The front and the service are
+  separate processes, so `git pull` does not restart anything: without the
+  stamp, an old service answering a new front is indistinguishable from a
+  provider that "sent no detail" — which is how a network failure was read as a
+  capacity problem. `run_local.sh` warns when the service on the port is not the
+  checkout's revision and switches to it with `--restart`.
 * **A provider failure is diagnosed, not just reported.** `status=error` with
   `reason=provider_error` (HTTP 200 — the request was valid, the provider
   refused) carries `http_status` and `retry_after_s` when the provider gave

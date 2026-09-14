@@ -542,6 +542,17 @@ class AnswerProviderFailureTest(unittest.TestCase):
         # ...and the raw rejected reply is opt-in.
         self.assertNotIn("raw_preview", body)
 
+    def test_health_identifies_the_running_code(self):
+        # The front and the service are separate processes: after a pull, the
+        # service is still the old code unless it was restarted. /health has to
+        # say which revision answered, so the mismatch is visible instead of
+        # silently producing old-style responses.
+        health = self.client.get("/health").json()
+        self.assertIn("revision", health)
+        self.assertIn("started_at", health)
+        import service
+        self.assertEqual(health["revision"], service.CODE_REVISION)
+
     def test_the_next_free_model_answers_when_the_selected_one_is_unusable(self):
         def fake_call(model, key, messages, max_tokens):
             if model == "gemini-2.5-flash-lite":
@@ -565,6 +576,48 @@ class AnswerProviderFailureTest(unittest.TestCase):
         self.assertEqual(body["model"], "gemini-2.5-flash-lite")        # still the selected one
         self.assertEqual(body["served_model"], "gemini-3.1-flash-lite")  # what actually answered
         self.assertIn("dinars", body["answer"])
+
+    def test_a_network_failure_is_reported_as_network_not_capacity(self):
+        # The exact shape of the user's report: the call dies before the provider
+        # answers (TLS/DNS), so there is a message but NO HTTP status. The front
+        # must not call that "capacity, retry" — retrying reproduces it forever.
+        with patch("llm_smoke.google_candidates", return_value=["gemini-2.5-flash-lite"]), \
+             patch("llm_smoke.google_call", side_effect=self._fail_with(
+                 "google call error: <urlopen error TLS/SSL connection has been closed (EOF)>",
+                 None)):
+            body = self.client.post("/answer", json={"question": "Can I buy a computer?"}).json()
+        self.assertEqual(body["status"], "error", body)
+        self.assertEqual(body["reason"], "provider_error")
+        self.assertIsNone(body["http_status"])
+        self.assertIn("urlopen error", body["error"])
+        import local_front
+        hint = " ".join(local_front.provider_hint(body))
+        self.assertIn("never reached the provider", hint)
+        self.assertNotIn("succeed on a retry", hint)
+        self.assertFalse(local_front.transient(body))      # so no retry is offered
+        # ...and a 5xx from the provider IS worth a retry, same client.
+        self.assertTrue(local_front.transient({"http_status": 503, "error": "overloaded"}))
+        self.assertTrue(local_front.transient({"http_status": 429, "error": "quota"}))
+
+    def test_an_old_service_payload_is_named_as_such_not_guessed(self):
+        # A pre-diagnostics service sends status=error with no error/http_status.
+        # The front cannot diagnose that, and must say so instead of inventing
+        # "capacity" (what the user read three times in a row).
+        import local_front
+        hint = " ".join(local_front.provider_hint(
+            {"status": "error", "reason": "provider_error", "model": "gemini-2.5-flash-lite",
+             "retrieved": 20, "cached": False}))
+        self.assertIn("older service process", hint)
+        self.assertIn("--provider-check", hint)
+        self.assertNotIn("succeed on a retry", hint)
+        # /health without the staleness field is the same story about the index.
+        state, note = local_front.index_freshness({"collection": "c", "count": 419})
+        self.assertEqual(state, "unknown")
+        self.assertIn("older service process", note)
+        # ...while a service that DOES report `stale: null` means an old INDEX.
+        state, note = local_front.index_freshness({"collection": "c", "count": 419, "stale": None})
+        self.assertEqual(state, "unknown")
+        self.assertIn("no chunk fingerprint", note)
 
     def test_the_rejected_reply_is_available_as_an_opt_in_diagnostic(self):
         # A question of its own: validated replies are cached by (model, prompt,
