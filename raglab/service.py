@@ -463,10 +463,27 @@ def create_app(profile: dict | None = None, *, generator=None,
             if provider not in registry:
                 raise ServiceError(400, "unknown_provider", slot=slot, provider=provider,
                                    registered=sorted(registry))
-            previous = (update.get("model") or candidate[slot]["model"])
-            candidate[slot] = {"provider": provider,
-                               "model": profiles.consistent_model(
-                                   provider, registry[provider], candidate, previous)}
+            if update.get("model") is not None:
+                # An explicit model ID is honored verbatim. The registries list
+                # known-good models, they are NOT a whitelist — custom IDs are a
+                # feature (the console's "type another exact model ID"), so
+                # "correcting" them to the provider's default here would silently
+                # ignore the caller's choice. Sanity only: one token, no spaces.
+                model = str(update["model"]).strip()
+                if not model or re.search(r"\s", model):
+                    raise ServiceError(400, "bad_model", slot=slot,
+                                       model=update.get("model"),
+                                       hint="a model ID is one token with no spaces")
+            else:
+                # Provider-only switch: preselect — keep the current model only
+                # if the NEW provider offers it; never carry another provider's
+                # model across a switch (a kira slot must not keep an xKiro SKU).
+                if provider == candidate[slot]["provider"]:
+                    model = candidate[slot]["model"]      # same provider: no-op
+                else:
+                    model = profiles.consistent_model(
+                        provider, registry[provider], candidate, candidate[slot]["model"])
+            candidate[slot] = {"provider": provider, "model": model}
             if slot == "answer" and provider == "xkiro" and \
                     candidate[slot]["model"] != profiles.SUPPORTED_ANSWER["model"]:
                 notes.append("non-pinned xKiro SKUs are EXPERIMENTAL here: no live "

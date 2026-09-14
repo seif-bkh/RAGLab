@@ -445,5 +445,47 @@ class ConsoleEndpointsTest(unittest.TestCase):
         self.client.post("/profile", json={"chunking": {"mode": "restructure"}})
 
 
+    def test_profile_switch_honors_custom_model_ids(self):
+        # A custom (unregistered) model ID must be applied verbatim — the bug
+        # this guards against: consistent_model silently swapped it for the
+        # provider's first registered model while still answering 200.
+        response = self.client.post("/profile", json={
+            "answer": {"provider": "kira", "model": "glm-custom-9"}})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["profile"]["answer"],
+                         {"provider": "kira", "model": "glm-custom-9"})
+        self.assertEqual(self.client.get("/profile").json()["profile"]["answer"],
+                         {"provider": "kira", "model": "glm-custom-9"})
+        # same for the embedding slot — and the collection name follows
+        emb = self.client.post("/profile", json={
+            "embedding": {"provider": "nvidia", "model": "custom-embed-x"}})
+        self.assertEqual(emb.status_code, 200, emb.text)
+        self.assertEqual(emb.json()["profile"]["embedding"]["model"], "custom-embed-x")
+        self.assertIn("custom_embed_x", emb.json()["collection"])   # slugified
+        # a model ID with spaces is rejected, not silently corrected
+        bad = self.client.post("/profile", json={
+            "answer": {"provider": "kira", "model": "two tokens"}})
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.json()["detail"]["reason"], "bad_model")
+        # provider-only switch to the SAME provider keeps the custom model
+        same = self.client.post("/profile", json={"answer": {"provider": "kira"}})
+        self.assertEqual(same.status_code, 200)
+        self.assertEqual(same.json()["profile"]["answer"]["model"], "glm-custom-9")
+        # provider-only switch to ANOTHER provider preselects its first
+        # registered model — it never carries the custom ID across providers
+        other = self.client.post("/profile", json={"answer": {"provider": "nvidia"}})
+        self.assertEqual(other.status_code, 200)
+        self.assertEqual(other.json()["profile"]["answer"]["provider"], "nvidia")
+        self.assertIn(other.json()["profile"]["answer"]["model"],
+                      [m["id"] for m in profiles.ANSWER_PROVIDERS["nvidia"]["models"]])
+        # restore the class profile for any test that runs after this one
+        for payload in ({"answer": {"provider": "xkiro",
+                                    "model": "qwen/qwen3.8-max:free"}},
+                        {"embedding": {"provider": "nvidia",
+                                       "model": "nvidia/nemotron-3-embed-1b"}}):
+            back = self.client.post("/profile", json=payload)
+            self.assertEqual(back.status_code, 200, back.text)
+
+
 if __name__ == "__main__":
     unittest.main()
