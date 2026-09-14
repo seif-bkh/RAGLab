@@ -199,10 +199,18 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 34582141711 on HEAD `f73c2bd` (offline suite: 199 unittests
-  — 180 + 19 service, incl. the local_front-over-real-HTTP case and the new
-  ConsoleEndpointsTest — + 89 checks
+- **CI green**: run 34850306415 on HEAD `eb32c74` (offline suite: 200 unittests
+  — 180 + 20 service, incl. the local_front-over-real-HTTP case and
+  ConsoleEndpointsTest with the custom-model-ID regression — + 89 checks
   + inspect + pip check).
+- **Service profile-switch contract** (eb32c74): an explicit
+  `{provider, model}` in POST /profile is applied VERBATIM — custom model IDs
+  included (the registries are known-good suggestions, not a whitelist). The
+  bug it fixes: consistent_model silently swapped unregistered IDs for the
+  provider's first registered model while answering 200 — the front saved the
+  custom ID but the service never used it. Provider-only switches: same
+  provider = no-op; different provider = first registered model, never a
+  cross-provider carry-over. One token, no spaces → else 400 bad_model.
 - **BM25-only A/B** (45 evaluable of 50; k=20; full table in
   `raglab/results/harness50/comparison.md`, regenerable via `harness50.py`):
   - overall hit@1/3/5: size-220/40 `40/69/80` → restructure `47/78/89`
