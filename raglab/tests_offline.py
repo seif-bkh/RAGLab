@@ -1053,6 +1053,39 @@ check("app: env tests never touched the real raglab/.env",
       _real_env_after == _real_env_before,
       "the real .env changed during the env-writer tests")
 
+# --- set_keys.py: the hidden-prompt key writer (pure logic, stubbed writer) -
+# `./raglab/run_local.sh --keys` must refuse a bad paste rather than store it:
+# a key with a stray space fails much later, as an opaque 401 from the
+# provider. The writer is injected here, so this block cannot touch any .env.
+import set_keys as set_keys_mod  # noqa: E402
+_written_pairs, _key_lines = [], []
+
+
+def _stub_writer(name, value):
+    _written_pairs.append((name, value))
+
+
+_echo = _key_lines.append
+check("keys: a clean value is stored verbatim",
+      set_keys_mod.store("NVIDIA_API_KEY", "nvapi-abcdefghijklmnop", writer=_stub_writer, echo=_echo)
+      and _written_pairs == [("NVIDIA_API_KEY", "nvapi-abcdefghijklmnop")])
+check("keys: whitespace from a paste is stripped, not stored or rejected",
+      set_keys_mod.store("NVIDIA_API_KEY", "  nvapi-abcdefghijklmnop \n", writer=_stub_writer, echo=_echo)
+      and _written_pairs[-1] == ("NVIDIA_API_KEY", "nvapi-abcdefghijklmnop"))
+check("keys: the confirmation masks the value (never echoes a whole key)",
+      any("nvapi-ab…" in line for line in _key_lines)
+      and not any("nvapi-abcdefghijklmnop" in line for line in _key_lines))
+check("keys: an inner space is refused, not stored",
+      not set_keys_mod.store("NVIDIA_API_KEY", "nvapi-abcd efgh", writer=_stub_writer, echo=_echo)
+      and len(_written_pairs) == 2)
+check("keys: a placeholder is refused",
+      not set_keys_mod.store("NVIDIA_API_KEY", "your-key-here", writer=_stub_writer, echo=_echo))
+check("keys: smart quotes, invisible characters and non-ASCII are refused",
+      all(set_keys_mod.paste_problem(value)
+          for value in ('"nvapi-abcdefghij"', "nvapi\u2013abcdefghij", "nvapi-abc\u200bdef")))
+check("keys: all three key names are known",
+      set(set_keys_mod.KEY_NAMES) == {"NVIDIA_API_KEY", "XKIRO_API_KEY", "GOOGLE_API_KEY"})
+
 # --- app.py: locate_text (the quote-vs-chunk-boundary diagnostic) -----------
 # Same normalization as the citation gate (answer.normalized_quote), so 'full'
 # is exactly "can a verbatim quote of this text pass from that chunk".

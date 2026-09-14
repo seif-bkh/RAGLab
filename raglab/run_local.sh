@@ -19,6 +19,15 @@
 #   ./raglab/run_local.sh --keep             leave the service running when the front exits
 #   ./raglab/run_local.sh --port 8100        another port (default 8000, or RAGLAB_PORT)
 #   ./raglab/run_local.sh --host 0.0.0.0     bind address for the service (default 127.0.0.1)
+#   ./raglab/run_local.sh --keys             set/replace the keys in raglab/.env (hidden prompt,
+#                                            nothing in shell history) — no service is started
+#   ./raglab/run_local.sh --keys NVIDIA_API_KEY        just one key
+#
+# Your shell does not have to be in the repo. This finds the clone wherever it
+# lives under ~ (guarding the empty result: a bare `cd ""` would silently stay
+# put) and then runs the command of your choice:
+#   R="$(git rev-parse --show-toplevel 2>/dev/null || find ~ -maxdepth 5 -type d -name .git -ipath '*raglab*' -printf '%h\n' 2>/dev/null | head -1)";
+#   [ -n "$R" ] && cd "$R" && ./raglab/run_local.sh --keys
 #
 # RAGLAB_PYTHON=/path/to/python overrides the interpreter (a venv somewhere
 # else, or a CI run where deps live in the system python).
@@ -38,6 +47,7 @@ PORT="${RAGLAB_PORT:-8000}"
 HOST="127.0.0.1"
 START=1
 KEEP=0
+KEYS=0
 FRONT_ARGS=()
 
 while [ $# -gt 0 ]; do
@@ -46,7 +56,8 @@ while [ $# -gt 0 ]; do
         --host) HOST="${2:?--host needs an address}"; shift 2 ;;
         --no-start) START=0; shift ;;
         --keep) KEEP=1; shift ;;
-        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+        --keys) KEYS=1; shift ;;
+        -h|--help) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 0 ;;
         *) FRONT_ARGS+=("$1"); shift ;;
     esac
 done
@@ -65,6 +76,12 @@ if [ -z "$PY" ] || [ ! -x "$PY" ]; then
     echo "[run] (or point RAGLAB_PYTHON at an existing interpreter)"
     exit 2
 fi
+# Key setup needs the interpreter, not the service — and must not start one.
+if [ "$KEYS" = "1" ]; then
+    "$PY" "$HERE/set_keys.py" "${FRONT_ARGS[@]}"
+    exit $?
+fi
+
 BASE_URL="http://127.0.0.1:${PORT}"
 
 health_ok() {

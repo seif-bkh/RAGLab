@@ -418,6 +418,12 @@ The user runs this locally and reports transcripts (`front chat>` = the service 
 (`249977c`) on 2026-09-14: clone → venv → `main.py inspect` → `run_tests.sh
 --offline` (EXIT=0) → `uvicorn service:app` → `local_front.py --status`.
 
+**Never hand the user a command that starts with a bare `cd RAGLab`** — their
+clone is wherever it is, and they ran one such command from `~` and hit
+`bash: cd: RAGLab/raglab: No such file or directory`. Prefix with the locator
+above (verified from `~`, from `/tmp`, from inside the repo and from a nested
+dir; also verified that the guard is needed: `cd ""` exits 0).
+
 **The user's standing request is ONE command**, so the shipped answer is
 `raglab/run_local.sh` (added 2026-09-14): it starts the service, waits for
 /health, runs the requested front action, stops the service again (or reuses
@@ -429,10 +435,18 @@ two default venv locations. Verified by hand on a fresh clone in 8 states
 two-terminal sequence below remains the fallback and the debugging path.
 
 ```bash
-# --- 0. the one command (after the clone + setup below) -------------------
+# --- 0. find the clone first (the user's shell is not always in the repo) ---
+# `cd ""` SUCCEEDS in bash and silently stays put, so an empty locator must be
+# guarded with [ -n "$R" ]; a bare `cd "$(find …)"` would not fail loudly.
+R="$(git rev-parse --show-toplevel 2>/dev/null || find ~ -maxdepth 5 -type d -name .git -ipath '*raglab*' -printf '%h\n' 2>/dev/null | head -1)";
+[ -n "$R" ] && cd "$R" && ./raglab/run_local.sh --status
+
+# --- 0b. the one command (after the clone + setup below) -------------------
 ./raglab/run_local.sh --status          # doctor; also: --ingest [--reset], --ask "…",
                                         # --search "…", --interactive, --smoke, --keep,
-                                        # --port N, --no-start, and any local_front flag
+                                        # --port N, --no-start, --keys, and any local_front flag
+./raglab/run_local.sh --keys            # hidden prompt, writes raglab/.env in place, no service
+./raglab/run_local.sh --keys NVIDIA_API_KEY        # one key only; Enter skips, Ctrl-D stops
 
 # --- 1. get the code (first time) -----------------------------------------
 git clone -b arena/01a09f30-raglab https://github.com/seif-bkh/RAGLab.git RAGLab

@@ -810,8 +810,8 @@ class RunLocalScript(unittest.TestCase):
         done = subprocess.run(["bash", str(self.SCRIPT), "--help"],
                               capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
-        for flag in ("--status", "--ingest", "--ask", "--interactive", "--smoke",
-                     "--no-start", "--keep", "--port", "--host"):
+        for flag in ("--status", "--keys", "--ingest", "--ask", "--interactive",
+                     "--smoke", "--no-start", "--keep", "--port", "--host"):
             self.assertIn(flag, done.stdout, f"{flag} vanished from the usage text")
 
     def test_no_start_without_a_service_exits_2_with_instructions(self):
