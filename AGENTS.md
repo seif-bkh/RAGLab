@@ -229,6 +229,13 @@ Channels that WORK (use in this order):
 - **Every reply to the user ends with a "run it locally" block** (standing
   instruction, 2026-09-14): pull → install → run → verify, copy-pasteable on Linux,
   reflecting what actually changed in that reply. Canonical commands: §9.
+- **Real keys live only in `raglab/.env`** (2026-09-14: the user supplied
+  NVIDIA/xKiro/Google values; written with `profiles.write_env_assignment`, mode
+  600, gitignored — `git status` must stay silent about it). Never print a value
+  (mask to 8, the repo rule), never commit one, never paste one into an issue or
+  log. The offline gate was re-run WITH this real .env present (214 tests EXIT=0)
+  and `sha256sum` proved the env-writer tests left it byte-identical — that guard
+  is now exercised for real, keep it that way.
 
 ## 6. Corpus facts (do not re-diagnose)
 
