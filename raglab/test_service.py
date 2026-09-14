@@ -445,5 +445,216 @@ class ConsoleEndpointsTest(unittest.TestCase):
         self.client.post("/profile", json={"chunking": {"mode": "restructure"}})
 
 
+class StaleIndexTest(unittest.TestCase):
+    """The stale-index contract, end to end — the reported failure.
+
+    Reproduces it exactly: an index built at one chunk size, a profile that now
+    asks for another (the front's settings menu, the console, or
+    RAGLAB_CHUNK_SIZE_TOKENS at boot), then a question. Before the fix the user
+    met a raw 409 answer_refused containing a fingerprint diff and a command
+    that does not exist ("raglab ingest --reset"), with nothing in /health or
+    the menu warning them first. The contract under test:
+
+      * /health.index.stale is false for a matching index and true after the
+        profile changes — the client can warn BEFORE asking;
+      * /search, /answer and /evaluate answer 409 reason="stale_index" with
+        both fingerprints and the rebuild command, never a live result computed
+        over the wrong chunks;
+      * local_front's helpers turn that into plain words and the right command;
+      * a rebuild with the CURRENT settings makes it fresh again.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        (cls.tmp / "note.md").write_text(CORPUS, encoding="utf-8")
+        cls.profile = _service_profile(cls.tmp)          # chunking 60/10
+        cls.overrides = {
+            "CHROMA_DIR": cls.tmp / "chroma",
+            "EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+            "NVIDIA_EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+            "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
+            "RESULTS_DIR": cls.tmp,
+        }
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+        cls.client = cls._app(cls.profile)
+        cls._wait(cls.client.post("/ingest"))
+        # The reported situation, as a second service on the same chroma_db but
+        # asking for another chunk size (RAGLAB_CHUNK_SIZE_TOKENS=120, or the
+        # front's settings menu on an index someone else built at 60).
+        other = _service_profile(cls.tmp)
+        other["chunking"] = {"mode": "size", "size": 120, "overlap": 10}
+        cls.stale_client = cls._app(other)
+
+    @classmethod
+    def _app(cls, profile):
+        return TestClient(service.create_app(
+            profile, generator=object(), allow_profile_switch=True,
+            config_overrides=cls.overrides))
+
+    @classmethod
+    def _wait(cls, accepted, client=None):
+        client = client or cls.client
+        assert accepted.status_code == 200, accepted.text
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status = client.get("/ingest/status").json()
+            if status["state"] != "running":
+                return status
+            time.sleep(0.1)
+        raise TimeoutError(status)
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.modules.pop("sentence_transformers", None)
+
+    def test_health_stale_flag_flips_with_the_profile_and_a_rebuild_fixes_it(self):
+        fresh = self.client.get("/health").json()["index"]
+        self.assertIs(fresh["stale"], False, fresh)
+        self.assertEqual(fresh["chunk_fp"], fresh["current_chunk_fp"])
+        self.assertNotIn("rebuild", fresh)
+
+        # The profile-switch path (the front's settings menu, menu 12).
+        switched = self.client.post("/profile", json={"chunking": {"size": 120}})
+        self.assertEqual(switched.status_code, 200, switched.text)
+        stale = self.client.get("/health").json()["index"]
+        self.assertIs(stale["stale"], True, stale)
+        self.assertNotEqual(stale["chunk_fp"], stale["current_chunk_fp"])
+        self.assertIn("ingest", stale["rebuild"])
+        refused = self.client.post("/search", json={"question": QUESTION})
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertEqual(refused.json()["detail"]["reason"], "stale_index")
+        self.client.post("/profile", json={"chunking": {"size": 60}})   # back
+        self.assertIs(self.client.get("/health").json()["index"]["stale"], False)
+
+        # The second service asking for 120 over the 60-sized index: the home
+        # of the reported 409 (there the raw error was the whole experience).
+        stale = self.stale_client.get("/health").json()["index"]
+        self.assertIs(stale["stale"], True, stale)
+
+        # The refusal carries the same facts, machine-readable — and the FULL
+        # fingerprints, where /health only shows the prefixes.
+        for path in ("/search", "/answer"):
+            response = self.stale_client.post(path, json={"question": QUESTION})
+            self.assertEqual(response.status_code, 409, response.text)
+            detail = response.json()["detail"]
+            self.assertEqual(detail["reason"], "stale_index")
+            self.assertIn("s60", detail["stored"])        # index built at size 60
+            self.assertIn("s120", detail["current"])      # profile now asks for 120
+            self.assertTrue(stale["chunk_fp"].startswith(detail["stored"][:8]))
+            self.assertIn("ingest", detail["rebuild"])
+            self.assertIn("STALE", detail["error"])       # humans still get the story
+        # An evaluation over stale chunks is a wrong number, not a result.
+        evaluated = self.stale_client.post("/evaluate", json={"questions": "questions_50.json"})
+        self.assertEqual(evaluated.status_code, 409, evaluated.text)
+        self.assertEqual(evaluated.json()["detail"]["reason"], "stale_index")
+
+        # local_front turns that into the front's own next step.
+        import local_front
+        state, note = local_front.index_freshness(stale)
+        self.assertEqual(state, "stale")
+        self.assertIn("local_front.py --ingest --reset", note)
+        lines, offer = local_front.failure_lines(
+            409, {"detail": {"reason": "stale_index", "stored": "old", "current": "new",
+                             "rebuild": "POST /ingest?reset=true"}},
+            rebuild_offer=True)
+        self.assertTrue(offer)
+        self.assertTrue(any("stored fingerprint" in line for line in lines))
+        self.assertTrue(any("POST /ingest?reset=true" in line for line in lines))
+
+        # Rebuilding under the CURRENT settings is the fix, and /health says so
+        # — on both services, since they read the one chroma_db.
+        self._wait(self.stale_client.post("/ingest?reset=true"), client=self.stale_client)
+        healed = self.stale_client.get("/health").json()["index"]
+        self.assertIs(healed["stale"], False, healed)
+        self.assertNotIn("rebuild", healed)
+        self.assertIs(self.client.get("/health").json()["index"]["stale"], True)  # that one asks 60
+
+
+class LocalFrontStaleIndexOverHttp(unittest.TestCase):
+    """local_front's smoke suite against a REAL server in the STALE state.
+
+    The suite is state-aware, and stale is one of the states: with an index
+    built at 60 and a profile asking for 120 it must expect the two 409
+    stale_index refusals (with both fingerprints and the rebuild) and make no
+    live answer call at all — otherwise the failure that started this arrives
+    as "POST /search returns ranked chunks: FAIL", which is exactly the
+    unhelpful reading the front used to give.
+    """
+
+    def test_smoke_suite_over_real_http(self):
+        import threading
+        import local_front
+        try:
+            import uvicorn
+        except ImportError:  # pragma: no cover
+            self.skipTest("uvicorn not installed")
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "note.md").write_text(CORPUS, encoding="utf-8")
+        profile = _service_profile(tmp)
+        overrides = {"CHROMA_DIR": tmp / "chroma",
+                     "EMBEDDING_CACHE_PATH": tmp / "emb.json",
+                     "NVIDIA_EMBEDDING_CACHE_PATH": tmp / "emb.json",
+                     "ANSWER_CACHE_PATH": tmp / "answers.json", "RESULTS_DIR": tmp}
+        saved_modules = sys.modules.get("sentence_transformers")
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+        # A key that exists only so the suite's key round-trip is SKIPPED: that
+        # round-trip drops the cached generator by design (a new key must
+        # invalidate clients built with the old one), and this app's generator
+        # is the injected stub.
+        saved_key = os.environ.get("KIRA_API_KEY")
+        os.environ["KIRA_API_KEY"] = "kira-stale-suite-1234567890"
+        server = None
+        thread = None
+        try:
+            # The index is built by a service asking for size 60 — the other
+            # deployment/console that owns chroma_db (same as the reported case).
+            builder = TestClient(service.create_app(
+                profile, generator=object(), allow_profile_switch=False,
+                config_overrides=overrides))
+            accepted = builder.post("/ingest").json()
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                if builder.get("/ingest/status").json()["state"] != "running":
+                    break
+                time.sleep(0.1)
+            # The service under test asks for size 120 over that index: exactly
+            # the state the user's chat was in.
+            stale_profile = _service_profile(tmp)
+            stale_profile["chunking"] = {"mode": "size", "size": 120, "overlap": 10}
+            server = uvicorn.Server(uvicorn.Config(
+                service.create_app(stale_profile, generator=object(),
+                                   allow_profile_switch=False,
+                                   config_overrides=overrides),
+                host="127.0.0.1", port=0, log_level="warning"))
+            thread = threading.Thread(target=server.run, daemon=True)
+            thread.start()
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and not server.started:
+                time.sleep(0.05)
+            self.assertTrue(server.started, "uvicorn did not start")
+            port = server.servers[0].sockets[0].getsockname()[1]
+            api = local_front.Api(f"http://127.0.0.1:{port}")
+            self.assertTrue(api.get("/health")[1]["index"]["stale"])
+            passed, failed = local_front.run_suite(api, spend=True)
+            self.assertEqual(failed, 0, f"{failed} smoke check(s) failed")
+            self.assertGreaterEqual(passed, 21)
+        finally:
+            if server is not None:
+                server.should_exit = True
+            if thread is not None:
+                thread.join(timeout=10)
+            if saved_key is None:
+                os.environ.pop("KIRA_API_KEY", None)
+            else:
+                os.environ["KIRA_API_KEY"] = saved_key
+            if saved_modules is None:
+                sys.modules.pop("sentence_transformers", None)
+            else:
+                sys.modules["sentence_transformers"] = saved_modules
+
+
 if __name__ == "__main__":
     unittest.main()

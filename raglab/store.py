@@ -56,7 +56,38 @@ def chunk_fp(cfg) -> str:
         mode=str(getattr(cfg, 'CHUNKING_MODE', 'restructure')).strip().lower())
 
 
-def ensure_fresh_chunks(collection, cfg) -> None:
+# The fix sentence every staleness refusal ends with. It must name a command
+# that EXISTS in this repo: main.py is the CLI (`prog="main.py"`), so the old
+# "raglab ingest --reset" hint sent users to a command no entry point has. Each
+# surface that can do better appends its own line (chat.py points at chat.sh,
+# the console and the front offer their ingest menu) — keep this one the
+# generic CLI path.
+REBUILD_HINT = "python main.py ingest --reset"
+
+
+class StaleCollectionError(RuntimeError):
+    """The index holds chunks built with DIFFERENT chunking inputs.
+
+    Subclasses RuntimeError so every existing `except RuntimeError` keeps
+    catching it (chat.py, app.py, retrieval.py, main.py all do) — but the two
+    fingerprints and the rebuild command travel as ATTRIBUTES, so a surface can
+    turn "refused" into "here is what happened and how to fix it": service.py
+    maps it to a 409 reason="stale_index", the front offers the rebuild, and no
+    caller has to parse the message text.
+    """
+
+    def __init__(self, stored: str, current: str, rebuild: str = REBUILD_HINT):
+        self.stored = stored
+        self.current = current
+        self.rebuild = rebuild
+        super().__init__(
+            "[store] collection is STALE — chunks were built with "
+            f"fingerprint '{stored}' but the current settings produce "
+            f"'{current}'. Chunk texts changed, so retrieval results would "
+            f"be wrong. Rebuild with:  {rebuild}")
+
+
+def ensure_fresh_chunks(collection, cfg, *, rebuild_hint: str | None = None) -> None:
     """Refuse retrieval/extension over a collection built with other settings.
 
     Chunks are immutable records: if the chunker version, size, overlap or
@@ -85,14 +116,10 @@ def ensure_fresh_chunks(collection, cfg) -> None:
     if not stored:
         print("[store] WARNING: collection carries no chunk fingerprint "
               "(built by an older RAGLab). Rebuild with "
-              "`raglab ingest --reset` to enable staleness checks.")
+              f"`{rebuild_hint or REBUILD_HINT}` to enable staleness checks.")
         return
     if stored != current:
-        raise RuntimeError(
-            "[store] collection is STALE — chunks were built with "
-            f"fingerprint '{stored}' but the current settings produce "
-            f"'{current}'. Chunk texts changed, so retrieval results would "
-            "be wrong. Rebuild with:  raglab ingest --reset")
+        raise StaleCollectionError(stored, current, rebuild=rebuild_hint or REBUILD_HINT)
 
 
 def get_collection(cfg, reset: bool = False):

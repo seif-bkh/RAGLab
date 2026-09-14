@@ -304,7 +304,12 @@ engineering decision:
 
 The chunk fingerprint (v4) now carries the mode, so a collection built from
 `size` chunks refuses to serve `restructure` settings (and vice versa) instead
-of mixing two segmentations. The pinned hard-harness chunking (640/40 in
+of mixing two segmentations. It also carries the size/overlap, so changing the
+chunk size invalidates the existing index on purpose — the refusal says which
+two fingerprints disagree and names the fix (`python main.py ingest --reset`;
+the console's ingest menu, `./raglab/chat.sh --reset --ingest`, the front's
+`--ingest --reset` and the service's `POST /ingest?reset=true` are the same
+rebuild). The pinned hard-harness chunking (640/40 in
 `benchmarks/hard_harness_plan.json`) is untouched.
 
 ```bash

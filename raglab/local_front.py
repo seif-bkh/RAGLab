@@ -20,9 +20,18 @@ then:
     python local_front.py --ask "What is Murabaha?"
     python local_front.py --search "ما هي المرابحة؟" -k 5
     python local_front.py --interactive   straight into the chat REPL
-    python local_front.py --smoke         endpoint smoke suite (state-aware)
+    python local_front.py --smoke         endpoint smoke suite (state-aware:
+                                          keyless / empty / stale / ready)
     python local_front.py --no-keycheck   skip the startup key questions
     python local_front.py --base-url http://localhost:8000
+
+Index freshness is a first-class state here, not a surprise at question time:
+/health reports whether the stored chunks were built with the same chunking
+inputs the active profile produces, so the menu banner and the chat prompt say
+STALE up front, and a refusal (reason="stale_index", with both fingerprints)
+offers the rebuild — `python local_front.py --ingest --reset` — and re-asks the
+same question. Fixing a stale index used to be a manual command in an error
+string; the raw "raglab ingest --reset" it named did not even exist.
 
 Where things live (mirror of app.py, split client/server):
   * provider/model selections -> the SERVICE profile (POST /profile), not a
@@ -125,6 +134,64 @@ def detail_of(body) -> str:
     if isinstance(body, dict) and isinstance(body.get("detail"), dict):
         return json.dumps(body["detail"], ensure_ascii=False)
     return str(body)[:400]
+
+
+# ---------------------------------------------------------------------------
+# Index freshness — reading /health so a stale index is never a surprise
+# ---------------------------------------------------------------------------
+
+def index_freshness(index: dict) -> tuple[str, str]:
+    """(state, sentence) for /health's index block.
+
+    "stale" means the stored chunks were built with different chunking inputs
+    than the ACTIVE profile produces: every hit would come from the wrong
+    segmentation, so the service refuses to answer over it. The service reports
+    this in /health exactly so the front can say it BEFORE a question — instead
+    of the user meeting it as a raw 409 in the middle of a chat.
+
+    States: empty | stale | fresh | unknown (a collection built before
+    fingerprinting, where nothing can be compared).
+    """
+    count = index.get("count") or 0
+    if not count:
+        return "empty", "no index yet — build it:  python local_front.py --ingest"
+    stale = index.get("stale")
+    if stale is None:
+        return "unknown", (f"{count} chunk(s) indexed, but the collection carries no chunk "
+                           "fingerprint (built by an older RAGLab) — rebuild to enable "
+                           "the staleness check:  python local_front.py --ingest --reset")
+    if stale:
+        return "stale", (
+            f"{count} chunk(s) indexed, but they were built with fingerprint "
+            f"{index.get('chunk_fp') or '?'} while this profile now produces "
+            f"{index.get('current_chunk_fp') or '?'} — chunk texts changed, so retrieval "
+            f"would be wrong. Rebuild:  {index.get('rebuild') or 'python local_front.py --ingest --reset'}")
+    return "fresh", f"{count} chunk(s) indexed, fingerprint matches this profile"
+
+
+def failure_lines(status: int, body, *, rebuild_offer: bool = False) -> tuple[list[str], bool]:
+    """(lines to print, whether to offer a rebuild) for a refused request.
+
+    A stale index arrives as reason="stale_index" carrying both fingerprints
+    and the fix, so the front explains it in plain words and names the command
+    — echoing the service's JSON is what made a fingerprint mismatch look like a
+    crash while chatting.
+    """
+    reason = reason_of(body)
+    lines = [f"[front] HTTP {status}: {detail_of(body)}"]
+    detail = body.get("detail") if isinstance(body, dict) else None
+    detail = detail if isinstance(detail, dict) else {}
+    if reason == "stale_index":
+        lines.append("[front] this index was built with a different chunk size / overlap / "
+                     "mode than the active profile asks for, so its chunks are not the "
+                     "chunks this profile would retrieve.")
+        lines.append(f"[front] stored fingerprint:  {detail.get('stored')}")
+        lines.append(f"[front] current fingerprint: {detail.get('current')}")
+        lines.append(f"[front] fix it: {detail.get('rebuild') or 'python local_front.py --ingest --reset'}")
+        return lines, bool(rebuild_offer)
+    if reason == "empty_index":
+        lines.append("[front] the index is empty — build it:  python local_front.py --ingest")
+    return lines, False
 
 
 # ---------------------------------------------------------------------------
@@ -262,13 +329,19 @@ class Console:
     def banner(self) -> None:
         health = self.health()
         profile = health["profile"]
-        count = health["index"]["count"]
-        index = f"{count} chunk(s) indexed" if count else "no index yet"
+        state, explanation = index_freshness(health.get("index") or {})
+        index = "no index yet" if state == "empty" else f"{health['index']['count']} chunk(s) indexed"
         print("\n" + "=" * 78)
         print(f"RAGLab front — service {self.api.base_url}")
         print(f"               embeddings: {profile['embedding']['provider']}/{profile['embedding']['model']}")
         print(f"               answers:    {profile['answer']['provider']}/{profile['answer']['model']} | {index}")
         print(f"[{profile['pipeline']}]")
+        # A stale index is the one state where every answer would be wrong, so
+        # the menu says it up front instead of waiting for a question to fail.
+        if state == "stale":
+            print(f"[front] WARNING: {explanation}")
+        elif state == "unknown":
+            print(f"[front] note: {explanation}")
         print("=" * 78)
 
     def key_flow(self, slot: str, provider_row) -> None:
@@ -334,6 +407,8 @@ class Console:
         print(f"index       : {index['collection']} — {index['count']} chunk(s)"
               + (f" | tokenizer match: {index['tokenizer_match']}"
                  if index.get("tokenizer_match") is not None else ""))
+        state, explanation = index_freshness(index)
+        print(f"index state : {state.upper()} — {explanation}")
         print(f"ingest job  : {health['ingest']['state']}")
         print(f"switching   : {'enabled' if health.get('switching') else 'see /profile'}")
         print(f"pipeline    : {p['pipeline']}")
@@ -649,14 +724,18 @@ class Console:
         k = int(raw) if raw.isdigit() and 1 <= int(raw) <= 20 else default_k
         status, body = self.api.post("/search", payload={"question": question, "k": k})
         if status != 200:
-            print(f"[front] HTTP {status}: {detail_of(body)}")
+            lines, may_rebuild = failure_lines(status, body, rebuild_offer=True)
+            for line in lines:
+                print(line)
+            if may_rebuild and confirm("rebuild this index now (re-embeds every chunk)?"):
+                self.action_ingest(reset=True)
             return
         show_search(body)
 
     # -- 9 grounded answer / --ask -------------------------------------------------------
 
     def ask_once(self, question: str, *, k=None, show=False, query_lang=None,
-                 mode=None) -> int:
+                 mode=None, offer_rebuild=False) -> int:
         payload = {"question": question}
         if k:
             payload["k"] = k
@@ -668,22 +747,33 @@ class Console:
             payload["mode"] = mode
         status, body = self.api.post("/answer", payload=payload)
         if status != 200:
-            print(f"[front] HTTP {status}: {detail_of(body)}")
+            lines, may_rebuild = failure_lines(status, body, rebuild_offer=offer_rebuild)
+            for line in lines:
+                print(line)
+            # The one refusal the user can fix from here: rebuild, then ask the
+            # same question again — no re-typing, no raw JSON in the chat.
+            if may_rebuild and confirm("rebuild this index now (re-embeds every chunk), "
+                                       "then ask again?"):
+                if self.action_ingest(reset=True) == 0:
+                    return self.ask_once(question, k=k, show=show, query_lang=query_lang,
+                                         mode=mode, offer_rebuild=offer_rebuild)
             return 1
         show_answer(body)
         if body.get("reason") == "invalid_output":
             print("[front] the citation gate rejected the reply (the failed check is in "
                   "the model's raw preview above, server-side).")
             if confirm("ask the model again? (hosted models are not bit-deterministic)"):
-                return self.ask_once(question, k=k, show=show, query_lang=query_lang, mode=mode)
+                return self.ask_once(question, k=k, show=show, query_lang=query_lang,
+                                     mode=mode, offer_rebuild=offer_rebuild)
         if body.get("status") == "error" and confirm("provider error — ask again?"):
-            return self.ask_once(question, k=k, show=show, query_lang=query_lang, mode=mode)
+            return self.ask_once(question, k=k, show=show, query_lang=query_lang, mode=mode,
+                                 offer_rebuild=offer_rebuild)
         return 0 if body.get("validation_ok", True) else 2
 
     def action_answer(self) -> None:
         question = prompt("\nquestion (blank to cancel): ")
         if question:
-            self.ask_once(question)
+            self.ask_once(question, offer_rebuild=True)
 
     # -- 10 chat ---------------------------------------------------------------------------
 
@@ -698,6 +788,13 @@ class Console:
               "Ctrl-D or :quit to leave, :help for commands.")
         print(f"[front] answers: {profile['answer']['provider']}/{profile['answer']['model']} | "
               f"index: {health['index']['count']} chunk(s) | k={k} | mode={mode}")
+        state, explanation = index_freshness(health.get("index") or {})
+        print(f"[front] index state: {state.upper()} — {explanation}")
+        if state == "stale" and confirm("rebuild it before chatting (every chunk re-embeds, "
+                                        "cached ones are free)?"):
+            if self.action_ingest(reset=True) == 0:
+                health = self.health()
+                print(f"[front] index is fresh: {health['index']['count']} chunk(s)")
         while True:
             try:
                 line = input("\nfront chat> ").strip()
@@ -747,7 +844,8 @@ class Console:
                 print(json.dumps(health, ensure_ascii=False, indent=2))
                 continue
             try:
-                self.ask_once(line, k=k, show=show, query_lang=query_lang, mode=mode)
+                self.ask_once(line, k=k, show=show, query_lang=query_lang, mode=mode,
+                              offer_rebuild=True)
             except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
                 print(f"[front] request failed: {exc}")
 
@@ -1017,11 +1115,20 @@ def run_suite(api: Api, *, spend: bool = True) -> tuple[int, int]:
           and isinstance(health.get("index", {}).get("count"), int)
           and isinstance(health.get("keys"), dict))
     suite.check("GET /health reports profile, index and key presence", ok, f"status={status}")
+    index_state, index_note = ("unknown", "no /health")
     if ok:
         blob = json.dumps(health, ensure_ascii=False)
         suite.check("GET /health never echoes key values",
                     all(value in ("set", "missing") for value in health["keys"].values())
                     and "nvapi-" not in blob and "sk-" not in blob)
+        # Freshness is what tells a client to warn BEFORE asking a question;
+        # the field must exist (null is a legitimate "cannot tell").
+        suite.check("GET /health reports index freshness (stale true/false/null)",
+                    "stale" in health["index"]
+                    and health["index"]["stale"] in (True, False, None),
+                    f"stale={health['index'].get('stale')}")
+        index_state, index_note = index_freshness(health["index"])
+        suite.note(f"index state: {index_state.upper()} — {index_note}")
 
     status, models = api.get("/models")
     answer_rows = models.get("answer", []) if isinstance(models, dict) else []
@@ -1136,6 +1243,22 @@ def run_suite(api: Api, *, spend: bool = True) -> tuple[int, int]:
                     status == 409 and reason_of(body) == "empty_index")
         suite.note("keys are set but the index is empty; build it: "
                    "python local_front.py --ingest")
+    elif index_state == "stale":
+        # Stale is the state that used to look like a crash mid-chat: retrieval
+        # must refuse it with a machine-readable reason, both fingerprints and
+        # the fix — and never with a live answer over the wrong chunks.
+        for path in ("/search", "/answer"):
+            status, body = api.post(path, payload=question)
+            detail = body.get("detail") if isinstance(body, dict) else None
+            detail = detail if isinstance(detail, dict) else {}
+            suite.check(f"POST {path} reports a stale index (409 stale_index)",
+                        status == 409 and reason_of(body) == "stale_index",
+                        f"status={status} reason={reason_of(body)}")
+            suite.check(f"POST {path} names both fingerprints and the rebuild",
+                        bool(detail.get("stored") and detail.get("current")
+                             and detail.get("rebuild")))
+        suite.note("the index is STALE (chunk size/overlap/mode changed since ingest); "
+                   "rebuild it: python local_front.py --ingest --reset")
     else:
         if not spend:
             suite.note("index ready — live /search and /answer skipped (--no-spend)")
@@ -1229,6 +1352,7 @@ def main(argv=None) -> int:
         if args.ingest:
             return console.action_ingest(reset=args.reset)
         if args.ask:
+            # One-shot: explain a refusal, but never prompt (scripts call this).
             return console.ask_once(args.ask, k=args.k, show=args.show_context,
                                     mode=args.mode)
         if args.search:
@@ -1236,7 +1360,8 @@ def main(argv=None) -> int:
                 "question": args.search, "k": args.k, "mode": args.mode,
                 "lang_filter": args.lang_filter})
             if status != 200:
-                print(f"[front] HTTP {status}: {detail_of(body)}")
+                for line in failure_lines(status, body)[0]:
+                    print(line)
                 return 1
             show_search(body)
             return 0

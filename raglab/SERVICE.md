@@ -72,7 +72,7 @@ docker compose up --build            # http://localhost:8000/docs
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/health` | liveness, active profile, index count + fingerprint/tokenizer match, which keys are set (presence only, never values) |
+| GET | `/health` | liveness, active profile, index count + fingerprint/tokenizer match + **`index.stale`** (true when the stored chunks were built with other chunking inputs than the profile produces, with both fingerprints and `index.rebuild`), which keys are set (presence only, never values) |
 | GET | `/models` | registered models per provider (embedding + answer slots, + the key env each one needs) |
 | GET | `/profile` | the active profile (embedding/answer/chunking/retrieval/corpus), its collection name, switching state |
 | POST | `/profile` | switch provider+model per slot, chunking (`mode`/`size`/`overlap`), retrieval knobs, corpus dirs — **only when `RAGLAB_ALLOW_PROFILE_SWITCH=1`** |
@@ -97,9 +97,17 @@ Semantics worth knowing before you integrate:
   `invalid_output`, `private_or_live_request`, …) when the corpus does not
   support the question or the reply failed the verbatim-citation gate.
   That is the product working, not an error.
-* **Errors**: `409 empty_index` (POST `/ingest` first), `409 retrieval_refused`
-  (stale index vs current settings — rebuild it), `502 provider_error`,
-  `503 missing_api_key` (says which env var), `422` request validation.
+* **Errors**: `409 empty_index` (POST `/ingest` first), **`409 stale_index`**
+  (the index holds chunks built with a different chunk size / overlap / mode
+  than the active profile asks for, so every hit would come from the wrong
+  segmentation). A stale refusal is structured, never prose to parse:
+  `{"reason": "stale_index", "collection": …, "stored": "chunkv4:…",
+  "current": "chunkv4:…", "rebuild": "POST /ingest?reset=true …"}`, and
+  `GET /health` reports the same mismatch as `index.stale` *before* you ask —
+  the front warns and offers the rebuild instead of failing mid-chat. Other
+  refusals: `409 answer_refused` / `409 retrieval_refused` /
+  `409 evaluation_refused`, `502 provider_error`, `503 missing_api_key` (says
+  which env var), `422` request validation.
 * **First `/answer` on the xKiro profile** performs the live free-price check
   the supported pipeline requires — expect slightly higher latency once.
 * Every response is redacted: provider errors pass through `safe_error`, keys
@@ -165,7 +173,11 @@ start), not on the fifth request.
 3. **Each profile owns its collection** (`raglab_app_<provider>_<model>_<chunking>`),
    exactly like the console: switching providers never corrupts another
    profile's vectors, and a fingerprint guard refuses retrieval over stale
-   chunks (`409 retrieval_refused`, rebuild with `/ingest?reset=true`).
+   chunks (`409 stale_index` with both fingerprints, visible in advance as
+   `index.stale` in `/health`; rebuild with `/ingest?reset=true`). Note the
+   collection name does NOT carry the size/overlap: changing chunk size in
+   `POST /profile` (or `RAGLAB_CHUNK_SIZE_TOKENS` on restart) invalidates the
+   existing index on purpose — that is the guard doing its job, not a bug.
 4. **Non-pinned answer models are experimental surfaces**: the live free-price
    check and benchmark attribution belong to the pinned xKiro SKU only.
 5. **`POST /keys` with `persist=true` inside Docker** writes the container's
@@ -178,11 +190,18 @@ start), not on the fifth request.
 ## Tests
 
 `python -m unittest -v test_service` (offline: stubbed embeddings + injected
-chat client; no network, no keys). It is part of CI via `run_tests.sh`. Its
-last test case boots a REAL uvicorn server on an ephemeral port and runs
+chat client; no network, no keys). It is part of CI via `run_tests.sh`. One
+test case boots a REAL uvicorn server on an ephemeral port and runs
 `local_front.py`'s state-aware smoke suite against it over actual HTTP — with
 no keys and an empty index, so the tested behavior is the full refusal
 contract (503/403/422) plus greetings, exactly the state a fresh deployment
-is in. The rest of the cases cover the console-parity endpoints directly
-(keys round-trip and redaction, inspect, chunk-search verdicts, embedding
-sanity, evaluate, profile switching with chunking/corpus validation).
+is in. A second one boots the service against an index built at another chunk
+size (the reported "STALE" case) and requires the stale branch of the same
+suite to pass over HTTP: `409 stale_index` with both fingerprints and the
+rebuild, and no live call. `StaleIndexTest` pins the contract directly —
+`index.stale` flips with the profile, `/search`, `/answer` and `/evaluate`
+refuse with the structured reason, the front's helpers turn it into the right
+command, and a rebuild heals it. The rest of the cases cover the
+console-parity endpoints (keys round-trip and redaction, inspect, chunk-search
+verdicts, embedding sanity, evaluate, profile switching with chunking/corpus
+validation).

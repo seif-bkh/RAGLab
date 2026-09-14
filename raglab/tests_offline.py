@@ -772,7 +772,7 @@ check("oversized paragraph is still flagged (transparency)",
 
 # --- collection staleness fingerprint (P0-1) --------------------------------
 from chunker import chunk_fingerprint          # noqa: E402
-from store import ensure_fresh_chunks, chunk_fp  # noqa: E402
+from store import ensure_fresh_chunks, chunk_fp, StaleCollectionError  # noqa: E402
 
 
 class FpCfg:
@@ -815,9 +815,23 @@ try:
 except RuntimeError as _e:
     _fp_stale = True
     _fp_msg = str(_e)
+    _fp_error = _e
 check("stale collection: actionable refusal",
       _fp_stale and "ingest --reset" in _fp_msg,
       str(_fp_msg)[:120])
+# The hint must name a command that exists: the old "raglab ingest --reset"
+# sent users to an entry point this repo does not have (main.py is the CLI).
+check("stale collection: the rebuild command exists in this repo",
+      "python main.py ingest --reset" in _fp_msg and "raglab ingest" not in _fp_msg,
+      str(_fp_msg)[-90:])
+# ...and the two fingerprints travel as attributes, so a surface (service.py's
+# 409 stale_index, the local front's rebuild offer) never parses the message.
+check("stale collection: typed error carries stored/current/rebuild",
+      isinstance(_fp_error, StaleCollectionError)
+      and _fp_error.stored == "chunkv1:s500:o100:h1:sen0"
+      and _fp_error.current == chunk_fp(FpCfg())
+      and "ingest --reset" in _fp_error.rebuild,
+      f"stored={getattr(_fp_error, 'stored', None)}")
 
 try:
     ensure_fresh_chunks(FpCol(None), FpCfg())

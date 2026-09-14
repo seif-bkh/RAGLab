@@ -111,6 +111,26 @@ def _redact(detail: dict) -> dict:
             for key, value in detail.items()}
 
 
+# The one line that tells a caller how to recover from reason="stale_index".
+# Kept here (not in store.py) because only the service knows its own endpoint.
+REBUILD_HINT = ("POST /ingest?reset=true rebuilds this profile's index "
+                "(local_front: python local_front.py --ingest --reset)")
+
+
+def stale_index_error(collection: str, exc) -> ServiceError:
+    """The 409 a stale index deserves: both fingerprints + the fix.
+
+    `reason="stale_index"` is a contract, not prose: a client (local_front.py,
+    a gateway, your own service) can warn BEFORE a question is asked and offer
+    the rebuild, instead of pattern-matching a sentence inside `error`. The
+    message keeps the full human explanation, so logs and UIs stay readable.
+    """
+    return ServiceError(409, "stale_index", collection=collection,
+                        stored=getattr(exc, "stored", None),
+                        current=getattr(exc, "current", None),
+                        error=safe_error(exc), rebuild=REBUILD_HINT)
+
+
 # ---------------------------------------------------------------------------
 # Profile from environment (boot-time; 12-factor)
 # ---------------------------------------------------------------------------
@@ -237,6 +257,30 @@ class Runtime:
             return 0, None
         metas = collection.get(include=["metadatas"], limit=1).get("metadatas") or [{}]
         return count, (metas[0] or {}).get("chunk_fp")
+
+    def index_state(self) -> dict:
+        """count + the stored chunk fingerprint + the one THIS profile makes.
+
+        The stored fingerprint alone tells a client nothing: staleness is the
+        two of them DISAGREEING. Computing the current one is pure (chunker and
+        store only — no model call, no write), so /health can report freshness
+        on every poll and the front can warn BEFORE a question is asked, which
+        is exactly where the raw 409 used to land. `stale` is None when we
+        cannot tell: empty index, a collection built before fingerprinting, or
+        a chunk-map directory that cannot be read.
+        """
+        count, stored = self.index_info()
+        state = {"count": count, "stored_chunk_fp": stored,
+                 "current_chunk_fp": None, "stale": None}
+        if not stored:
+            return state
+        from store import chunk_fp
+        try:
+            state["current_chunk_fp"] = chunk_fp(self.local())
+        except Exception:                    # noqa: BLE001 — /health must answer
+            return state
+        state["stale"] = state["current_chunk_fp"] != stored
+        return state
 
     def switch(self, profile: dict):
         with self.lock:
@@ -395,15 +439,26 @@ def create_app(profile: dict | None = None, *, generator=None,
     @app.get("/health")
     def health():
         """Liveness + configuration truth. Key values are never included —
-        only which env var names are set, masked per the repo's standing rule."""
+        only which env var names are set, masked per the repo's standing rule.
+
+        `index.stale` compares the stored chunk fingerprint with the one the
+        ACTIVE profile produces: true means no answer from this index is
+        trustworthy until a rebuild, and it is reported here (not only at
+        request time) so a client can say so before asking a question.
+        """
         local = runtime.local()
-        count, stored_fp = runtime.index_info()
-        index = {"collection": local.CHROMA_COLLECTION_NAME, "count": count}
-        if stored_fp:
-            import re as _re
-            from chunker import tokenizer_identity
-            stored_tok = _re.search(r"tok([^:]+)", stored_fp)
-            index["chunk_fp"] = stored_fp[:16]
+        state = runtime.index_state()
+        index = {"collection": local.CHROMA_COLLECTION_NAME, "count": state["count"],
+                 "stale": state["stale"]}
+        if state["current_chunk_fp"]:
+            index["current_chunk_fp"] = state["current_chunk_fp"][:16]
+        if state["stale"]:
+            index["rebuild"] = REBUILD_HINT
+        import re as _re
+        from chunker import tokenizer_identity
+        if state["stored_chunk_fp"]:
+            stored_tok = _re.search(r"tok([^:]+)", state["stored_chunk_fp"])
+            index["chunk_fp"] = state["stored_chunk_fp"][:16]
             index["tokenizer_match"] = (stored_tok.group(1) == tokenizer_identity()
                                         if stored_tok else None)
         keys = {}
@@ -514,6 +569,7 @@ def create_app(profile: dict | None = None, *, generator=None,
     def search(request: SearchRequest):
         from evaluate import prepare_query_text
         from retrieval import retrieve
+        from store import StaleCollectionError
         from translate import detect_language
         if request.mode is not None and request.mode not in {"vector", "rrf", "blend"}:
             raise ServiceError(400, "bad_mode", mode=request.mode,
@@ -534,6 +590,8 @@ def create_app(profile: dict | None = None, *, generator=None,
                                       language=language, translator=None, mode=mode,
                                       top_k=k, lang_filter=request.lang_filter,
                                       variant_strategy="original")
+        except StaleCollectionError as exc:
+            raise stale_index_error(local.CHROMA_COLLECTION_NAME, exc) from None
         except (ValueError, RuntimeError) as exc:
             raise ServiceError(409, "retrieval_refused", error=safe_error(exc)) from None
         return {"question": request.question, "language": language, "k": k, "mode": mode,
@@ -552,6 +610,7 @@ def create_app(profile: dict | None = None, *, generator=None,
     @app.post("/answer")
     def answer(request: AnswerRequest):
         import chat as chat_mod
+        from store import StaleCollectionError
         for field, allowed in (("mode", {"vector", "rrf", "blend"}),
                                ("lang_filter", {None, "ar", "fr", "en"}),
                                ("query_lang", {None, "ar", "fr", "en"})):
@@ -579,6 +638,11 @@ def create_app(profile: dict | None = None, *, generator=None,
                                   lang_filter=(request.lang_filter if request.lang_filter is not None
                                                else runtime.profile["retrieval"]["lang_filter"]),
                                   language=request.query_lang)
+        except StaleCollectionError as exc:
+            # A stale index is NOT a bad question: the caller can fix it, so it
+            # gets its own reason and both fingerprints instead of the generic
+            # answer_refused that made the front print a raw JSON blob.
+            raise stale_index_error(local.CHROMA_COLLECTION_NAME, exc) from None
         except (ValueError, RuntimeError) as exc:
             raise ServiceError(409, "answer_refused", error=safe_error(exc)) from None
         except NvidiaAPIError as exc:
@@ -759,6 +823,7 @@ def create_app(profile: dict | None = None, *, generator=None,
     @app.post("/evaluate")
     def evaluate(request: EvaluateRequest):
         from evaluate import load_question_set, run_evaluation, save_run
+        from store import StaleCollectionError
         path = Path(request.questions)
         if not path.is_absolute():
             path = profiles.PROJECT_DIR / request.questions
@@ -779,6 +844,10 @@ def create_app(profile: dict | None = None, *, generator=None,
             run = run_evaluation(local, embedder, collection, cases,
                                  mode=runtime.profile["retrieval"]["mode"],
                                  top_k=request.top_k or 20, translator=None)
+        except StaleCollectionError as exc:
+            # Numbers measured over stale chunks are wrong numbers, not a
+            # failed evaluation; say which fingerprints disagree.
+            raise stale_index_error(local.CHROMA_COLLECTION_NAME, exc) from None
         except (ValueError, RuntimeError) as exc:
             raise ServiceError(409, "evaluation_refused", error=safe_error(exc)) from None
         saved = save_run(run, local.RESULTS_DIR)

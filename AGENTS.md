@@ -4,7 +4,7 @@ If you are an agent (or human) resuming work on RAGLab: **read this file first, 
 and keep it updated whenever you learn something that changes the truth.** It is the
 contract between sessions. Facts here were verified by running things, not guessed.
 
-Last verified: 2026-09-07 (branch `arena/01a07b8c-raglab`).
+Last verified: 2026-09-14 (branch `arena/01a09f30-raglab`).
 
 ---
 
@@ -97,6 +97,28 @@ Current state of the work:
   requires the suite to pass over actual HTTP in CI; `ConsoleEndpointsTest`
   covers the keys/inspect/chunks-search/sanity/evaluate/profile-switch
   endpoints directly (stubbed). Exit codes 0/1/2 (ok / failed / unreachable).
+- **Stale-index handling, fixed 2026-09-14 (session `arena/01a09f30-raglab`)**,
+  after a user's `front chat>` question came back as
+  `HTTP 409 {"reason": "answer_refused", "error": "[store] collection is STALE
+  — … Rebuild with:  raglab ingest --reset"}`. The refusal was correct (an
+  index built at s220 was being asked for s440 chunks — different collection
+  size/overlap, same `raglab_app_*` name), but nothing said so usefully and the
+  hint named a command that does not exist. Now:
+  `store.StaleCollectionError(RuntimeError)` carries `.stored`/`.current`/
+  `.rebuild` (module constant `store.REBUILD_HINT` = `python main.py ingest
+  --reset`, the real CLI); `ensure_fresh_chunks(collection, cfg, *,
+  rebuild_hint=None)` still satisfies every `except RuntimeError` caller;
+  `service.py` adds `REBUILD_HINT`, `stale_index_error()`,
+  `Runtime.index_state()`, reports `index.stale` (+ `current_chunk_fp`,
+  `rebuild`) in `/health`, and maps staleness to `409 reason="stale_index"`
+  with both fingerprints in `/search`, `/answer` and `/evaluate` (generic
+  `*_refused` reasons unchanged); `local_front.py` has `index_freshness()` +
+  `failure_lines()`, warns in the banner/status/chat prompt, offers the
+  rebuild and re-asks the same question, and `--smoke` gained a stale branch
+  (21 checks instead of the ready-state live calls, zero model calls).
+  `tests_offline.py`'s staleness checks now pin the real command and the typed
+  attributes; `test_service.StaleIndexTest` + `LocalFrontStaleIndexOverHttp`
+  pin the whole contract over TestClient and real HTTP.
 
 ## 2. Hard constraints (never violate)
 
@@ -199,6 +221,14 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
+- **Offline gate, this session's HEAD (`arena/01a09f30-raglab`, 2026-09-14)**:
+  `PYTHON=/home/user/RAGLab/raglab/.venv/bin/python ./run_tests.sh --offline`
+  → EXIT=0: 201 unittests (180 + 19 service + 2 new stale-index cases) + 91
+  checks + `main.py inspect` (21 chunks over `data/`) + `pip check`, log
+  `raglab/logs/test_run_20260914_092005.log`. The venv at `raglab/.venv` was
+  rebuilt this session (PyPI reachable; ~2 min for
+  `requirements-benchmark.txt`); `run_tests.sh` honors `PYTHON=`.
+
 - **CI green**: run 34582141711 on HEAD `f73c2bd` (offline suite: 199 unittests
   — 180 + 19 service, incl. the local_front-over-real-HTTP case and the new
   ConsoleEndpointsTest — + 89 checks
@@ -275,6 +305,26 @@ Channels that WORK (use in this order):
 - `sacrebleu` is a test dependency — it is pinned in `requirements-benchmark.txt`
   (2.5.1); the plain `requirements.txt` does not carry it.
 - `gh run list --limit 1` once returned a stale top entry; match `headSha` instead.
+- **Every "how to fix it" string must name a command that RUNS.** The stale
+  refusal said `raglab ingest --reset`; no entry point in this repo is called
+  `raglab` (`main.py`'s parser is `prog="main.py"`, the chat REPL is
+  `./raglab/chat.sh --reset --ingest`, the front is
+  `python local_front.py --ingest --reset`, the service is
+  `POST /ingest?reset=true`) — the user could not have followed it. Any new
+  hint: check it against a real parser/endpoint before shipping.
+- **The collection name carries provider/model/mode but NOT size/overlap.**
+  Changing the chunk size — the front's settings menu (menu 12), `POST
+  /profile`, or `RAGLAB_CHUNK_SIZE_TOKENS` at boot — therefore lands on the
+  SAME collection and invalidates the index by design. That is the guard
+  working, not a bug; `/health.index.stale` and `409 stale_index` are how you
+  see it before asking.
+- **`Runtime.switch()` and `POST`/`DELETE /keys` set `_generator = None`** (a
+  new key/profile must invalidate clients built with the old one), so a test
+  that injects `generator=object()` loses it the moment it switches the
+  profile or triggers the front's `/keys` round-trip → `/answer` turns into
+  `503 missing_api_key`. Build a stale index with a SECOND app over the same
+  `CHROMA_DIR` (two `chromadb.PersistentClient`s on one path work in-process),
+  or keep a dummy `KIRA_API_KEY` set so the suite skips its round-trip.
 - **GitHub wraps workflow `run:` steps in `bash -e -o pipefail`.** A failing command
   aborts the script before any `status=$?` capture, so capturing exit codes needs the
   `status=0; cmd ... || status=$?` idiom. (Bite: first real-test run swallowed the
