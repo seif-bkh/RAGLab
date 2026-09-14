@@ -221,6 +221,9 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
+- **CI green**: run 34827605040 on HEAD `f9c9f53` (the stale-index contract
+  commit: 201 offline unittests + 91 checks + inspect + pip check), after the
+  session's own local gate (`EXIT=0`, §below).
 - **Offline gate, this session's HEAD (`arena/01a09f30-raglab`, 2026-09-14)**:
   `PYTHON=/home/user/RAGLab/raglab/.venv/bin/python ./run_tests.sh --offline`
   → EXIT=0: 201 unittests (180 + 19 service + 2 new stale-index cases) + 91
