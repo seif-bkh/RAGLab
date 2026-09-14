@@ -247,10 +247,12 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 34827911512 on HEAD `0cb7be6` (the stale-index work: 201
-  offline unittests + 91 checks + inspect + pip check) — earlier green runs for
-  the same series: 34827605040 (`f9c9f53`), 34827746328 (`59c072d`). All three
-  follow a local `run_tests.sh --offline` at `EXIT=0`.
+- **CI green**: run 34838102099 on HEAD `c421749` (provider-failure
+  diagnosis: 211 offline unittests — 201 + 7 GoogleFreeTier + 3
+  AnswerProviderFailureTest — + 91 checks + inspect + pip check), after a local
+  `run_tests.sh --offline` at `EXIT=0`. Stale-index series: 34827911512
+  (`0cb7be6`) and 34827605040 (`f9c9f53`), 34827746328 (`59c072d`). All follow
+  a green local gate.
 - **Offline gate, this session's HEAD (`arena/01a09f30-raglab`, 2026-09-14)**:
   `PYTHON=/home/user/RAGLab/raglab/.venv/bin/python ./run_tests.sh --offline`
   → EXIT=0: 201 unittests (180 + 19 service + 2 new stale-index cases) + 91
@@ -382,3 +384,19 @@ Channels that WORK (use in this order):
   session files "untracked"), then `git ls-remote` + fetch the session branch and
   `git reset --hard` to it. Verify untracked files against the commit with
   `git show <sha>:<path> | cmp -s - <path>` before resetting.
+  **With UNCOMMITTED work in the tree (the usual case on turn 2+ of a session),
+  that `git reset --hard` destroys it** — realign like this instead:
+  1. `cp -a . /tmp/<name>_backup` (cheap insurance);
+  2. verify the files you did NOT touch today are byte-identical to the remote
+     commit (`git show FETCH_HEAD:<path> | cmp -s - <path>`) — that is what
+     proves the tree is "remote + today's edits";
+  3. `git stash push -m wip` → `git reset --hard FETCH_HEAD` → `git stash pop`;
+  4. the pop CAN conflict (the stash was diffed against the OLD base, and those
+     files may have been committed in between): restore each conflicted file from
+     the step-1 backup, then `git reset -q` to clear the index's unmerged state,
+     then confirm `git diff --stat` lists only today's intended edits and
+     `cmp -s` each restored file against the backup.
+  A rebuild also deletes `raglab/.venv` (gitignored, outside the snapshot):
+  recreate it (`python3 -m venv .venv && .venv/bin/pip install -q -r
+  requirements-benchmark.txt`, PyPI is reachable, ~2 min) before trusting any
+  local gate.
