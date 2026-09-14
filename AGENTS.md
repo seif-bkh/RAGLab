@@ -207,10 +207,9 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 34850306415 on HEAD `eb32c74` (offline suite: 200 unittests
-  — 180 + 20 service, incl. the local_front-over-real-HTTP case and
-  ConsoleEndpointsTest with the custom-model-ID regression — + 89 checks
-  + inspect + pip check).
+- **CI green**: run 34855175811 on HEAD `ea27075` (offline suite: 200 unittests
+  + 89 checks + inspect + pip check; docs-only change — CONTRACT.md added,
+  no code touched).
 - **Service profile-switch contract** (eb32c74): an explicit
   `{provider, model}` in POST /profile is applied VERBATIM — custom model IDs
   included (the registries are known-good suggestions, not a whitelist). The
