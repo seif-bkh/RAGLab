@@ -207,8 +207,26 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 34861888379 on HEAD `48bb30d` (offline suite: 209 unittests
-  — 180 core + 29 service — + 96 checks + inspect + pip check).
+- **CI green**: run 35037082032 on HEAD `698a30b` (offline suite: 217 unittests
+  — 180 core + 37 service — + 96 checks + inspect + pip check).
+- **Documents API = the gateway feed target** (698a30b, service 1.2.0): the
+  service OWNS a document store (docstore.py, RAGLAB_DOCUMENTS_DIR, default
+  raglab/documents/). POST /documents (multipart or JSON text/base64,
+  ?index=true), GET /documents + /{id} (status pending/indexed/stale +
+  chunks), DELETE /{id} (file + chunks purged from EVERY collection via
+  store.purge_source — no re-ingest). Content-hash versioning (same bytes
+  no-op, different bytes version bump); ids [A-Za-z0-9][A-Za-z0-9._-]{0,79}
+  (traversal-safe); extensions .txt/.md/.pdf/.docx; size cap
+  RAGLAB_MAX_DOCUMENT_BYTES (413). The documents dir is part of EVERY
+  profile's corpus (appended at boot + after POST /profile; data_dirs=None
+  means defaults — materialize, never drop). Gotchas learned: (1)
+  DocumentStore.save->find under one non-reentrant Lock deadlocks — RLock;
+  (2) async endpoints must keep sqlite/disk work off the event loop
+  (run_in_threadpool); (3) doc status timestamps are second-precision —
+  tests that need a stale transition must sleep past the second boundary.
+  python-multipart==0.0.32 pinned in both requirements files (multipart
+  push). Front: menu 14 + 3 smoke checks (23 total, keyless, self-cleaning).
+  Feed contract documented in CONTRACT.md §3.15/§2.5/§5.7.
 - **Service 1.1.0 output guards** (48bb30d, from the fullstack team's review):
   (1) `RAGLAB_SERVICE_TOKEN` → every request needs `X-Service-Token`
   (constant-time; CORS preflights exempt; local_front sends it from env);
