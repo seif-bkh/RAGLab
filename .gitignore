@@ -20,3 +20,6 @@ raglab/benchmark_cache/
 
 # local front state (custom model IDs)
 raglab/front_state.json
+
+# pushed documents (the gateway feed target)
+raglab/documents/

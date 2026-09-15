@@ -1,7 +1,7 @@
 # RAGLab service — HTTP contract
 
 **Audience:** the fullstack team building against this service.
-**Service version:** `1.1.0` (reported by `GET /health` → `version`).
+**Service version:** `1.2.0` (reported by `GET /health` → `version`).
 **Machine-readable schema:** FastAPI generates OpenAPI 3 at `/openapi.json` and
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
@@ -63,6 +63,7 @@ redaction filter: **API keys can never appear in an error body.**
 | Endpoint | Embedding calls | Chat calls | Notes |
 |---|---|---|---|
 | `GET /health`, `/`, `/models`, `/profile`, `/keys`, `/ingest/status`, `/inspect` | — | — | Free. |
+| `GET/POST/DELETE /documents*` | — | — | Free (disk only; indexing is the usual `POST /ingest`). |
 | `POST /chunks/search` | — | — | Free (re-chunks locally; seconds, CPU only). |
 | `POST /keys`, `DELETE /keys/{env}` | — | — | Free. |
 | `POST /profile` | — | — | Free. May orphan the active index (§2.3). |
@@ -161,6 +162,18 @@ process (optionally persisting to the service host's `raglab/.env`);
 the cached embedder/generator. Missing key → `503 missing_api_key` naming the
 env var, on every endpoint that needs it.
 
+### 2.5 Documents (the gateway feed)
+
+Besides the corpus directories in the profile, the service owns a document
+store (`RAGLAB_DOCUMENTS_DIR`, default `documents/`) that only the
+`/documents` API writes. Pushed documents are versioned by content hash and
+are part of **every** profile's corpus — the store's dir is always appended
+to `data_dirs`, including after `POST /profile` changes them. Indexing a
+pushed document still goes through the §2.3 lifecycle (`POST /ingest`);
+deleting one purges its chunks from every collection immediately. Per-document
+status (`pending` / `indexed` / `stale`) is derived from the active
+collection + the last ingest time — see §3.15.
+
 ---
 
 ## 3. Endpoint reference
@@ -178,7 +191,7 @@ The endpoint your UI polls. No secrets — key values never appear, only
 `set`/`missing` per env var.
 
 ```json
-{"status": "ok", "version": "1.1.0",
+{"status": "ok", "version": "1.2.0",
  "profile": {"embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
              "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
              "chunking": {"mode": "restructure", "size": 220, "overlap": 40},
@@ -478,6 +491,75 @@ or null)}`.
 One live call to the xKiro gateway; `502 catalog_failed` on error. Returns
 the catalog snapshot as collected by `provider_catalog.collect()`.
 
+### 3.15 `POST /documents` / `GET /documents` / `GET /documents/{id}` / `DELETE /documents/{id}` — the gateway feed target
+The service owns a document store (`RAGLAB_DOCUMENTS_DIR`, default
+`documents/` next to the code). Pushed documents join the corpus of **every
+profile** — the dir is always part of `data_dirs`, whatever `POST /profile`
+says — and are indexed by the usual `POST /ingest`. This is the surface an
+agent gateway's document feed drives.
+
+**Push** — `POST /documents?id=<doc-id>&index=false`, either body:
+
+* JSON: `{"id"?, "filename", "content", "content_encoding": "text"|"base64"}`
+  (`text` = UTF-8 document text; `base64` for PDFs/DOCX binaries)
+* multipart/form-data: one file field (the filename's extension picks the
+  parser)
+
+Rules: extensions `.txt/.md/.pdf/.docx` only (`400 bad_document_type`);
+ids are `[A-Za-z0-9][A-Za-z0-9._-]{0,79}` (`400 bad_document_id` — also your
+path-traversal guard); size cap `RAGLAB_MAX_DOCUMENT_BYTES` (default 20 MB →
+`413 document_too_large`).
+
+```json
+{"result": "created",
+ "document": {"id": "rates", "filename": "rates.md", "stored_as": "pushed-rates.md",
+              "bytes": 48, "sha256_16": "33ba87bcd627d15b", "version": 1,
+              "received_at": "2026-09-15T23:39:20+00:00",
+              "updated_at": "2026-09-15T23:39:20+00:00",
+              "status": "pending", "chunks_in_index": 0},
+ "index_started": false, "notes": [], "ingest": {"state": "idle", "…": "…"},
+ "index_hint": "POST /ingest (or push with ?index=true) to (re)build the index"}
+```
+
+`201` on create, `200` on re-push. **Versioning is content-based:** same id +
+identical bytes → `result: "unchanged"` (idempotent — a feed may retry
+freely); different bytes → `version` bumps and the old chunks keep serving
+until the next ingest (status `stale`). Stored files are namespaced
+`pushed-<id><ext>`, so they can never collide with the repo's own corpus
+files; `stored_as` is the `source` name chunks carry (and what you see in
+`/inspect`).
+
+**Indexing is explicit:** push a batch, then `POST /ingest` once (re-ingests
+are embedding-cache-cheap), or push a single doc with `?index=true` to start
+the background job immediately (`index_started` tells you; if a job is
+already running or a key is missing, the push still succeeds and `notes[]`
+says why indexing did not start).
+
+**List / status:**
+
+```json
+{"documents": [{"id": "guide", "…": "…", "version": 1, "status": "indexed",
+                "chunks_in_index": 1}],
+ "documents_dir": "/app/raglab/documents",
+ "index": {"collection": "raglab_app_nvidia_nemotron_3_embed_1b_restructure",
+           "indexed_at": "2026-09-15T23:39:21+00:00"}}
+```
+
+`status` per document: `pending` (not in the index), `indexed` (chunks
+present, ingest newer than the doc), `stale` (doc changed since the last
+ingest — old chunks still serving). `GET /documents/{id}` → the same row;
+`404 unknown_document` otherwise.
+
+**Delete** — `DELETE /documents/{id}`: removes the stored file AND purges
+its chunks from **every** local collection, so the index stays truthful with
+no re-ingest:
+
+```json
+{"status": "deleted", "id": "guide",
+ "chunks_removed": {"raglab_app_nvidia_nemotron_3_embed_1b_restructure": 1},
+ "note": "chunks purged from every local collection; no re-ingest needed"}
+```
+
 ---
 
 ## 4. Error catalog
@@ -491,6 +573,13 @@ the catalog snapshot as collected by `provider_catalog.collect()`.
 | `bad_chunking_mode` | 400 | `/profile` | Mode ∉ size/restructure/manual. | — |
 | `bad_chunking_value` | 400 | `/profile` | size/overlap not a positive int. | — |
 | `bad_data_dirs` | 400 | `/profile` | Dir(s) missing on the service host (list in body). | Paths must exist where the service runs, not in the browser. |
+| `bad_document_id` | 400 | `/documents` | Id not in `[A-Za-z0-9][A-Za-z0-9._-]{0,79}` (also the path-traversal guard). | Use a safe id. |
+| `bad_document_type` | 400 | `/documents` | Extension not `.txt/.md/.pdf/.docx`. | Convert first. |
+| `bad_filename` | 400 | `/documents` | Multipart push without a named file field. | Send one file field. |
+| `invalid_document_content` | 400 | `/documents` | Empty content, bad base64, or unknown `content_encoding`. | — |
+| `invalid_document_push` | 400 | `/documents` | Body is neither valid JSON nor a valid push payload. | — |
+| `document_too_large` | 413 | `/documents` | Bytes over `RAGLAB_MAX_DOCUMENT_BYTES` (limit in body). | Split or raise the cap. |
+| `unknown_document` | 404 | `/documents/{id}` | No such document id. | `GET /documents` lists the ids. |
 | `bad_mode` / `bad_lang_filter` / `bad_query_lang` | 400 | `/search`, `/answer` | Bad enum value. | — |
 | `bad_limit` | 400 | `/inspect` | limit ∉ 0–50. | — |
 | `unknown_key_env` | 400 | `/keys` | Env var not known (registered list in body). | — |
@@ -591,6 +680,29 @@ xKiro `qwen/qwen3.8-max:free`) is the only benchmark-attributable pipeline —
   background job with a ≥ 960 s timeout.
 * `POST /evaluate` — minutes; same advice.
 
+### 5.7 The document feed (agent-gateway pattern)
+The gateway owns its document store and pushes to whichever agent is active.
+Against this service that is:
+
+```
+for doc in batch:                       # idempotent — retries are free
+    POST /documents  {id, filename, content}          # 201/200
+POST /ingest                                           # once per batch
+poll GET /ingest/status until done                     # 1–2 s interval
+GET /documents                                         # statuses: indexed
+```
+
+* Use a **stable id** per document (your store's key, sanitized to
+  `[A-Za-z0-9][A-Za-z0-9._-]{0,79}`); identical bytes re-pushed are a no-op.
+* Push binaries (PDF/DOCX) as multipart file fields or base64 JSON; text
+  documents as `content_encoding: "text"`.
+* Removal: `DELETE /documents/{id}` — chunks are purged from every
+  collection immediately, no re-ingest needed.
+* A single late document can go out with `?index=true` to skip the separate
+  `/ingest` call.
+* In Docker, put `RAGLAB_DOCUMENTS_DIR` (default `/app/raglab/documents`)
+  on a volume, or pushed documents are lost when the container is recreated.
+
 ---
 
 ## 6. Deployment summary
@@ -602,6 +714,8 @@ Config is environment-only at boot (12-factor). Full table + Docker notes:
 `RAGLAB_NEIGHBOR_RADIUS`, `RAGLAB_DATA_DIRS`,
 `RAGLAB_ALLOW_PROFILE_SWITCH` (default `1` locally, compose pins `0`),
 `RAGLAB_SERVICE_TOKEN` (require `X-Service-Token` on every request),
+`RAGLAB_DOCUMENTS_DIR` (the pushed-documents store; volume it in Docker),
+`RAGLAB_MAX_DOCUMENT_BYTES` (per-push cap, default 20 MB),
 `RAGLAB_CORS_ORIGINS` (default `*`), plus provider keys
 (`NVIDIA_API_KEY`, `XKIRO_API_KEY`, `GOOGLE_API_KEY`/`GEMINI_API_KEY`,
 `KIRA_API_KEY`, …). Invalid combinations fail at boot, not on request 5.

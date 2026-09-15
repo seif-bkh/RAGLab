@@ -639,3 +639,26 @@ def rrf_merge(vector_hits: list, keyword_hits: list, k: int = 60) -> list:
     for rank, entry in enumerate(merged, start=1):
         entry["rank"] = rank
     return merged
+
+
+def purge_source(cfg, source: str) -> dict:
+    """Delete every chunk of `source` from EVERY collection in the local store.
+
+    Used by the documents API: removing a pushed document must also remove
+    its vectors, in every collection (each profile owns its own), so the
+    index stays truthful without a full re-ingest. Returns
+    {collection_name: removed_count} for collections that had chunks.
+    """
+    client = _client(cfg)
+    removed = {}
+    for entry in client.list_collections():
+        name = getattr(entry, "name", entry)      # API shape varies by version
+        try:
+            collection = client.get_collection(name)
+            found = collection.get(where={"source": source}, include=[])
+            if found and found.get("ids"):
+                collection.delete(where={"source": source})
+                removed[name] = len(found["ids"])
+        except Exception:                          # noqa: BLE001 — other
+            continue                               # profiles' stores are not ours to fail on
+    return removed

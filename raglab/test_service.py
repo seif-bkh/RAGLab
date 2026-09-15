@@ -695,5 +695,182 @@ class OutputGuardsTest(unittest.TestCase):
         self.assertIn("99", body.get("error") or "")
 
 
+class DocumentsApiTest(unittest.TestCase):
+    """The gateway feed target: push/list/status/delete with content-based
+    versioning, chunk purging, and corpus integration via data_dirs."""
+
+    MAX_BYTES = 4096
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        (cls.tmp / "seed.md").write_text(
+            "# Seed\n\nseed doc\n\n## Info\n\nAtlas was founded in 2016.\n",
+            encoding="utf-8")
+        profile = _service_profile(cls.tmp)
+        overrides = {"CHROMA_DIR": cls.tmp / "chroma",
+                     "EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+                     "NVIDIA_EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+                     "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
+                     "RESULTS_DIR": cls.tmp}
+        local = build_lab_config(profile)
+        for key, value in overrides.items():
+            setattr(local, key, value)
+        generator = AnswerGenerator(local, client=_FakeChatClient(),
+                                    approved_models=(PROFILE_MODEL,))
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+        cls.client = TestClient(service.create_app(
+            profile, generator=generator, allow_profile_switch=True,
+            config_overrides=overrides,
+            documents_dir=cls.tmp / "documents",
+            max_document_bytes=cls.MAX_BYTES))
+        cls._wait_ingest()
+
+    @classmethod
+    def _wait_ingest(cls):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status = cls.client.get("/ingest/status").json()
+            if status["state"] != "running":
+                return status
+            time.sleep(0.1)
+        raise TimeoutError(status)
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.modules.pop("sentence_transformers", None)
+
+    GUIDED_MD = ("# Guide\n\nguide doc\n\n## Fees\n\n"
+                 "The Atlas card costs 10 dinars per year.\n")
+
+    def test_push_json_lifecycle_with_versions_and_statuses(self):
+        # create -> 201, pending (nothing ingested since)
+        r = self.client.post("/documents", json={
+            "filename": "guide.md", "content": self.GUIDED_MD})
+        self.assertEqual(r.status_code, 201, r.text)
+        doc = r.json()["document"]
+        self.assertEqual((doc["id"], doc["stored_as"], doc["version"],
+                          doc["status"], doc["chunks_in_index"]),
+                         ("guide", "pushed-guide.md", 1, "pending", 0))
+        self.assertEqual(len(doc["sha256_16"]), 16)      # hash is truncated
+        # identical bytes -> no-op, same version
+        r = self.client.post("/documents", json={
+            "filename": "guide.md", "content": self.GUIDED_MD})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual((r.json()["result"], r.json()["document"]["version"]),
+                         ("unchanged", 1))
+        # different bytes -> version 2
+        r = self.client.post("/documents", json={
+            "filename": "guide.md",
+            "content": self.GUIDED_MD.replace("10 dinars", "12 dinars")})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual((r.json()["result"], r.json()["document"]["version"]),
+                         ("replaced", 2))
+        # ingest -> indexed (chunks present, ingest newer than the doc)
+        self.client.post("/ingest")
+        self._wait_ingest()
+        row = self.client.get("/documents/guide").json()["document"]
+        self.assertEqual(row["status"], "indexed")
+        self.assertGreaterEqual(row["chunks_in_index"], 1)
+        # replace AFTER the ingest -> stale (old chunks still serve); sleep
+        # past the second boundary so updated_at is strictly newer than the
+        # ingest's finished_at (both timestamps are second-precision)
+        time.sleep(1.05)
+        r = self.client.post("/documents", json={
+            "filename": "guide.md",
+            "content": self.GUIDED_MD.replace("10 dinars", "15 dinars")})
+        row = r.json()["document"]
+        self.assertEqual((row["version"], row["status"]), (3, "stale"))
+
+    def test_push_with_index_true_runs_the_ingest(self):
+        r = self.client.post("/documents", params={"id": "auto", "index": "true"},
+                             json={"filename": "auto.md",
+                                   "content": "# Auto\n\nauto doc\n\n## Body\n\n"
+                                              "The branch opens at 8.\n"})
+        self.assertEqual(r.status_code, 201, r.text)
+        self.assertTrue(r.json()["index_started"])
+        status = self._wait_ingest()
+        self.assertEqual(status["state"], "done")
+        row = self.client.get("/documents/auto").json()["document"]
+        self.assertEqual(row["status"], "indexed")
+
+    def test_push_multipart(self):
+        r = self.client.post("/documents", files={
+            "file": ("notes.txt", b"# Notes\n\nplain text note\n")})
+        self.assertEqual(r.status_code, 201, r.text)
+        self.assertEqual(r.json()["document"]["stored_as"], "pushed-notes.txt")
+        r = self.client.post("/documents", params={"id": "with-id"},
+                             files={"file": ("whatever.md", b"# W\n\nw\n\n## S\n\ns\n")})
+        self.assertEqual(r.json()["document"]["id"], "with-id")
+
+    def test_push_base64(self):
+        import base64
+        r = self.client.post("/documents", json={
+            "id": "b64", "filename": "b64.md",
+            "content": base64.b64encode("# B\n\nb\n\n## S\n\ns\n".encode()).decode(),
+            "content_encoding": "base64"})
+        self.assertEqual(r.status_code, 201, r.text)
+        self.assertEqual(r.json()["document"]["bytes"], 16)
+
+    def test_push_rejects_bad_requests(self):
+        cases = [
+            ({"id": "../evil", "filename": "x.md", "content": "hi there"}, "bad_document_id"),
+            ({"id": "a b", "filename": "x.md", "content": "hi there"}, "bad_document_id"),
+            ({"filename": "x.exe", "content": "hi"}, "bad_document_type"),
+            ({"filename": "noext", "content": "hi"}, "bad_document_type"),
+            ({"filename": "x.md", "content": "!!!", "content_encoding": "base64"},
+             "invalid_document_content"),
+            ({"filename": "x.md", "content": "x" * 5000}, "document_too_large"),
+        ]
+        for payload, reason in cases:
+            r = self.client.post("/documents", json=payload)
+            self.assertEqual(r.status_code, 400 if reason != "document_too_large" else 413,
+                             (payload, r.text))
+            self.assertEqual(r.json()["detail"]["reason"], reason, payload)
+        r = self.client.post("/documents", data="not-json",
+                             headers={"content-type": "application/json"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["detail"]["reason"], "invalid_document_push")
+
+    def test_unknown_document_404(self):
+        r = self.client.get("/documents/nope")
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.json()["detail"]["reason"], "unknown_document")
+        self.assertEqual(self.client.delete("/documents/nope").status_code, 404)
+
+    def test_documents_join_the_corpus_of_every_profile(self):
+        self.client.post("/documents", json={
+            "id": "corpus", "filename": "corpus.md",
+            "content": "# C\n\nc\n\n## Body\n\npart of every profile\n"})
+        names = [d["name"] for d in
+                 self.client.get("/inspect", params={"limit": 1}).json()["documents"]]
+        self.assertIn("pushed-corpus.md", names)
+        # switching data_dirs must not drop the documents dir
+        r = self.client.post("/profile", json={"data_dirs": [str(self.tmp)]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIn(str(self.tmp / "documents"),
+                      r.json()["profile"]["data_dirs"])
+        # restore for the other tests
+        self.client.post("/profile", json={"chunking": {"mode": "size"}})
+
+    def test_delete_purges_chunks_from_the_index(self):
+        self.client.post("/documents", json={
+            "id": "gone", "filename": "gone.md",
+            "content": "# G\n\ng\n\n## Body\n\ndelete me entirely\n"})
+        self.client.post("/ingest")
+        self._wait_ingest()
+        row = self.client.get("/documents/gone").json()["document"]
+        self.assertGreaterEqual(row["chunks_in_index"], 1)
+        r = self.client.delete("/documents/gone")
+        self.assertEqual(r.status_code, 200, r.text)
+        collection = r.json()["chunks_removed"]
+        self.assertGreaterEqual(sum(collection.values()), 1, collection)
+        self.assertEqual(self.client.get("/documents/gone").status_code, 404)
+        # the chunks are really gone from the active collection
+        fresh = self.client.get("/documents").json()
+        self.assertNotIn("gone", [d["id"] for d in fresh["documents"]])
+
+
 if __name__ == "__main__":
     unittest.main()

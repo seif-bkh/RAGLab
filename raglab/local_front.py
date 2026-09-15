@@ -886,6 +886,78 @@ class Console:
             elif choice == 0:
                 return
 
+    # -- 14 documents (the gateway feed surface) ------------------------------------------------
+
+    def action_documents(self) -> None:
+        """The service's own document store: push / list / remove.
+
+        This is the surface the agent gateway's feed drives — pushed
+        documents join the corpus of every profile and are indexed by the
+        usual ingest (menu 7).
+        """
+        while True:
+            status, body = self.api.get("/documents")
+            if status != 200:
+                print(f"[front] HTTP {status}: {detail_of(body)}")
+                return
+            rows = body.get("documents") or []
+            print(f"\nDocuments (the service's store, {body.get('documents_dir')})")
+            if rows:
+                for row in rows:
+                    print(f"  {row['id']:<24} v{row['version']:<3} {row['status']:<8} "
+                          f"chunks={row['chunks_in_index']:<4} {row['filename']}")
+            else:
+                print("  (none pushed yet)")
+            print("  1. push a file from this machine (any type the loader reads)")
+            print("  2. push pasted text as a .md document")
+            print("  3. remove a document (and its chunks)")
+            print("  0. back")
+            choice = choose_number(3, default=0)
+            if choice == 0:
+                return
+            if choice == 1:
+                path = prompt("file path: ").strip()
+                if not path:
+                    continue
+                source = Path(path).expanduser()
+                if not source.is_file():
+                    print(f"  no such file: {source}")
+                    continue
+                import base64
+                payload = {"filename": source.name,
+                           "content": base64.b64encode(source.read_bytes()).decode(),
+                           "content_encoding": "base64"}
+            else:
+                text = prompt("document text (one line, or 'file:PATH' to read a file): ")
+                if not text:
+                    continue
+                if text.startswith("file:"):
+                    source = Path(text[5:].strip()).expanduser()
+                    if not source.is_file():
+                        print(f"  no such file: {source}")
+                        continue
+                    text = source.read_text(encoding="utf-8", errors="replace")
+                payload = {"filename": "front-note.md", "content": text}
+            doc_id = prompt("document id [default: filename stem]: ").strip()
+            if doc_id:
+                payload["id"] = doc_id
+            do_index = confirm("start the ingest right away?")
+            status, body = self.api.post(
+                "/documents" + ("?index=true" if do_index else ""), payload=payload)
+            if status not in (200, 201):
+                print(f"  HTTP {status}: {detail_of(body)}")
+                continue
+            doc = body.get("document") or {}
+            print(f"  [front] {body.get('result')} — {doc.get('id')} v{doc.get('version')} "
+                  f"({doc.get('bytes')} bytes, {doc.get('status')})")
+            for note in body.get("notes") or []:
+                print(f"  [front] note: {note}")
+            if not do_index and body.get("result") != "unchanged":
+                print("  [front] index with menu 7 (or re-push with ingest) when the batch is complete")
+            if do_index and body.get("index_started"):
+                self.action_ingest()
+        # loop back to the list
+
     # -- menu loop -------------------------------------------------------------------------------
 
     MENU = [
@@ -902,6 +974,7 @@ class Console:
         ("11", "evaluate a question set", "action_evaluate"),
         ("12", "service settings (chunking, retrieval, corpus)", "action_settings"),
         ("13", "diagnostics (offline harness50, xKiro catalog)", "action_diagnostics"),
+        ("14", "documents (push / list / remove — the gateway feed)", "action_documents"),
     ]
 
     def menu_loop(self) -> None:
@@ -1168,6 +1241,31 @@ def run_suite(api: Api, *, spend: bool = True) -> tuple[int, int]:
                       and isinstance(body.get("validation_ok"), bool))
                 suite.check("POST /answer returns a grounded result or a safe refusal",
                             ok, f"status={status} status_field={body.get('status') if isinstance(body, dict) else '?'}")
+
+    # documents API — keyless and state-independent; cleans up after itself
+    smoke_id = "front-smoke-doc"
+    status, body = api.post("/documents", payload={
+        "id": smoke_id, "filename": "smoke.md",
+        "content": "# Smoke\n\nsmoke doc\n\n## Body\n\nfront smoke check\n"})
+    suite.check("POST /documents stores a pushed document",
+                status in (200, 201)
+                and (body.get("document") or {}).get("id") == smoke_id
+                and body.get("result") in {"created", "unchanged", "replaced"},
+                f"status={status}")
+    if status in (200, 201):
+        status, body = api.get("/documents")
+        row = next((d for d in (body.get("documents") or [])
+                    if d.get("id") == smoke_id), None)
+        suite.check("GET /documents lists it with an index status",
+                    status == 200 and row
+                    and row.get("status") in {"pending", "indexed", "stale"},
+                    f"status={status} row={row}")
+        status, body = api.delete(f"/documents/{smoke_id}")
+        suite.check("DELETE /documents removes it (chunks purged)",
+                    status == 200 and body.get("status") == "deleted",
+                    f"status={status}")
+    else:
+        api.delete(f"/documents/{smoke_id}")   # never leave the smoke doc behind
 
     print("=" * 78)
     print(f"[front] {suite.passed} passed, {suite.failed} failed")

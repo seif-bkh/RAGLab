@@ -84,6 +84,10 @@ docker compose up --build            # http://localhost:8000/docs
 | GET | `/keys` | the known key env vars, what each unlocks, masked presence (first 8 chars, never the value) |
 | POST | `/keys` | set a key in the service process (`{key_env, value, persist?}`; placeholders/quotes/spaces rejected; `persist=true` also writes the service host's `raglab/.env`) |
 | DELETE | `/keys/{env}` | drop a key from the process (and from `raglab/.env` with `?persist=true`) |
+| POST | `/documents` | push one document into the service's own store (multipart or JSON; content-based versioning; `?index=true` to ingest right away) — the gateway feed target |
+| GET | `/documents` | the pushed documents + per-doc index status (`pending`/`indexed`/`stale`) |
+| GET | `/documents/{id}` | one document's row |
+| DELETE | `/documents/{id}` | remove a document and purge its chunks from every collection |
 | POST | `/search` | retrieval only: `{question, k?, mode?, lang_filter?, query_lang?}` → ranked chunks with scores |
 | POST | `/answer` | grounded answer: `{question, k?, mode?, lang_filter?, query_lang?, include_excerpts?}` → claims with verbatim-cited evidence, or a safe refusal. Greetings ("bonjour", "السلام عليكم") are answered locally with zero calls |
 | POST | `/ingest?reset=false` | build/rebuild this profile's index as a background job (embeds every chunk; the cache makes re-runs cheap) |
@@ -156,6 +160,8 @@ NVIDIA `nvidia/nemotron-3-embed-1b` embeddings + xKiro
 | `RAGLAB_LANG_FILTER` | restrict retrieval to `ar`/`fr`/`en` | none |
 | `RAGLAB_NEIGHBOR_RADIUS` | widen hits with adjacent chunks (0–2) | `0` |
 | `RAGLAB_DATA_DIRS` | comma-separated corpus dirs | `../docs + raglab/data/` |
+| `RAGLAB_DOCUMENTS_DIR` | the pushed-documents store (always part of the corpus; volume it in Docker) | `raglab/documents/` |
+| `RAGLAB_MAX_DOCUMENT_BYTES` | per-push size cap | `20971520` (20 MB) |
 | `RAGLAB_ALLOW_PROFILE_SWITCH` | enable `POST /profile` | `1` (docker-compose pins `0`) |
 | `RAGLAB_SERVICE_TOKEN` | require `X-Service-Token` on every request (constant-time check, `401 unauthorized` otherwise) | unset = open (local/dev) |
 | `RAGLAB_CORS_ORIGINS` | comma-separated allowed origins | `*` |
@@ -210,5 +216,7 @@ contract (503/403/422) plus greetings, exactly the state a fresh deployment
 is in — and a second case does the same behind an `X-Service-Token`. The rest
 of the cases cover the console-parity endpoints directly (keys round-trip and
 redaction, inspect, chunk-search verdicts, embedding sanity, evaluate,
-profile switching with chunking/corpus validation), the output guards (PII
-scrub after the gate, `unsourced_number` refusals) and the auth middleware.
+profile switching with chunking/corpus validation), the documents API
+(push/versioning/statuses/purge, multipart + JSON + base64), the output
+guards (PII scrub after the gate, `unsourced_number` refusals) and the auth
+middleware.

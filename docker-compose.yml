@@ -26,8 +26,10 @@ services:
     volumes:
       - raglab-index:/app/raglab/chroma_db
       - raglab-embed-cache:/app/raglab/caches
+      - raglab-documents:/app/raglab/documents   # pushed docs survive redeploys
     restart: unless-stopped
 
 volumes:
   raglab-index:
   raglab-embed-cache:
+  raglab-documents:

@@ -26,6 +26,11 @@ Endpoints:
     GET  /keys            known API-key env vars, descriptions, masked presence
     POST /keys            set a key in the service process (optionally persist to .env)
     DELETE /keys/{env}    drop a key from the process (optionally from .env)
+    POST /documents       push one document into the service's store (the gateway
+                          feed target; multipart or JSON; ?index=true to ingest now)
+    GET  /documents       the pushed documents + their index status
+    GET  /documents/{id}  one document's status
+    DELETE /documents/{id}  remove a document + purge its chunks from every collection
     POST /search          retrieval only: top-k chunks for a question
     POST /answer          grounded, cited answer (or refusal) for a question
     POST /ingest          build/rebuild this profile's index (background job)
@@ -65,6 +70,9 @@ Environment (all optional; defaults = the supported pipeline pair):
     RAGLAB_CHUNKING_MODE, RAGLAB_CHUNK_SIZE_TOKENS, RAGLAB_CHUNK_OVERLAP_TOKENS
     RAGLAB_TOP_K, RAGLAB_RETRIEVAL_MODE, RAGLAB_LANG_FILTER, RAGLAB_NEIGHBOR_RADIUS
     RAGLAB_DATA_DIRS               comma-separated corpus dirs (default: ../docs + data/)
+    RAGLAB_DOCUMENTS_DIR           where pushed documents live (default: documents/);
+                                   always part of the corpus, whatever data_dirs say
+    RAGLAB_MAX_DOCUMENT_BYTES      per-push size cap (default 20971520 = 20 MB)
     RAGLAB_ALLOW_PROFILE_SWITCH    1 to enable POST /profile (default 1 locally;
                                    docker-compose.yml pins 0 — enable consciously)
     RAGLAB_SERVICE_TOKEN           if set, every request must carry it in the
@@ -94,7 +102,9 @@ import profiles
 from nvidia_api import NvidiaAPIError, safe_error
 from scrub import scrub_pii
 
-SERVICE_VERSION = "1.1.0"
+import docstore as docstore_mod
+
+SERVICE_VERSION = "1.2.0"
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +344,18 @@ class EvaluateRequest(BaseModel):
     top_k: Optional[int] = Field(None, ge=1, le=50)
 
 
+class DocumentPushRequest(BaseModel):
+    id: Optional[str] = Field(None, max_length=80,
+                              description="stable document id; defaults to the "
+                                          "filename stem")
+    filename: str = Field(min_length=3, max_length=200,
+                          description="name with extension (.txt/.md/.pdf/.docx) "
+                                      "— the extension picks the parser")
+    content: str = Field(min_length=1,
+                         description="the document text, or its base64 form")
+    content_encoding: str = Field("text", description="'text' (utf-8) or 'base64'")
+
+
 class ProfileSwitchRequest(BaseModel):
     embedding: Optional[dict] = None   # {"provider": ..., "model": ...}
     answer: Optional[dict] = None
@@ -386,14 +408,18 @@ def create_app(profile: dict | None = None, *, generator=None,
                allow_profile_switch: bool | None = None,
                cors_origins: list[str] | None = None,
                config_overrides: dict | None = None,
-               service_token: str | None = None) -> FastAPI:
+               service_token: str | None = None,
+               documents_dir: str | None = None,
+               max_document_bytes: int | None = None) -> FastAPI:
     """Build the service app.
 
     `profile` defaults to the environment (profile_from_env). The remaining
     keyword arguments exist for tests and embedded deployments: an injected
     generator (no provider calls), a switch flag override, CORS origins,
-    lab-config overrides (e.g. redirecting CHROMA_DIR to a temp dir), and a
-    service token (RAGLAB_SERVICE_TOKEN) enabling the X-Service-Token check.
+    lab-config overrides (e.g. redirecting CHROMA_DIR to a temp dir), a
+    service token (RAGLAB_SERVICE_TOKEN) enabling the X-Service-Token check,
+    the pushed-documents directory (RAGLAB_DOCUMENTS_DIR) and its size cap
+    (RAGLAB_MAX_DOCUMENT_BYTES).
     """
     if profile is None:
         profile = profile_from_env()
@@ -403,6 +429,25 @@ def create_app(profile: dict | None = None, *, generator=None,
     if service_token is None:
         service_token = os.environ.get("RAGLAB_SERVICE_TOKEN", "")
     service_token = service_token.strip()
+    if documents_dir is None:
+        documents_dir = os.environ.get("RAGLAB_DOCUMENTS_DIR", "")
+    documents_dir = Path(str(documents_dir).strip() or profiles.PROJECT_DIR / "documents")
+    if max_document_bytes is None:
+        try:
+            max_document_bytes = int(os.environ.get(
+                "RAGLAB_MAX_DOCUMENT_BYTES", 20 * 1024 * 1024))
+        except ValueError:
+            max_document_bytes = 20 * 1024 * 1024
+    # The documents dir is part of the corpus for EVERY profile — the gateway
+    # feed must not care which provider/chunking combination is active.
+    # None means "the default dirs" — materialize them so appending keeps them.
+    documents = docstore_mod.DocumentStore(documents_dir)
+    current_dirs = profile.get("data_dirs")
+    if current_dirs is None:
+        current_dirs = profiles.data_dirs(profile)
+    if str(documents.root) not in current_dirs:
+        profile = {**profile,
+                   "data_dirs": [*current_dirs, str(documents.root)]}
     if cors_origins is None:
         raw = os.environ.get("RAGLAB_CORS_ORIGINS", "*")
         cors_origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
@@ -569,6 +614,13 @@ def create_app(profile: dict | None = None, *, generator=None,
                 raise ServiceError(400, "bad_data_dirs", missing=missing,
                                    hint="paths must exist on the service host")
             candidate["data_dirs"] = [d.strip() for d in request.data_dirs if d.strip()]
+        # the pushed-documents dir is part of every profile's corpus (None
+        # means "the default dirs" — materialize, don't drop them)
+        dirs = candidate.get("data_dirs")
+        if dirs is None:
+            dirs = profiles.data_dirs(candidate)
+        if str(documents.root) not in dirs:
+            candidate["data_dirs"] = [*dirs, str(documents.root)]
         runtime.switch(candidate)
         jobs.status.update(collection=profiles.collection_name(candidate))
         return {"profile": candidate,
@@ -878,6 +930,149 @@ def create_app(profile: dict | None = None, *, generator=None,
                 "questions": questions, "saved_to": str(saved),
                 "note": "lab measurement on " + local.CHROMA_COLLECTION_NAME +
                         " — not a benchmark result"}
+
+    # -- documents (the gateway feed target) ------------------------------------
+    # The service OWNS this store: pushed documents land here, are versioned
+    # by content hash, and join the corpus of every profile (the dir is always
+    # part of data_dirs). Indexing stays explicit: push N documents, then
+    # POST /ingest once (or push with ?index=true for the single-doc case).
+
+    def _chunks_in_active_index(stored_as: str) -> int:
+        from store import get_collection
+        collection = get_collection(runtime.local(), reset=False)
+        found = collection.get(where={"source": stored_as}, include=[])
+        return len(found.get("ids") or [])
+
+    def _document_row(record: dict) -> dict:
+        chunks = _chunks_in_active_index(record["stored_as"])
+        indexed_at = (jobs.status.get("finished_at")
+                      if jobs.status.get("collection") == profiles.collection_name(runtime.profile)
+                      else None)
+        if chunks and indexed_at and indexed_at >= record["updated_at"]:
+            status = "indexed"
+        elif chunks:
+            status = "stale"       # old version's chunks still serve
+        else:
+            status = "pending"     # not in the index yet
+        return docstore_mod.DocumentStore.public_row(
+            record, status=status, chunks=chunks)
+
+    @app.get("/documents")
+    def list_documents():
+        return {"documents": [_document_row(record) for record in documents.list()],
+                "documents_dir": str(documents.root),
+                "index": {"collection": profiles.collection_name(runtime.profile),
+                          "indexed_at": (jobs.status.get("finished_at")
+                                         if jobs.status.get("collection") ==
+                                         profiles.collection_name(runtime.profile)
+                                         else None)}}
+
+    @app.get("/documents/{doc_id}")
+    def get_document(doc_id: str):
+        record = documents.find(doc_id)
+        if not record:
+            raise ServiceError(404, "unknown_document", id=doc_id,
+                               hint="GET /documents lists the known ids")
+        return {"document": _document_row(record)}
+
+    @app.post("/documents")
+    async def push_document(request: Request, index: bool = False, id: str = ""):
+        """Receive one document from the feed.
+
+        Multipart (file upload) or JSON {filename, content, content_encoding}.
+        Same id + identical bytes = no-op; different bytes = new version.
+        `?index=true` starts the background ingest right away (otherwise push
+        a batch, then POST /ingest once — re-ingests are cache-cheap).
+        """
+        from loader import SUPPORTED_EXTENSIONS
+        from starlette.concurrency import run_in_threadpool
+        content_type = (request.headers.get("content-type") or "").split(";")[0].strip()
+        if content_type == "multipart/form-data":
+            form = await request.form()
+            upload = next((value for value in form.values()
+                           if hasattr(value, "read")), None)
+            if upload is None or not (upload.filename or "").strip():
+                raise ServiceError(400, "bad_filename",
+                                   hint="multipart push needs one file field")
+            filename = upload.filename.strip()
+            content = await upload.read()
+            doc_id = id.strip() or filename.rsplit(".", 1)[0]
+        else:
+            try:
+                body = await request.json()
+                payload = DocumentPushRequest(**body)
+            except Exception as exc:                        # noqa: BLE001
+                raise ServiceError(400, "invalid_document_push",
+                                   error=str(exc)[:300]) from None
+            filename = payload.filename.strip()
+            doc_id = (payload.id or filename.rsplit(".", 1)[0]).strip()
+            if payload.content_encoding == "text":
+                content = payload.content.encode("utf-8")
+            elif payload.content_encoding == "base64":
+                import base64
+                try:
+                    content = base64.b64decode(payload.content, validate=True)
+                except Exception as exc:                    # noqa: BLE001
+                    raise ServiceError(400, "invalid_document_content",
+                                       error="content is not valid base64") from exc
+            else:
+                raise ServiceError(400, "invalid_document_content",
+                                   content_encoding=payload.content_encoding,
+                                   allowed=["text", "base64"])
+        if not content:
+            raise ServiceError(400, "invalid_document_content",
+                               error="document is empty")
+        if len(content) > max_document_bytes:
+            raise ServiceError(413, "document_too_large",
+                               bytes=len(content), limit=max_document_bytes)
+        if docstore_mod.extension_of(filename) not in SUPPORTED_EXTENSIONS:
+            raise ServiceError(400, "bad_document_type", filename=filename,
+                               allowed=sorted(SUPPORTED_EXTENSIONS))
+        try:
+            doc_id = docstore_mod.valid_id(doc_id)
+        except ValueError as exc:
+            raise ServiceError(400, "bad_document_id", id=doc_id,
+                               error=str(exc)) from None
+        # everything from here touches disk/sqlite — keep it OFF the event
+        # loop (run_in_threadpool), like every sync endpoint
+        record, action = await run_in_threadpool(
+            documents.save, doc_id, filename, content)
+        notes = []
+        index_started = False
+        if index and action != "unchanged":
+            try:
+                runtime._require_key("embedding")
+                await run_in_threadpool(jobs.start, runtime, reset=False)
+                index_started = True
+            except ServiceError as exc:
+                # the PUSH succeeded; only the indexing could not start (no
+                # key / a job already running) — say so instead of failing
+                notes.append(f"document stored, but indexing did not start: "
+                             f"{exc.payload.get('reason')}")
+        row = await run_in_threadpool(_document_row, record)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=201 if action == "created" else 200,
+                            content={"result": action,
+                                     "document": row,
+                                     "index_started": index_started,
+                                     "notes": notes,
+                                     "ingest": jobs.status,
+                                     "index_hint": "POST /ingest (or push with "
+                                                   "?index=true) to (re)build the "
+                                                   "index"})
+
+    @app.delete("/documents/{doc_id}")
+    def delete_document(doc_id: str):
+        record = documents.find(doc_id)
+        if not record:
+            raise ServiceError(404, "unknown_document", id=doc_id)
+        from store import purge_source
+        removed = purge_source(runtime.local(), record["stored_as"])
+        documents.delete(doc_id)
+        return {"status": "deleted", "id": doc_id,
+                "chunks_removed": removed,
+                "note": "chunks purged from every local collection; no "
+                        "re-ingest needed"}
 
     # -- diagnostics ---------------------------------------------------------------
 
