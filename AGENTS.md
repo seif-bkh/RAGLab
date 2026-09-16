@@ -207,8 +207,17 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35043570115 on HEAD `b5c8948` (offline suite: 223 unittests
-  — 180 core + 43 service — + 96 checks + inspect + pip check).
+- **CI green**: run 35045254163 on HEAD `69fba34` (offline suite: 224 unittests
+  — 180 core + 46 service — + 96 checks + inspect + pip check).
+- **RAGLAB_TOKEN alias** (69fba34, service 1.2.3): RAGLAB_SERVICE_TOKEN takes
+  precedence, RAGLAB_TOKEN is the fallback — a gateway deployment that plumbed
+  the shorter name no longer silently runs open. The gateway team's claim that
+  RAGLAB_TOKEN was "plumbed through .env.example, .env.docker.example and
+  docker-compose.yml but never read" was factually wrong for THIS repo
+  (.env.docker.example does not exist here; no file contained RAGLAB_TOKEN;
+  the backend has read RAGLAB_SERVICE_TOKEN since 48bb30d) — their plumbing
+  lives in their own repo. .env.example gained an optional service section
+  documenting the token + header + alias.
 - **Stale-hint + filename hygiene** (b5c8948, service 1.2.2): ingest job
   errors translate the store layer's CLI remedy to
   "POST /ingest?reset=true (this service)"; POST /documents rejects
