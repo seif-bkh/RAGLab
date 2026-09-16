@@ -207,8 +207,22 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35040363379 on HEAD `2ce40b4` (offline suite: 222 unittests
-  — 180 core + 42 service — + 96 checks + inspect + pip check).
+- **CI green**: run 35043570115 on HEAD `b5c8948` (offline suite: 223 unittests
+  — 180 core + 43 service — + 96 checks + inspect + pip check).
+- **Stale-hint + filename hygiene** (b5c8948, service 1.2.2): ingest job
+  errors translate the store layer's CLI remedy to
+  "POST /ingest?reset=true (this service)"; POST /documents rejects
+  filenames with path separators/control chars (400 bad_filename, both JSON
+  and multipart). Field forensics that shaped it: the user's stale error was
+  an index built with chunk size 440 in an earlier session vs the restarted
+  default 220 (size is NOT part of the collection name, so the same
+  collection is reused and the fingerprint guard fires — correct); the
+  "[tarif.md](http://tarif.md)" in their paste was chat-display
+  linkification only (content hash proved the request was clean) — but
+  copy-from-chat corruption is real on that device: prefer single-line,
+  hand-typed commands or local_front. Also: POST /profile drops the injected
+  test generator (caches reset on switch) — tests that switch profiles and
+  then /answer need a real key or must assert on job outcomes instead.
 - **Index sealed during ingest + never a plain-text 500** (2ce40b4, service
   1.2.1, from a field report): while the ingest job runs, /search, /answer,
   /evaluate, POST /profile and DELETE /documents/{id} return
