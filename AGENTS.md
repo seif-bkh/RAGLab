@@ -207,8 +207,18 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35090005268 on HEAD `61243b0` (offline suite: 224 unittests
-  + 96 checks + inspect + pip check; docs-only — COOKBOOK.md added).
+- **CI green**: run 35091222023 on HEAD `392fae2` (offline suite: 226 unittests
+  — 180 core + 46 service — + 96 checks + inspect + pip check).
+- **GET /config = console self-description** (392fae2, service 1.2.4): a
+  gateway console had rendered RAGLab display-only ("configures itself via
+  CLI") with chat/embedding/dimension "non communiqué" — wrong premise
+  (everything is HTTP-editable) plus no flat endpoint to probe. GET /config
+  now answers chat_model + embedding_model (slot_display form),
+  vector_dimension (peek one stored embedding; null until an index exists;
+  skip the peek while an ingest runs), editable {profile=switching flag,
+  api_keys/documents/index=true}, the full profile, key presence, a
+  capabilities map (exact call per mutation) and docs pointers. Front smoke
+  +1 (24 checks).
 - **COOKBOOK.md** (61243b0): exact-request companion for whoever builds the
   settings UI — readiness probe (GET /profile → switching; old compose pins
   0 → 403), the read assembly, every mutation with side effects (answer
