@@ -207,8 +207,17 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35078365614 on HEAD `224749d` (offline suite: 224 unittests
-  + 96 checks + inspect + pip check; docs + compose change).
+- **CI green**: run 35090005268 on HEAD `61243b0` (offline suite: 224 unittests
+  + 96 checks + inspect + pip check; docs-only — COOKBOOK.md added).
+- **COOKBOOK.md** (61243b0): exact-request companion for whoever builds the
+  settings UI — readiness probe (GET /profile → switching; old compose pins
+  0 → 403), the read assembly, every mutation with side effects (answer
+  switch NEVER needs a reindex; embedding/chunking does; retrieval
+  out-of-range is silently ignored → validate client-side), which-build
+  table (?reset=true vs not), worked sequences, editing-time failure table.
+  Gotcha documented: ?index=true only starts the job on created/replaced —
+  never on an unchanged push. Feed order for AI agents: CONTRACT.md
+  (behavior) → COOKBOOK.md (exact requests) → FRONTEND.md (screens/UX).
 - **FRONTEND.md + app-control unlock** (224749d): docker-compose now ships
   RAGLAB_ALLOW_PROFILE_SWITCH=1 WITH RAGLAB_SERVICE_TOKEN required
   (change-me placeholder) — the app console can drive everything
