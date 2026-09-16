@@ -1,7 +1,7 @@
 # RAGLab service — HTTP contract
 
 **Audience:** the fullstack team building against this service.
-**Service version:** `1.2.1` (reported by `GET /health` → `version`).
+**Service version:** `1.2.2` (reported by `GET /health` → `version`).
 **Machine-readable schema:** FastAPI generates OpenAPI 3 at `/openapi.json` and
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
@@ -196,7 +196,7 @@ The endpoint your UI polls. No secrets — key values never appear, only
 `set`/`missing` per env var.
 
 ```json
-{"status": "ok", "version": "1.2.1",
+{"status": "ok", "version": "1.2.2",
  "profile": {"embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
              "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
              "chunking": {"mode": "restructure", "size": 220, "overlap": 40},
@@ -336,6 +336,9 @@ Poll `GET /ingest/status` (1–2 s interval) — the same object also appears in
 States: `idle` (never run) → `running` → `done` (with `stored` count) |
 `error` (with a safe-redacted `error` string). `reset=true` deletes the
 collection first (clean rebuild — required after fingerprint mismatches).
+A stale-fingerprint `error` (settings changed since the index was built,
+e.g. a different chunk size in a previous session) names the remedy as
+`POST /ingest?reset=true`.
 Duration: minutes, proportional to corpus size and cache state.
 
 ### 3.9 `POST /search` — retrieval only (no chat model)
@@ -582,7 +585,7 @@ no re-ingest:
 | `bad_data_dirs` | 400 | `/profile` | Dir(s) missing on the service host (list in body). | Paths must exist where the service runs, not in the browser. |
 | `bad_document_id` | 400 | `/documents` | Id not in `[A-Za-z0-9][A-Za-z0-9._-]{0,79}` (also the path-traversal guard). | Use a safe id. |
 | `bad_document_type` | 400 | `/documents` | Extension not `.txt/.md/.pdf/.docx`. | Convert first. |
-| `bad_filename` | 400 | `/documents` | Multipart push without a named file field. | Send one file field. |
+| `bad_filename` | 400 | `/documents` | Filename with path separators/control characters, or a multipart push without a named file field. A filename is a name, not a path. | Send a plain name like `rates.md`. |
 | `invalid_document_content` | 400 | `/documents` | Empty content, bad base64, or unknown `content_encoding`. | — |
 | `invalid_document_push` | 400 | `/documents` | Body is neither valid JSON nor a valid push payload. | — |
 | `document_too_large` | 413 | `/documents` | Bytes over `RAGLAB_MAX_DOCUMENT_BYTES` (limit in body). | Split or raise the cap. |

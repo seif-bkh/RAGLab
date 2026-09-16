@@ -104,7 +104,7 @@ from scrub import scrub_pii
 
 import docstore as docstore_mod
 
-SERVICE_VERSION = "1.2.1"
+SERVICE_VERSION = "1.2.2"
 
 
 # ---------------------------------------------------------------------------
@@ -320,8 +320,11 @@ class IngestJobs:
         except SystemExit as exc:                       # embedder's loud missing-key exit
             self.status.update(state="error", finished_at=_now(), error=str(exc))
         except Exception as exc:                        # noqa: BLE001 — the job must report, not die
-            self.status.update(state="error", finished_at=_now(),
-                               error=safe_error(exc))
+            # The store layer speaks CLI ("raglab ingest --reset"); in here
+            # the remedy is an HTTP call — say that instead.
+            message = str(safe_error(exc)).replace(
+                "raglab ingest --reset", "POST /ingest?reset=true (this service)")
+            self.status.update(state="error", finished_at=_now(), error=message)
 
 
 def _now() -> str:
@@ -1097,6 +1100,14 @@ def create_app(profile: dict | None = None, *, generator=None,
         if len(content) > max_document_bytes:
             raise ServiceError(413, "document_too_large",
                                bytes=len(content), limit=max_document_bytes)
+        if ("/" in filename or "\\" in filename
+                or any(ord(ch) < 32 for ch in filename) or len(filename) > 200):
+            # stored_as is built from the validated ID, so this is metadata
+            # hygiene + parser selection, not a traversal risk — still, a
+            # filename is a NAME: no path separators, no control characters
+            raise ServiceError(400, "bad_filename", filename=filename[:100],
+                               hint="a filename is a name, not a path — "
+                                    "no slashes, no control characters")
         if docstore_mod.extension_of(filename) not in SUPPORTED_EXTENSIONS:
             raise ServiceError(400, "bad_document_type", filename=filename,
                                allowed=sorted(SUPPORTED_EXTENSIONS))

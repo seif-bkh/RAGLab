@@ -819,6 +819,8 @@ class DocumentsApiTest(unittest.TestCase):
             ({"id": "a b", "filename": "x.md", "content": "hi there"}, "bad_document_id"),
             ({"filename": "x.exe", "content": "hi"}, "bad_document_type"),
             ({"filename": "noext", "content": "hi"}, "bad_document_type"),
+            ({"filename": "a/b.md", "content": "hi"}, "bad_filename"),
+            ({"filename": "../evil.md", "content": "hi"}, "bad_filename"),
             ({"filename": "x.md", "content": "!!!", "content_encoding": "base64"},
              "invalid_document_content"),
             ({"filename": "x.md", "content": "x" * 5000}, "document_too_large"),
@@ -832,6 +834,33 @@ class DocumentsApiTest(unittest.TestCase):
                              headers={"content-type": "application/json"})
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.json()["detail"]["reason"], "invalid_document_push")
+
+    def test_stale_index_error_names_the_http_remedy(self):
+        """The field case: an earlier session ingested with different chunk
+        settings (same collection name — size is not part of it), so a plain
+        re-ingest hits the fingerprint guard. The job error must tell the
+        caller to POST /ingest?reset=true, not run a CLI command."""
+        switched = self.client.post("/profile", json={"chunking": {"size": 80}})
+        self.assertEqual(switched.status_code, 200, switched.text)
+        self.assertEqual(switched.json()["profile"]["chunking"]["size"], 80)
+        accepted = self.client.post("/ingest")            # no reset -> stale
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        status = self._wait_ingest()
+        self.assertEqual(status["state"], "error", status)
+        self.assertIn("STALE", status["error"])
+        self.assertIn("POST /ingest?reset=true", status["error"])
+        self.assertNotIn("raglab ingest --reset", status["error"])
+        # ... and the stated remedy actually works
+        self.client.post("/ingest?reset=true")
+        status = self._wait_ingest()
+        self.assertEqual(status["state"], "done", status)
+        self.assertGreater(status["stored"], 0, status)
+        # (no /answer here: POST /profile dropped the injected generator, and
+        #  a real one would need a real key — the job outcome is the assertion)
+        # restore the class profile (size 60) for tests that run after this
+        self.client.post("/profile", json={"chunking": {"size": 60}})
+        self.client.post("/ingest?reset=true")
+        self._wait_ingest()
 
     def test_unknown_document_404(self):
         r = self.client.get("/documents/nope")
