@@ -6,7 +6,8 @@
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
 When this doc and `/openapi.json` disagree, `/openapi.json` is truth for field
-names; this doc is truth for behavior.
+names; this doc is truth for behavior. **Designing the frontend?** The
+screen-by-screen UX blueprint built on this contract is `raglab/FRONTEND.md`.
 
 **What the service is:** a grounded Q&A engine over a fixed document corpus.
 You send a question; it retrieves chunks from its local vector index, asks a
@@ -725,7 +726,8 @@ Config is environment-only at boot (12-factor). Full table + Docker notes:
 `RAGLAB_ANSWER_PROVIDER/MODEL`, `RAGLAB_CHUNKING_MODE/SIZE/OVERLAP`,
 `RAGLAB_TOP_K`, `RAGLAB_RETRIEVAL_MODE`, `RAGLAB_LANG_FILTER`,
 `RAGLAB_NEIGHBOR_RADIUS`, `RAGLAB_DATA_DIRS`,
-`RAGLAB_ALLOW_PROFILE_SWITCH` (default `1` locally, compose pins `0`),
+`RAGLAB_ALLOW_PROFILE_SWITCH` (default `1`; compose ships `1` with the
+service token required — keep them together),
 `RAGLAB_SERVICE_TOKEN` (require `X-Service-Token` on every request; `RAGLAB_TOKEN` is an accepted alias),
 `RAGLAB_DOCUMENTS_DIR` (the pushed-documents store; volume it in Docker),
 `RAGLAB_MAX_DOCUMENT_BYTES` (per-push cap, default 20 MB),

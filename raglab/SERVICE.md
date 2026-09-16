@@ -10,7 +10,9 @@ rules exist.
 **Building a client against this service?** The full HTTP contract for client
 teams — request/response schemas with real examples, the state model, the
 error catalog, and integration recipes — is `raglab/CONTRACT.md`. This file
-is the operator's/deployer's doc.
+is the operator's/deployer's doc. **Designing the app's UI?** The
+screen-by-screen frontend/UX blueprint (with the permission matrix) is
+`raglab/FRONTEND.md`.
 
 ```
             ┌──────────────┐
@@ -173,7 +175,7 @@ NVIDIA `nvidia/nemotron-3-embed-1b` embeddings + xKiro
 | `RAGLAB_DATA_DIRS` | comma-separated corpus dirs | `../docs + raglab/data/` |
 | `RAGLAB_DOCUMENTS_DIR` | the pushed-documents store (always part of the corpus; volume it in Docker) | `raglab/documents/` |
 | `RAGLAB_MAX_DOCUMENT_BYTES` | per-push size cap | `20971520` (20 MB) |
-| `RAGLAB_ALLOW_PROFILE_SWITCH` | enable `POST /profile` | `1` (docker-compose pins `0`) |
+| `RAGLAB_ALLOW_PROFILE_SWITCH` | enable `POST /profile` | `1` (compose ships `1` with the token required — the app console needs it) |
 | `RAGLAB_SERVICE_TOKEN` | require `X-Service-Token` on every request (constant-time check, `401 unauthorized` otherwise); `RAGLAB_TOKEN` is an accepted alias | unset = open (local/dev) |
 | `RAGLAB_CORS_ORIGINS` | comma-separated allowed origins | `*` |
 | `RAGLAB_CACHE_DIR` | relocate embedding/answer caches (Docker volume) | next to the code |

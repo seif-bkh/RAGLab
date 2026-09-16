@@ -21,9 +21,14 @@ services:
       # RAGLAB_CHUNKING_MODE: restructure
       # RAGLAB_TOP_K: "5"
       RAGLAB_CACHE_DIR: /app/raglab/caches   # embedding/answer caches -> volume
-      RAGLAB_ALLOW_PROFILE_SWITCH: "0"       # 1 to allow POST /profile at runtime
-      # RAGLAB_SERVICE_TOKEN: "change-me"    # require X-Service-Token on every request
-                                              # (RAGLAB_TOKEN is an accepted alias)
+      RAGLAB_ALLOW_PROFILE_SWITCH: "1"       # the app's console needs POST /profile
+                                             # (models/chunking/retrieval at runtime);
+                                             # keep RAGLAB_SERVICE_TOKEN set and the
+                                             # service behind the gateway when enabled
+      RAGLAB_SERVICE_TOKEN: "change-me-before-any-real-deployment"   # X-Service-Token on
+                                              # every request (RAGLAB_TOKEN is an
+                                              # accepted alias); REQUIRED now that
+                                              # profile switching is enabled
     volumes:
       - raglab-index:/app/raglab/chroma_db
       - raglab-embed-cache:/app/raglab/caches
