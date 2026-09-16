@@ -207,8 +207,17 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35045254163 on HEAD `69fba34` (offline suite: 224 unittests
-  — 180 core + 46 service — + 96 checks + inspect + pip check).
+- **CI green**: run 35078365614 on HEAD `224749d` (offline suite: 224 unittests
+  + 96 checks + inspect + pip check; docs + compose change).
+- **FRONTEND.md + app-control unlock** (224749d): docker-compose now ships
+  RAGLAB_ALLOW_PROFILE_SWITCH=1 WITH RAGLAB_SERVICE_TOKEN required
+  (change-me placeholder) — the app console can drive everything
+  (models/chunking/retrieval/corpus/keys/documents/ingest/evals) like
+  local_front. raglab/FRONTEND.md is the UI/UX blueprint for the fullstack
+  team: capability map, shell + health-driven status bar, screen specs with
+  API mappings, cross-cutting rules (refusals-are-200s, sealed mode during
+  ingest, error-envelope handler, no fake progress, RTL), permission matrix
+  (BFF proxy recommended; viewer/editor/admin roles), research references.
 - **RAGLAB_TOKEN alias** (69fba34, service 1.2.3): RAGLAB_SERVICE_TOKEN takes
   precedence, RAGLAB_TOKEN is the fallback — a gateway deployment that plumbed
   the shorter name no longer silently runs open. The gateway team's claim that
