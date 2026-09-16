@@ -129,6 +129,12 @@ class ServiceTest(unittest.TestCase):
 
     # -- informational ------------------------------------------------------
 
+    def test_config_reports_switching_disabled(self):
+        body = self.client.get("/config").json()
+        self.assertFalse(body["editable"]["profile"])
+        self.assertIn("disabled", body["switching"])
+        self.assertTrue(body["editable"]["documents"])   # feed is always editable
+
     def test_root_and_health(self):
         body = self.client.get("/health").json()
         self.assertEqual(self.client.get("/").status_code, 200)
@@ -476,6 +482,33 @@ class ConsoleEndpointsTest(unittest.TestCase):
         # restore, so any test running after this one keeps the ingested profile
         self.client.post("/profile", json={"chunking": {"mode": "restructure"}})
 
+
+    def test_config_endpoint_self_reports_and_declares_editability(self):
+        response = self.client.get("/config")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        # the flat fields a console displays (the French UI's three rows)
+        self.assertEqual(body["chat_model"],
+                         "nvidia/nemotron-3.5-lightning-30b-a3b")
+        self.assertEqual(body["embedding_model"],
+                         "huggingface/Qwen/Qwen3-Embedding-0.6B")
+        self.assertEqual(body["vector_dimension"], 8)      # the fake embedder
+        self.assertTrue(body["editable"]["profile"])       # switching enabled here
+        self.assertTrue(body["editable"]["api_keys"])
+        self.assertEqual(body["profile"]["chunking"]["mode"], "size")
+        self.assertIn("POST /profile", json.dumps(body["capabilities"]))
+        self.assertIn("raglab/COOKBOOK.md", json.dumps(body["docs"]))
+        # a model switch is reflected immediately in the self-report
+        switched = self.client.post("/profile", json={
+            "answer": {"provider": "kira", "model": "glm-5.3-free"}})
+        self.assertEqual(switched.status_code, 200, switched.text)
+        body = self.client.get("/config").json()
+        self.assertEqual(body["chat_model"], "kira/glm-5.3-free")
+        # restore the class profile
+        back = self.client.post("/profile", json={
+            "answer": {"provider": "nvidia",
+                       "model": "nvidia/nemotron-3.5-lightning-30b-a3b"}})
+        self.assertEqual(back.status_code, 200, back.text)
 
     def test_profile_switch_honors_custom_model_ids(self):
         # A custom (unregistered) model ID must be applied verbatim — the bug

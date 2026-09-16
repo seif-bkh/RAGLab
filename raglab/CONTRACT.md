@@ -1,7 +1,7 @@
 # RAGLab service — HTTP contract
 
 **Audience:** the fullstack team building against this service.
-**Service version:** `1.2.3` (reported by `GET /health` → `version`).
+**Service version:** `1.2.4` (reported by `GET /health` → `version`).
 **Machine-readable schema:** FastAPI generates OpenAPI 3 at `/openapi.json` and
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
@@ -191,6 +191,39 @@ fixture (a one-file corpus, stubbed embedder); field names and shapes are
 exact — numeric values are illustrative where the fixture's are meaningless
 (e.g. similarity 0.0 from the stub embedder).
 
+### 3.0 `GET /config` — self-description for consoles/adapters
+One call a generic console can render directly: the flat fields it displays
+(`chat_model`, `embedding_model`, `vector_dimension` — `null` until an index
+exists), editability (`editable.profile` follows the switching flag; keys,
+documents and index are always editable), the full profile, and a
+`capabilities` map naming the exact call for every mutation. Nothing about
+this service needs a CLI — if a console claims "configured via CLI", it is
+reading an outdated premise.
+
+```json
+{"service": "raglab", "version": "1.2.4",
+ "chat_model": "xkiro/qwen/qwen3.8-max:free",
+ "embedding_model": "nvidia/nvidia/nemotron-3-embed-1b",
+ "vector_dimension": 2048,
+ "editable": {"profile": true, "api_keys": true, "documents": true, "index": true},
+ "switching": "enabled",
+ "profile": {"...": "..."},
+ "collection": "raglab_app_nvidia_nemotron_3_embed_1b_restructure",
+ "pipeline": "supported pipeline — the same model pair main.py answer uses",
+ "index": {"count": 346},
+ "keys": {"NVIDIA_API_KEY": "set", "XKIRO_API_KEY": "set"},
+ "capabilities": {"switch_models": "POST /profile {embedding|answer: {provider, model}}",
+                  "chunking": "POST /profile {chunking: {mode, size, overlap}}",
+                  "retrieval": "POST /profile {retrieval: {top_k, mode, lang_filter, neighbor_radius}}",
+                  "corpus_dirs": "POST /profile {data_dirs: [...]}",
+                  "api_keys": "GET/POST/DELETE /keys",
+                  "documents": "GET/POST/DELETE /documents",
+                  "reindex": "POST /ingest (reset=true for a clean rebuild)"},
+ "docs": {"openapi": "/openapi.json", "interactive": "/docs",
+          "contract": "raglab/CONTRACT.md", "cookbook": "raglab/COOKBOOK.md",
+          "frontend": "raglab/FRONTEND.md"}}
+```
+
 ### 3.1 `GET /` — service banner
 Returns `{"service": "raglab", "version", "docs", "health", "profile", "models", "endpoints"}`. Useful as a ping.
 
@@ -199,7 +232,7 @@ The endpoint your UI polls. No secrets — key values never appear, only
 `set`/`missing` per env var.
 
 ```json
-{"status": "ok", "version": "1.2.3",
+{"status": "ok", "version": "1.2.4",
  "profile": {"embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
              "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
              "chunking": {"mode": "restructure", "size": 220, "overlap": 40},

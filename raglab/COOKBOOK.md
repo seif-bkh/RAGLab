@@ -7,6 +7,10 @@ and `FRONTEND.md` (screens/UX). Every request below is real; every response
 shape is exact. Auth first: if the deployment sets a token, **every** request
 needs the `X-Service-Token` header.
 
+**One-call probe:** `GET /config` self-reports everything a console needs —
+`chat_model`, `embedding_model`, `vector_dimension`, editability flags and a
+`capabilities` map naming the call for every mutation. Render that first.
+
 **Golden rule of this agent's config:** the profile lives in the SERVICE.
 The UI never stores config locally — it reads it, edits it via `POST
 /profile`, and derives consequences (collection change → offer reindex)

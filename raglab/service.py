@@ -21,6 +21,8 @@ Endpoints:
     GET  /health          liveness + profile + index + key presence (no secrets)
     GET  /models          registered models per provider
     GET  /profile         the active profile (embedding/answer/chunking/retrieval)
+    GET  /config          self-description for consoles: models, vector dimension,
+                          editability and the capabilities map (what to call to change it)
     POST /profile         switch provider/model/chunking/retrieval/corpus at runtime
                           (only when RAGLAB_ALLOW_PROFILE_SWITCH=1)
     GET  /keys            known API-key env vars, descriptions, masked presence
@@ -104,7 +106,7 @@ from scrub import scrub_pii
 
 import docstore as docstore_mod
 
-SERVICE_VERSION = "1.2.3"
+SERVICE_VERSION = "1.2.4"
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +598,60 @@ def create_app(profile: dict | None = None, *, generator=None,
                 "pipeline": profiles.pipeline_marker(runtime.profile),
                 "switching": "enabled" if allow_profile_switch else
                              "disabled (set RAGLAB_ALLOW_PROFILE_SWITCH=1)"}
+
+    @app.get("/config")
+    def get_config():
+        """Self-description for consoles/adapters: WHAT this agent runs on,
+        and HOW to change it — flat fields first (chat model, embedding
+        model, vector dimension), then the full profile and the edit
+        capabilities. Everything here is editable over HTTP; nothing about
+        this service requires a CLI."""
+        keys = {}
+        for slot, registry in (("embedding", profiles.EMBEDDING_PROVIDERS),
+                               ("answer", profiles.ANSWER_PROVIDERS)):
+            envs = registry[runtime.profile[slot]["provider"]].get("key_envs", ())
+            for env_name in envs:
+                keys[env_name] = "set" if profiles.first_set_env((env_name,))[1] else "missing"
+        dimension = None
+        count, _stored_fp = runtime.index_info()
+        if count and jobs.status.get("state") != "running":
+            try:      # peek one stored embedding; unknown until the index exists
+                from store import get_collection
+                peek = get_collection(runtime.local(), reset=False).get(
+                    limit=1, include=["embeddings"])
+                embeddings = peek.get("embeddings") if isinstance(peek, dict) else None
+                if embeddings is not None and len(embeddings):
+                    dimension = len(embeddings[0])
+            except Exception:                     # noqa: BLE001 — dimension is best-effort
+                dimension = None
+        return {"service": "raglab", "version": SERVICE_VERSION,
+                "chat_model": profiles.slot_display(runtime.profile["answer"]),
+                "embedding_model": profiles.slot_display(runtime.profile["embedding"]),
+                "vector_dimension": dimension,
+                "editable": {"profile": allow_profile_switch,
+                             "api_keys": True, "documents": True, "index": True},
+                "switching": ("enabled" if allow_profile_switch else
+                              "disabled (set RAGLAB_ALLOW_PROFILE_SWITCH=1)"),
+                "profile": runtime.profile,
+                "collection": profiles.collection_name(runtime.profile),
+                "pipeline": profiles.pipeline_marker(runtime.profile),
+                "index": {"count": count},
+                "keys": keys,
+                "capabilities": {
+                    "switch_models":
+                        "POST /profile {embedding|answer: {provider, model}}",
+                    "chunking":
+                        "POST /profile {chunking: {mode, size, overlap}}",
+                    "retrieval":
+                        "POST /profile {retrieval: {top_k, mode, lang_filter, neighbor_radius}}",
+                    "corpus_dirs": "POST /profile {data_dirs: [...]}",
+                    "api_keys": "GET/POST/DELETE /keys",
+                    "documents": "GET/POST/DELETE /documents",
+                    "reindex": "POST /ingest (reset=true for a clean rebuild)"},
+                "docs": {"openapi": "/openapi.json", "interactive": "/docs",
+                         "contract": "raglab/CONTRACT.md",
+                         "cookbook": "raglab/COOKBOOK.md",
+                         "frontend": "raglab/FRONTEND.md"}}
 
     # -- profile switching (optional) ----------------------------------------
 

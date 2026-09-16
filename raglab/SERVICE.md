@@ -83,6 +83,7 @@ docker compose up --build            # http://localhost:8000/docs
 | GET | `/health` | liveness, active profile, index count + fingerprint/tokenizer match, which keys are set (presence only, never values) |
 | GET | `/models` | registered models per provider (embedding + answer slots, + the key env each one needs) |
 | GET | `/profile` | the active profile (embedding/answer/chunking/retrieval/corpus), its collection name, switching state |
+| GET | `/config` | self-description for consoles: chat/embedding models, vector dimension, editability + capabilities map — the probe a generic adapter renders |
 | POST | `/profile` | switch provider+model per slot (a model you name explicitly is used verbatim — custom IDs included; a provider-only switch preselects and never carries a model across providers), chunking (`mode`/`size`/`overlap`), retrieval knobs, corpus dirs — **only when `RAGLAB_ALLOW_PROFILE_SWITCH=1`** |
 | GET | `/keys` | the known key env vars, what each unlocks, masked presence (first 8 chars, never the value) |
 | POST | `/keys` | set a key in the service process (`{key_env, value, persist?}`; placeholders/quotes/spaces rejected; `persist=true` also writes the service host's `raglab/.env`) |

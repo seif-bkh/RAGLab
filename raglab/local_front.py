@@ -1120,6 +1120,14 @@ def run_suite(api: Api, *, spend: bool = True) -> tuple[int, int]:
                 status == 200 and str(profile.get("collection", "")).startswith("raglab_app_")
                 and "switching" in profile, f"status={status}")
 
+    status, config = api.get("/config")
+    suite.check("GET /config self-reports models + editability",
+                status == 200 and isinstance(config, dict)
+                and isinstance(config.get("chat_model"), str)
+                and isinstance(config.get("embedding_model"), str)
+                and isinstance(config.get("editable"), dict)
+                and "capabilities" in config, f"status={status}")
+
     status, body = api.post("/profile", payload={})
     if status == 403 and reason_of(body) == "profile_switching_disabled":
         suite.check("POST /profile refuses switching when disabled (403)", True)
