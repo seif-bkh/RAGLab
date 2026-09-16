@@ -117,9 +117,16 @@ Semantics worth knowing before you integrate:
   `[EMAIL]`/`[PHONE]`/`[RIB]`/`[CIN]` placeholders; the gate still validates
   the raw verbatim text. Diagnostics (`/inspect`, `/chunks/search`) show raw
   text on purpose (admin-facing).
+* **One writer at a time, strictly.** While the ingest job runs, `/search`,
+  `/answer`, `/evaluate`, `POST /profile` and `DELETE /documents/{id}` return
+  `409 ingest_in_progress` (poll `/ingest/status`; greetings still work).
+  No request ever races the job's writes.
 * **Errors**: `401 unauthorized` (missing `X-Service-Token` when
   `RAGLAB_SERVICE_TOKEN` is set), `409 empty_index` (POST `/ingest` first),
+  `409 ingest_in_progress` (the job is running — poll, then retry),
   `409 retrieval_refused` (stale index vs current settings — rebuild it),
+  `500 internal_error` (the safety net: an unhandled exception still comes
+  back as JSON, never FastAPI's plain-text 500; the log has the traceback),
   `502 provider_error`, `502 provider_unreachable` (network-layer failure —
   DNS/proxy/timeout, incl. the live free-price check on the first pinned-xKiro
   `/answer`), `503 missing_api_key` (says which env var),

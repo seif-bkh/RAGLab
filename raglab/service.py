@@ -104,7 +104,7 @@ from scrub import scrub_pii
 
 import docstore as docstore_mod
 
-SERVICE_VERSION = "1.2.0"
+SERVICE_VERSION = "1.2.1"
 
 
 # ---------------------------------------------------------------------------
@@ -501,8 +501,32 @@ def create_app(profile: dict | None = None, *, generator=None,
         return JSONResponse(status_code=exc.status_code,
                             content={"detail": _redact(exc.payload)})
 
+    async def internal_error_handler(request: Request, exc: Exception):
+        """The safety net: NO unhandled exception may ever surface as
+        FastAPI's plain-text 'Internal Server Error'. Anything that escapes
+        a handler comes back as this JSON envelope (reason=internal_error,
+        safe-redacted message) — the uvicorn log keeps the traceback."""
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"detail": _redact(
+            {"reason": "internal_error", "error": safe_error(exc),
+             "hint": "unexpected server-side error; the service log has the "
+                     "traceback — report it with the timestamp"})})
+
     # FastAPI needs the handler registered for the custom class:
     app.add_exception_handler(ServiceError, service_error_handler)
+    app.add_exception_handler(Exception, internal_error_handler)
+
+
+    def _reject_during_ingest():
+        """One writer at a time: while the ingest job is writing the store,
+        reads and collection mutations are refused with a clear 409 instead
+        of racing sqlite underneath (undefined behavior, observed as a bare
+        500 on a real device)."""
+        if jobs.status.get("state") == "running":
+            raise ServiceError(409, "ingest_in_progress",
+                               started_at=jobs.status.get("started_at"),
+                               hint="the index is being (re)built; poll "
+                                    "GET /ingest/status and retry when done")
 
     # -- informational ------------------------------------------------------
 
@@ -573,6 +597,7 @@ def create_app(profile: dict | None = None, *, generator=None,
         if not allow_profile_switch:
             raise ServiceError(403, "profile_switching_disabled",
                                hint="start the service with RAGLAB_ALLOW_PROFILE_SWITCH=1")
+        _reject_during_ingest()   # never swap the profile under a running job
         candidate = {key: (dict(value) if isinstance(value, dict) else value)
                      for key, value in runtime.profile.items()}
         notes = []
@@ -668,6 +693,7 @@ def create_app(profile: dict | None = None, *, generator=None,
             raise ServiceError(400, "bad_lang_filter", lang_filter=request.lang_filter)
         if request.query_lang not in (None, "ar", "fr", "en"):
             raise ServiceError(400, "bad_query_lang", query_lang=request.query_lang)
+        _reject_during_ingest()
         local = runtime.local()
         embedder = runtime.embedder()
         collection = runtime.collection()
@@ -710,10 +736,12 @@ def create_app(profile: dict | None = None, *, generator=None,
                                    allowed=sorted(v for v in allowed if v))
         greeting = profiles.greeting_reply(request.question, language=request.query_lang)
         if greeting is not None:
+            # smalltalk never touches the index — it works during an ingest
             language, text = greeting
             return {"status": "greeting", "reason": "smalltalk", "answer": text,
                     "language": language, "inference_performed": False,
                     "model": "(none — answered locally)", "claims": [], "sources": []}
+        _reject_during_ingest()      # reads race the ingest job's writes
         local = runtime.local()
         embedder = runtime.embedder()
         collection = runtime.collection()
@@ -931,6 +959,7 @@ def create_app(profile: dict | None = None, *, generator=None,
     @app.post("/evaluate")
     def evaluate(request: EvaluateRequest):
         from evaluate import load_question_set, run_evaluation, save_run
+        _reject_during_ingest()
         path = Path(request.questions)
         if not path.is_absolute():
             path = profiles.PROJECT_DIR / request.questions
@@ -982,6 +1011,11 @@ def create_app(profile: dict | None = None, *, generator=None,
         return len(found.get("ids") or [])
 
     def _document_row(record: dict) -> dict:
+        if jobs.status.get("state") == "running":
+            # the job is (re)building the index right now: chunk counts are
+            # in flux and reading the store would race the writer
+            return docstore_mod.DocumentStore.public_row(
+                record, status="indexing", chunks=0)
         chunks = _chunks_in_active_index(record["stored_as"])
         indexed_at = (jobs.status.get("finished_at")
                       if jobs.status.get("collection") == profiles.collection_name(runtime.profile)
@@ -1104,6 +1138,7 @@ def create_app(profile: dict | None = None, *, generator=None,
         record = documents.find(doc_id)
         if not record:
             raise ServiceError(404, "unknown_document", id=doc_id)
+        _reject_during_ingest()
         from store import purge_source
         removed = purge_source(runtime.local(), record["stored_as"])
         documents.delete(doc_id)

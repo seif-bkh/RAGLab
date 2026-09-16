@@ -960,5 +960,159 @@ class ProviderFailureTest(unittest.TestCase):
             sys.modules.pop("sentence_transformers", None)
 
 
+class IngestConcurrencyTest(unittest.TestCase):
+    """One writer at a time: while the ingest job runs, index reads and
+    collection mutations come back as 409 ingest_in_progress (not a bare 500
+    from racing sqlite), greetings still work, and document rows report
+    'indexing' without touching the store."""
+
+    class _SlowEmbedder:
+        def __init__(self, model_name, device=None):
+            self.prompts = {"query": ""}
+
+        @staticmethod
+        def get_embedding_dimension():
+            return 8
+
+        def encode(self, texts, batch_size=None, normalize_embeddings=None,
+                   show_progress_bar=None, convert_to_numpy=None, **kwargs):
+            time.sleep(1.5)          # stretch the job across the assertions
+            rows = []
+            for text in texts:
+                row = [0.0] * 8
+                row[hash(text) % 8] = 1.0
+                rows.append(row)
+            return rows
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        (cls.tmp / "note.md").write_text(CORPUS, encoding="utf-8")
+        profile = _service_profile(cls.tmp)
+        overrides = {"CHROMA_DIR": cls.tmp / "chroma",
+                     "EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+                     "NVIDIA_EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+                     "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
+                     "RESULTS_DIR": cls.tmp}
+        local = build_lab_config(profile)
+        for key, value in overrides.items():
+            setattr(local, key, value)
+        generator = AnswerGenerator(local, client=_FakeChatClient(),
+                                    approved_models=(PROFILE_MODEL,))
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = cls._SlowEmbedder
+        cls.client = TestClient(service.create_app(
+            profile, generator=generator, allow_profile_switch=True,
+            config_overrides=overrides,
+            documents_dir=cls.tmp / "documents"))
+        # build the index once (slow embedder: this ingest takes seconds)
+        cls.client.post("/ingest")
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if cls.client.get("/ingest/status").json()["state"] != "running":
+                break
+            time.sleep(0.2)
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.modules.pop("sentence_transformers", None)
+
+    def _run_ingest_and_probe(self):
+        # a unique document guarantees at least one UNCACHED chunk, so the
+        # re-ingest really spends time in the (sleeping) embedder while we probe
+        import uuid
+        unique = uuid.uuid4().hex[:8]
+        pushed0 = self.client.post("/documents", json={
+            "id": f"slow-{unique}", "filename": "slow.md",
+            "content": f"# S\n\ns {unique}\n\n## Body\n\nslow embed target {unique}\n"})
+        assert pushed0.status_code == 201, pushed0.text
+        accepted = self.client.post("/ingest?reset=true")
+        assert accepted.status_code == 200, accepted.text
+        # the job is now embedding (the unique chunk sleeps in the fake) — probe
+        greeting = self.client.post("/answer", json={"question": "bonjour"})
+        self.assertEqual(greeting.status_code, 200, greeting.text)
+        self.assertEqual(greeting.json()["status"], "greeting")
+        for path, payload in (("/search", {"question": QUESTION}),
+                              ("/answer", {"question": QUESTION})):
+            response = self.client.post(path, json=payload)
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual(response.json()["detail"]["reason"],
+                             "ingest_in_progress", path)
+        switched = self.client.post("/profile", json={"retrieval": {"top_k": 6}})
+        self.assertEqual(switched.status_code, 409, switched.text)
+        pushed = self.client.post("/documents", json={
+            "id": "midjob", "filename": "mid.md",
+            "content": "# M\n\nm\n\n## Body\n\npushed mid-job\n"})
+        self.assertEqual(pushed.status_code, 201, pushed.text)   # store is fine
+        rows = self.client.get("/documents").json()["documents"]
+        self.assertEqual(next(r for r in rows if r["id"] == "midjob")["status"],
+                         "indexing")                            # no store read
+        deleted = self.client.delete("/documents/midjob")
+        self.assertEqual(deleted.status_code, 409)              # purge would race
+        # wait for the job to finish so other tests start clean
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            status = self.client.get("/ingest/status").json()
+            if status["state"] != "running":
+                return status
+            time.sleep(0.2)
+        raise TimeoutError(status)
+
+    def test_reads_refused_during_ingest_then_work(self):
+        status = self._run_ingest_and_probe()
+        self.assertEqual(status["state"], "done", status)
+        answered = self.client.post("/answer", json={"question": QUESTION})
+        self.assertEqual(answered.status_code, 200, answered.text)
+        self.assertIn(answered.json()["status"], {"answered", "refused"})
+
+
+class InternalErrorNeverPlainTextTest(unittest.TestCase):
+    """The safety net: an exception nothing catches still comes back as the
+    JSON error envelope (500 internal_error), never FastAPI's plain-text
+    'Internal Server Error'."""
+
+    def test_unhandled_exception_returns_json_envelope(self):
+        class _ExplodingGenerator:
+            def answer(self, *args, **kwargs):
+                raise KeyError("boom")     # not OSError/ValueError/NvidiaAPIError
+
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "note.md").write_text(CORPUS, encoding="utf-8")
+        profile = _service_profile(tmp)
+        overrides = {"CHROMA_DIR": tmp / "chroma",
+                     "EMBEDDING_CACHE_PATH": tmp / "emb.json",
+                     "NVIDIA_EMBEDDING_CACHE_PATH": tmp / "emb.json",
+                     "ANSWER_CACHE_PATH": tmp / "answers.json",
+                     "RESULTS_DIR": tmp}
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+        try:
+            # raise_server_exceptions=False: Starlette's ServerErrorMiddleware
+            # sends our JSON envelope and then RE-RAISES so the server logs it;
+            # the production client sees the envelope, the TestClient would
+            # surface the re-raise instead
+            client = TestClient(service.create_app(
+                profile, generator=_ExplodingGenerator(),
+                allow_profile_switch=False, config_overrides=overrides),
+                raise_server_exceptions=False)
+            client.post("/ingest")
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                status = client.get("/ingest/status").json()
+                if status["state"] != "running":
+                    break
+                time.sleep(0.1)
+            self.assertEqual(status["state"], "done", status)
+            response = client.post("/answer", json={"question": QUESTION})
+            self.assertEqual(response.status_code, 500, response.text)
+            body = response.json()
+            self.assertEqual(body["detail"]["reason"], "internal_error")
+            self.assertIn("boom", body["detail"]["error"])
+            self.assertEqual(response.headers["content-type"],
+                             "application/json")   # not text/plain plaintext
+        finally:
+            sys.modules.pop("sentence_transformers", None)
+
+
 if __name__ == "__main__":
     unittest.main()

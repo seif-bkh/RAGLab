@@ -1,7 +1,7 @@
 # RAGLab service — HTTP contract
 
 **Audience:** the fullstack team building against this service.
-**Service version:** `1.2.0` (reported by `GET /health` → `version`).
+**Service version:** `1.2.1` (reported by `GET /health` → `version`).
 **Machine-readable schema:** FastAPI generates OpenAPI 3 at `/openapi.json` and
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
@@ -151,6 +151,11 @@ corrupts another profile's vectors — but each new combination starts with an
 * One ingest at a time; a second `POST /ingest` while running →
   `409 ingest_already_running`. Ingest is **not** tied to a client — any
   client can start it, any client can poll it.
+* **While the job runs, the index is sealed** (one writer at a time):
+  `POST /search`, `/answer`, `/evaluate`, `POST /profile` and
+  `DELETE /documents/{id}` return `409 ingest_in_progress` (poll
+  `/ingest/status`, retry when `done`); greetings still work;
+  `GET /documents` rows show `status: "indexing"` without reading the store.
 
 ### 2.4 Keys
 
@@ -191,7 +196,7 @@ The endpoint your UI polls. No secrets — key values never appear, only
 `set`/`missing` per env var.
 
 ```json
-{"status": "ok", "version": "1.2.0",
+{"status": "ok", "version": "1.2.1",
  "profile": {"embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
              "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
              "chunking": {"mode": "restructure", "size": 220, "overlap": 40},
@@ -596,12 +601,14 @@ no re-ingest:
 | `answer_refused` | 409 | `/answer` | Mid-request ValueError/RuntimeError (safe-redacted `error`). | Show `error`; if persistent, rebuild index. |
 | `evaluation_refused` | 409 | `/evaluate` | Same, during evaluation. | — |
 | `ingest_already_running` | 409 | `/ingest` | A job is running. | Poll `/ingest/status`. |
+| `ingest_in_progress` | 409 | `/search`, `/answer`, `/evaluate`, `/profile`, `/documents/{id}` DELETE | The index is being (re)built — reads and collection mutations are sealed until the job finishes (one writer at a time). | Poll `GET /ingest/status`; retry when `done`. |
 | `no_corpus` | 409 | `/inspect` | Data dirs empty/unreadable. | Check `data_dirs` in the profile. |
 | `provider_error` | 502 | `/answer` | Upstream provider failed (safe-redacted). | Retry; if persistent, check keys/model. |
 | `provider_unreachable` | 502 | `/answer`, `/search`, `/evaluate`, `/embeddings/sanity` | Network-layer failure building or calling a provider — DNS/proxy/timeout/unreachable endpoint. The pinned xKiro path does a live free-price check on first `/answer`, so that is the usual trigger. | Check egress to the provider endpoint; retry once transient issues clear. |
 | `catalog_failed` | 502 | `/diagnostics/catalog` | xKiro catalog call failed. | — |
 | `missing_api_key` | 503 | `/search`, `/answer`, `/ingest`, `/evaluate`, `/embeddings/sanity` | A key is not set — body carries `slot` + `key_env`. | Key UI (`POST /keys`) or service env. |
 | `harness50_timeout` | 504 | `/diagnostics/harness50` | Subprocess exceeded 900 s. | Retry off-peak. |
+| `internal_error` | 500 | any | An exception nothing else caught — the safety net. Always JSON (never a plain-text 500), with a safe-redacted `error`; the service log carries the traceback. | Report it with the timestamp; retry idempotent calls. |
 
 ### 4.2 Validation errors — `422`
 Malformed requests (missing `question`, > 2000 chars, wrong types) return
