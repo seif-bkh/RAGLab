@@ -207,8 +207,22 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35039577034 on HEAD `0d9a2a9` (offline suite: 220 unittests
-  — 180 core + 40 service — + 96 checks + inspect + pip check).
+- **CI green**: run 35040363379 on HEAD `2ce40b4` (offline suite: 222 unittests
+  — 180 core + 42 service — + 96 checks + inspect + pip check).
+- **Index sealed during ingest + never a plain-text 500** (2ce40b4, service
+  1.2.1, from a field report): while the ingest job runs, /search, /answer,
+  /evaluate, POST /profile and DELETE /documents/{id} return
+  409 ingest_in_progress (greetings still work; GET /documents rows say
+  status=indexing without reading the store) — reads used to race the job's
+  sqlite writes and could surface as a bare 500. Plus a safety net:
+  add_exception_handler(Exception) → 500 JSON {reason: internal_error,
+  safe error} — no unhandled exception can ever be FastAPI plain text
+  (Starlette sends the handler response then re-raises; TestClient needs
+  raise_server_exceptions=False to assert the envelope). SERVICE_VERSION is
+  now bumped on every service change (1.2.0 was reused once and the field
+  could not tell builds apart). Concurrency-test gotcha: the embedding cache
+  makes re-ingests instant — force an UNCACHED unique chunk (push a fresh
+  doc) if the test needs the job to stay running.
 - **Network failures never 500** (0d9a2a9, found on a real device): the
   first /answer on the pinned xKiro profile runs the live free-price check
   (free_gateway.load_pricing) inside Runtime.generator(), which was OUTSIDE
