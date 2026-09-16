@@ -23,6 +23,7 @@ services:
       RAGLAB_CACHE_DIR: /app/raglab/caches   # embedding/answer caches -> volume
       RAGLAB_ALLOW_PROFILE_SWITCH: "0"       # 1 to allow POST /profile at runtime
       # RAGLAB_SERVICE_TOKEN: "change-me"    # require X-Service-Token on every request
+                                              # (RAGLAB_TOKEN is an accepted alias)
     volumes:
       - raglab-index:/app/raglab/chroma_db
       - raglab-embed-cache:/app/raglab/caches

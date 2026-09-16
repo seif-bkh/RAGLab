@@ -174,7 +174,7 @@ NVIDIA `nvidia/nemotron-3-embed-1b` embeddings + xKiro
 | `RAGLAB_DOCUMENTS_DIR` | the pushed-documents store (always part of the corpus; volume it in Docker) | `raglab/documents/` |
 | `RAGLAB_MAX_DOCUMENT_BYTES` | per-push size cap | `20971520` (20 MB) |
 | `RAGLAB_ALLOW_PROFILE_SWITCH` | enable `POST /profile` | `1` (docker-compose pins `0`) |
-| `RAGLAB_SERVICE_TOKEN` | require `X-Service-Token` on every request (constant-time check, `401 unauthorized` otherwise) | unset = open (local/dev) |
+| `RAGLAB_SERVICE_TOKEN` | require `X-Service-Token` on every request (constant-time check, `401 unauthorized` otherwise); `RAGLAB_TOKEN` is an accepted alias | unset = open (local/dev) |
 | `RAGLAB_CORS_ORIGINS` | comma-separated allowed origins | `*` |
 | `RAGLAB_CACHE_DIR` | relocate embedding/answer caches (Docker volume) | next to the code |
 | `RAGLAB_HOST` / `RAGLAB_PORT` | used by `python service.py` | `0.0.0.0` / `8000` |

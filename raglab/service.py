@@ -104,7 +104,7 @@ from scrub import scrub_pii
 
 import docstore as docstore_mod
 
-SERVICE_VERSION = "1.2.2"
+SERVICE_VERSION = "1.2.3"
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +455,11 @@ def create_app(profile: dict | None = None, *, generator=None,
         # Console parity by default for local runs; docker-compose pins "0".
         allow_profile_switch = os.environ.get("RAGLAB_ALLOW_PROFILE_SWITCH", "1") == "1"
     if service_token is None:
-        service_token = os.environ.get("RAGLAB_SERVICE_TOKEN", "")
+        # RAGLAB_SERVICE_TOKEN is the documented name; RAGLAB_TOKEN is an
+        # accepted alias for gateway deployments that plumbed the shorter
+        # name before asking which one the service reads.
+        service_token = (os.environ.get("RAGLAB_SERVICE_TOKEN", "")
+                         or os.environ.get("RAGLAB_TOKEN", ""))
     service_token = service_token.strip()
     if documents_dir is None:
         documents_dir = os.environ.get("RAGLAB_DOCUMENTS_DIR", "")

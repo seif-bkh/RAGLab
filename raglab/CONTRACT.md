@@ -1,7 +1,7 @@
 # RAGLab service — HTTP contract
 
 **Audience:** the fullstack team building against this service.
-**Service version:** `1.2.2` (reported by `GET /health` → `version`).
+**Service version:** `1.2.3` (reported by `GET /health` → `version`).
 **Machine-readable schema:** FastAPI generates OpenAPI 3 at `/openapi.json` and
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
@@ -25,7 +25,7 @@ anything.
 |---|---|
 | Transport | HTTP/1.1, JSON bodies (`content-type: application/json`), UTF-8 everywhere. The corpus is Arabic + French — never transcode or transliterate. |
 | Base URL | One deployment, one port (default `:8000`). All paths are root-relative (`/search`, not `/api/v1/search`). |
-| Auth | **Optional shared-secret token.** When `RAGLAB_SERVICE_TOKEN` is set on the service, every request must carry it in the `X-Service-Token` header (constant-time compare) → `401 unauthorized` otherwise. Unset = open (the local/dev default). This is defense in depth, not user auth — the service still expects to sit behind your gateway (real auth, rate limits, CORS tightening). `RAGLAB_CORS_ORIGINS` configures browser CORS (default: `*`); CORS preflights are exempt from the token check by design. |
+| Auth | **Optional shared-secret token.** When `RAGLAB_SERVICE_TOKEN` is set on the service (or its alias `RAGLAB_TOKEN`), every request must carry it in the `X-Service-Token` header (constant-time compare) → `401 unauthorized` otherwise. Unset = open (the local/dev default). This is defense in depth, not user auth — the service still expects to sit behind your gateway (real auth, rate limits, CORS tightening). `RAGLAB_CORS_ORIGINS` configures browser CORS (default: `*`); CORS preflights are exempt from the token check by design. |
 | Timestamps | UTC, ISO-8601 with offset, second precision (`2026-09-14T14:18:01+00:00`). |
 | Idempotency | `GET`s are safe. `POST /answer` and `POST /search` are read-only w.r.t. state (but may spend provider budget). `POST /ingest`, `POST /profile`, `POST /keys`, `DELETE /keys/{env}` mutate state. Nothing is transactional across calls. |
 | Sessions | **There are none.** No cookies, no conversation state, no per-client storage. Every request is judged against the current global profile + index. Chat history is the client's job (§5.4). |
@@ -196,7 +196,7 @@ The endpoint your UI polls. No secrets — key values never appear, only
 `set`/`missing` per env var.
 
 ```json
-{"status": "ok", "version": "1.2.2",
+{"status": "ok", "version": "1.2.3",
  "profile": {"embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
              "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
              "chunking": {"mode": "restructure", "size": 220, "overlap": 40},
@@ -726,7 +726,7 @@ Config is environment-only at boot (12-factor). Full table + Docker notes:
 `RAGLAB_TOP_K`, `RAGLAB_RETRIEVAL_MODE`, `RAGLAB_LANG_FILTER`,
 `RAGLAB_NEIGHBOR_RADIUS`, `RAGLAB_DATA_DIRS`,
 `RAGLAB_ALLOW_PROFILE_SWITCH` (default `1` locally, compose pins `0`),
-`RAGLAB_SERVICE_TOKEN` (require `X-Service-Token` on every request),
+`RAGLAB_SERVICE_TOKEN` (require `X-Service-Token` on every request; `RAGLAB_TOKEN` is an accepted alias),
 `RAGLAB_DOCUMENTS_DIR` (the pushed-documents store; volume it in Docker),
 `RAGLAB_MAX_DOCUMENT_BYTES` (per-push cap, default 20 MB),
 `RAGLAB_CORS_ORIGINS` (default `*`), plus provider keys

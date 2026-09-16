@@ -592,6 +592,40 @@ class ServiceAuthTest(unittest.TestCase):
                                 "Access-Control-Request-Method": "POST"})
         self.assertEqual(response.status_code, 200)   # CORS answers preflight
 
+    def test_raglab_token_alias_enables_auth(self):
+        # Gateway deployments that plumbed RAGLAB_TOKEN (not RAGLAB_SERVICE_TOKEN)
+        # must get the same auth — and RAGLAB_SERVICE_TOKEN wins when both are set.
+        cases = [
+            ({"RAGLAB_TOKEN": "alias-secret-1"}, "alias-secret-1"),
+            ({"RAGLAB_TOKEN": "alias-secret-1",
+              "RAGLAB_SERVICE_TOKEN": "primary-secret-1"}, "primary-secret-1"),
+        ]
+        for env_setup, expected in cases:
+            saved = {name: os.environ.get(name)
+                     for name in ("RAGLAB_TOKEN", "RAGLAB_SERVICE_TOKEN")}
+            os.environ.pop("RAGLAB_SERVICE_TOKEN", None)
+            os.environ.pop("RAGLAB_TOKEN", None)
+            os.environ.update(env_setup)
+            try:
+                client = TestClient(service.create_app(
+                    profiles.default_state(), generator=object(),
+                    config_overrides={"CHROMA_DIR": self.tmp / "chroma-alias"}))
+                denied = client.get("/health")
+                self.assertEqual(denied.status_code, 401, env_setup)
+                allowed = client.get("/health",
+                                     headers={"X-Service-Token": expected})
+                self.assertEqual(allowed.status_code, 200, env_setup)
+                wrong = client.get("/health",
+                                   headers={"X-Service-Token": "alias-secret-1"
+                                            if expected.startswith("primary") else "nope"})
+                self.assertEqual(wrong.status_code, 401, env_setup)
+            finally:
+                for name, value in saved.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+
 
 class OutputGuardsTest(unittest.TestCase):
     """The output-side guards: PII scrubbing after the citation gate, and the
