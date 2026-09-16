@@ -207,8 +207,16 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35037082032 on HEAD `698a30b` (offline suite: 217 unittests
-  — 180 core + 37 service — + 96 checks + inspect + pip check).
+- **CI green**: run 35039577034 on HEAD `0d9a2a9` (offline suite: 220 unittests
+  — 180 core + 40 service — + 96 checks + inspect + pip check).
+- **Network failures never 500** (0d9a2a9, found on a real device): the
+  first /answer on the pinned xKiro profile runs the live free-price check
+  (free_gateway.load_pricing) inside Runtime.generator(), which was OUTSIDE
+  all try/excepts — URLError/DNS/timeout escaped as a bare 500. Now:
+  Runtime.embedder()/generator() wrap construction (OSError → 502
+  provider_unreachable with slot + safe error + hint; ValueError/RuntimeError
+  → 502 provider_error), and the ask/retrieve/evaluate/sanity handlers catch
+  OSError mid-request the same way. Guarded by ProviderFailureTest.
 - **Documents API = the gateway feed target** (698a30b, service 1.2.0): the
   service OWNS a document store (docstore.py, RAGLAB_DOCUMENTS_DIR, default
   raglab/documents/). POST /documents (multipart or JSON text/base64,
