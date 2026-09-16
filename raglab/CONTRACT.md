@@ -449,7 +449,9 @@ see. Diagnostics endpoints (`/inspect`, `/chunks/search`) intentionally show
 raw text — they are admin-facing truth, not user-facing output.
 
 Errors: `503 missing_api_key` (either slot — body says which), `409 empty_index`,
-`409 answer_refused` (mid-request provider/refusal error), `502 provider_error`.
+`409 answer_refused` (mid-request provider/refusal error), `502 provider_error`,
+`502 provider_unreachable` (network-layer failure — incl. the first-call xKiro
+free-price check; the body carries the underlying network error).
 
 ### 3.11 `POST /embeddings/sanity` — one batched embedding call
 Embeds 3 phrases (en/fr/ar: "savings account", "compte épargne", "حساب التوفير")
@@ -596,6 +598,7 @@ no re-ingest:
 | `ingest_already_running` | 409 | `/ingest` | A job is running. | Poll `/ingest/status`. |
 | `no_corpus` | 409 | `/inspect` | Data dirs empty/unreadable. | Check `data_dirs` in the profile. |
 | `provider_error` | 502 | `/answer` | Upstream provider failed (safe-redacted). | Retry; if persistent, check keys/model. |
+| `provider_unreachable` | 502 | `/answer`, `/search`, `/evaluate`, `/embeddings/sanity` | Network-layer failure building or calling a provider — DNS/proxy/timeout/unreachable endpoint. The pinned xKiro path does a live free-price check on first `/answer`, so that is the usual trigger. | Check egress to the provider endpoint; retry once transient issues clear. |
 | `catalog_failed` | 502 | `/diagnostics/catalog` | xKiro catalog call failed. | — |
 | `missing_api_key` | 503 | `/search`, `/answer`, `/ingest`, `/evaluate`, `/embeddings/sanity` | A key is not set — body carries `slot` + `key_env`. | Key UI (`POST /keys`) or service env. |
 | `harness50_timeout` | 504 | `/diagnostics/harness50` | Subprocess exceeded 900 s. | Retry off-peak. |

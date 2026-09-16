@@ -872,5 +872,93 @@ class DocumentsApiTest(unittest.TestCase):
         self.assertNotIn("gone", [d["id"] for d in fresh["documents"]])
 
 
+class ProviderFailureTest(unittest.TestCase):
+    """Network-layer failures (the xKiro live free-price check, provider
+    endpoints, DNS/proxy/timeout) must surface as the JSON error envelope —
+    502 provider_unreachable — never a bare 'Internal Server Error'."""
+
+    def test_runtime_wraps_generator_build_network_errors(self):
+        import urllib.error
+        saved = os.environ.get("XKIRO_API_KEY")
+        os.environ["XKIRO_API_KEY"] = "xki-test-1234567890"
+        original = profiles.build_generator
+
+        def boom(local):
+            raise urllib.error.URLError("connection refused")
+        profiles.build_generator = boom
+        try:
+            runtime = service.Runtime(profiles.default_state())
+            with self.assertRaises(service.ServiceError) as ctx:
+                runtime.generator()
+        finally:
+            profiles.build_generator = original
+            if saved is None:
+                os.environ.pop("XKIRO_API_KEY", None)
+            else:
+                os.environ["XKIRO_API_KEY"] = saved
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertEqual(ctx.exception.payload["reason"], "provider_unreachable")
+
+    def test_runtime_wraps_embedder_build_network_errors(self):
+        import urllib.error
+        saved = os.environ.get("NVIDIA_API_KEY")
+        os.environ["NVIDIA_API_KEY"] = "nvapi-test-1234567890"
+        import embedder as embedder_mod
+        original = embedder_mod.build_embedder
+
+        def boom(local):
+            raise urllib.error.URLError("name resolution failed")
+        embedder_mod.build_embedder = boom
+        try:
+            runtime = service.Runtime(profiles.default_state())
+            with self.assertRaises(service.ServiceError) as ctx:
+                runtime.embedder()
+        finally:
+            embedder_mod.build_embedder = original
+            if saved is None:
+                os.environ.pop("NVIDIA_API_KEY", None)
+            else:
+                os.environ["NVIDIA_API_KEY"] = saved
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertEqual(ctx.exception.payload["reason"], "provider_unreachable")
+
+    def test_answer_midrequest_network_failure_is_json_not_500(self):
+        import urllib.error
+
+        class _NetworkDeadGenerator:
+            def answer(self, *args, **kwargs):
+                raise urllib.error.URLError("connection reset by peer")
+
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "note.md").write_text(CORPUS, encoding="utf-8")
+        profile = _service_profile(tmp)
+        overrides = {"CHROMA_DIR": tmp / "chroma",
+                     "EMBEDDING_CACHE_PATH": tmp / "emb.json",
+                     "NVIDIA_EMBEDDING_CACHE_PATH": tmp / "emb.json",
+                     "ANSWER_CACHE_PATH": tmp / "answers.json",
+                     "RESULTS_DIR": tmp}
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+        try:
+            client = TestClient(service.create_app(
+                profile, generator=_NetworkDeadGenerator(),
+                allow_profile_switch=False, config_overrides=overrides))
+            client.post("/ingest")
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                status = client.get("/ingest/status").json()
+                if status["state"] != "running":
+                    break
+                time.sleep(0.1)
+            self.assertEqual(status["state"], "done", status)
+            response = client.post("/answer", json={"question": QUESTION})
+            self.assertEqual(response.status_code, 502, response.text)
+            self.assertEqual(response.json()["detail"]["reason"],
+                             "provider_unreachable")
+            self.assertIn("connection reset", response.text)
+        finally:
+            sys.modules.pop("sentence_transformers", None)
+
+
 if __name__ == "__main__":
     unittest.main()

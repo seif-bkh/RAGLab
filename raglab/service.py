@@ -218,14 +218,39 @@ class Runtime:
             if self._embedder is None:
                 self._require_key("embedding")
                 from embedder import build_embedder
-                self._embedder = build_embedder(self.local())
+                try:
+                    self._embedder = build_embedder(self.local())
+                except ServiceError:
+                    raise
+                except OSError as exc:      # URLError, timeouts, SSL — network
+                    raise ServiceError(502, "provider_unreachable", slot="embedding",
+                                       error=safe_error(exc),
+                                       hint="network error while building the "
+                                            "embedder (DNS/proxy/reachability)") from None
+                except (ValueError, RuntimeError) as exc:
+                    raise ServiceError(502, "provider_error", slot="embedding",
+                                       error=safe_error(exc)) from None
             return self._embedder
 
     def generator(self):
         with self.lock:
             if self._generator is None:
                 self._require_key("answer")
-                self._generator = profiles.build_generator(self.local())
+                try:
+                    self._generator = profiles.build_generator(self.local())
+                except ServiceError:
+                    raise
+                except OSError as exc:      # e.g. the xKiro live free-price
+                    # check at build time: DNS/proxy/timeout must not become
+                    # a bare 500 — say what failed, as JSON
+                    raise ServiceError(502, "provider_unreachable", slot="answer",
+                                       error=safe_error(exc),
+                                       hint="network error while building the answer "
+                                            "generator (the pinned xKiro path does a "
+                                            "live free-price check on first use)") from None
+                except (ValueError, RuntimeError) as exc:
+                    raise ServiceError(502, "provider_error", slot="answer",
+                                       error=safe_error(exc)) from None
             return self._generator
 
     def collection(self):
@@ -657,6 +682,9 @@ def create_app(profile: dict | None = None, *, generator=None,
                                       variant_strategy="original")
         except (ValueError, RuntimeError) as exc:
             raise ServiceError(409, "retrieval_refused", error=safe_error(exc)) from None
+        except OSError as exc:               # mid-request network failure
+            raise ServiceError(502, "provider_unreachable", slot="embedding",
+                               error=safe_error(exc)) from None
         return {"question": request.question, "language": language, "k": k, "mode": mode,
                 "embedder": {"provider": embedder.provider_name, "model": embedder.model},
                 "variants": [{"label": v["label"], "text": v["text"]} for v in variants],
@@ -702,6 +730,9 @@ def create_app(profile: dict | None = None, *, generator=None,
                                   language=request.query_lang)
         except (ValueError, RuntimeError) as exc:
             raise ServiceError(409, "answer_refused", error=safe_error(exc)) from None
+        except OSError as exc:               # mid-request network failure
+            raise ServiceError(502, "provider_unreachable", slot="answer",
+                               error=safe_error(exc)) from None
         except NvidiaAPIError as exc:
             raise ServiceError(502, "provider_error", error=safe_error(exc)) from None
         sources = []
@@ -872,7 +903,11 @@ def create_app(profile: dict | None = None, *, generator=None,
                    ("Arabic", "حساب التوفير")]
         embedder = runtime.embedder()          # 503 when the key is missing
         from embedder import cosine
-        vectors = embedder.embed_texts([phrase for _, phrase in phrases])
+        try:
+            vectors = embedder.embed_texts([phrase for _, phrase in phrases])
+        except OSError as exc:
+            raise ServiceError(502, "provider_unreachable", slot="embedding",
+                               error=safe_error(exc)) from None
         pairs = []
         for i in range(len(phrases)):
             for j in range(i + 1, len(phrases)):
@@ -918,6 +953,9 @@ def create_app(profile: dict | None = None, *, generator=None,
                                  top_k=request.top_k or 20, translator=None)
         except (ValueError, RuntimeError) as exc:
             raise ServiceError(409, "evaluation_refused", error=safe_error(exc)) from None
+        except OSError as exc:
+            raise ServiceError(502, "provider_unreachable",
+                               error=safe_error(exc)) from None
         saved = save_run(run, local.RESULTS_DIR)
         # The full run carries every question's hits — heavy. Give the caller
         # the aggregates plus per-question outcomes, not the raw hit lists.

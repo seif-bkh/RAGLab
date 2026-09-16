@@ -120,10 +120,14 @@ Semantics worth knowing before you integrate:
 * **Errors**: `401 unauthorized` (missing `X-Service-Token` when
   `RAGLAB_SERVICE_TOKEN` is set), `409 empty_index` (POST `/ingest` first),
   `409 retrieval_refused` (stale index vs current settings — rebuild it),
-  `502 provider_error`, `503 missing_api_key` (says which env var),
+  `502 provider_error`, `502 provider_unreachable` (network-layer failure —
+  DNS/proxy/timeout, incl. the live free-price check on the first pinned-xKiro
+  `/answer`), `503 missing_api_key` (says which env var),
   `422` request validation.
 * **First `/answer` on the xKiro profile** performs the live free-price check
-  the supported pipeline requires — expect slightly higher latency once.
+  the supported pipeline requires — expect slightly higher latency once. If
+  the gateway cannot be reached, the response is `502 provider_unreachable`
+  (never a bare 500) with the underlying network error in the body.
 * Every response is redacted: provider errors pass through `safe_error`, keys
   are never echoed.
 
