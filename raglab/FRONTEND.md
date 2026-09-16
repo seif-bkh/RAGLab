@@ -11,6 +11,10 @@ backend change — it is all `POST /profile`, `/keys`, `/documents`, `/ingest`,
 `/evaluate` + the read endpoints. What the UI must respect is the **state
 model** (§4) — that is where RAG consoles usually go wrong.
 
+**Companion docs:** `raglab/CONTRACT.md` = behavior truth (endpoints, states,
+errors). `raglab/COOKBOOK.md` = every settings mutation as an exact request
+with its side effects — feed that to whoever builds the Settings screens.
+
 ---
 
 ## 1. Capability map (what the console can do)

@@ -12,7 +12,8 @@ teams — request/response schemas with real examples, the state model, the
 error catalog, and integration recipes — is `raglab/CONTRACT.md`. This file
 is the operator's/deployer's doc. **Designing the app's UI?** The
 screen-by-screen frontend/UX blueprint (with the permission matrix) is
-`raglab/FRONTEND.md`.
+`raglab/FRONTEND.md`. **Building the settings screens?** The exact-request
+cookbook for every config mutation is `raglab/COOKBOOK.md`.
 
 ```
             ┌──────────────┐

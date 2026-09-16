@@ -55,6 +55,8 @@ python local_front.py           # the same console, driving the service over
                                 # raglab/CONTRACT.md
                                 # app UI/UX blueprint (screens, states,
                                 # permissions): raglab/FRONTEND.md
+                                # settings screens, exact requests:
+                                # raglab/COOKBOOK.md
 python main.py inspect --data-dir ../docs
 python main.py ingest --reset --data-dir ../docs
 python main.py query "What is Murabaha?" --query-lang en

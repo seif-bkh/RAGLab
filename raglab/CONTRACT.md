@@ -8,6 +8,8 @@ state, error behavior and integration rules that a schema alone does not carry.
 When this doc and `/openapi.json` disagree, `/openapi.json` is truth for field
 names; this doc is truth for behavior. **Designing the frontend?** The
 screen-by-screen UX blueprint built on this contract is `raglab/FRONTEND.md`.
+**Building the settings screens?** The exact-request cookbook (field matrix,
+every mutation with side effects, worked sequences) is `raglab/COOKBOOK.md`.
 
 **What the service is:** a grounded Q&A engine over a fixed document corpus.
 You send a question; it retrieves chunks from its local vector index, asks a
