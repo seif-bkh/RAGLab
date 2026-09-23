@@ -218,18 +218,27 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35091222023 on HEAD `392fae2` (offline suite: 226 unittests
-  — 180 core + 46 service — + 96 checks + inspect + pip check).
-- **GET /config = console self-description** (392fae2, service 1.2.4): a
-  gateway console had rendered RAGLab display-only ("configures itself via
-  CLI") with chat/embedding/dimension "non communiqué" — wrong premise
-  (everything is HTTP-editable) plus no flat endpoint to probe. GET /config
-  now answers chat_model + embedding_model (slot_display form),
-  vector_dimension (peek one stored embedding; null until an index exists;
-  skip the peek while an ingest runs), editable {profile=switching flag,
-  api_keys/documents/index=true}, the full profile, key presence, a
-  capabilities map (exact call per mutation) and docs pointers. Front smoke
-  +1 (24 checks).
+- **CI green**: run 35804225687 on HEAD `32904f4` (offline suite: 227 unittests
+  — 180 core + 47 service — + 96 checks + inspect + pip check).
+- **Endpoint freeze directive recorded** (896dd5b, §2.7): existing HTTP
+  endpoints never change (path/method/schemas/semantics); additive only;
+  local_front is the integration testbed over HTTP; bump SERVICE_VERSION on
+  every service change.
+- **GET /config = console self-description** (392fae2, 1.2.4): chat_model +
+  embedding_model (slot_display), vector_dimension (null until an index
+  exists), editable flags, capabilities map, docs pointers — the one-call
+  probe a generic adapter renders. Fixed a gateway console's "configures
+  itself via CLI / non communiqué" display-only page premise.
+- **Chunk browser** (32904f4, service 1.2.5): GET /chunks (paginated stored-
+  chunk listing + per-document rollup + chunking_now) and GET /chunks/{id}
+  (full chunk + neighbors + character overlap with the previous chunk,
+  min 8 chars). Reads the STORED collection (what retrieval supplies), not
+  the /inspect live preview. Sealed during ingest; 409 empty_index; 404
+  unknown_chunk; bad_limit/bad_offset 400. local_front menu 15 (doc picker →
+  paged rows → one-by-one reader); smoke 25 checks. Demo gotcha: POST /keys
+  resets the injected generator — a dummy key on a fake-provider instance
+  makes /answer attempt a REAL provider call (smoke "spend" check fails in
+  the no-network sandbox; keyless runs pass 25/25).
 - **COOKBOOK.md** (61243b0): exact-request companion for whoever builds the
   settings UI — readiness probe (GET /profile → switching; old compose pins
   0 → 403), the read assembly, every mutation with side effects (answer
