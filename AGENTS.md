@@ -124,10 +124,21 @@ Current state of the work:
    artifacts there are **regenerable**: `python harness50.py` rebuilds the BM25 A/B
    artifacts offline. If a workspace is rebuilt, re-run it rather than treating missing
    files as a loss.
-6. Work only on the session branch `arena/01a07b8c-raglab` (push only there). The other
-   `arena/*` branches and the four older workflows (`free-models.yml`,
-   `hard-harness.yml`, `provider-catalogs.yml`, `retrieval-judge.yml`) belong to earlier
-   sessions — do not touch them.
+6. Work only on the session branch (current session: `arena/01a08139-raglab`,
+   pushed only there; the older `arena/01a07b8c-raglab` and other `arena/*`
+   branches plus the four older workflows (`free-models.yml`,
+   `hard-harness.yml`, `provider-catalogs.yml`, `retrieval-judge.yml`) belong
+   to earlier sessions — do not touch them).
+7. **Service endpoint freeze (user directive, 2026-09-23): never alter an
+   existing HTTP endpoint** — not its path, method, request schema, response
+   schema or semantics. The application integrating this agent depends on
+   them staying exactly as documented in `raglab/CONTRACT.md`. Changes are
+   **additive only**: new endpoints are welcome when a capability is missing;
+   a new optional response field is acceptable only when a conforming client
+   cannot break — when in doubt, add a new endpoint instead.
+   `raglab/local_front.py` is the integration testbed: every capability must
+   be exercisable through it over HTTP, exactly the way the integrating app
+   will call it. Bump `SERVICE_VERSION` on every service change.
 
 ## 3. Network reality (check before promising anything)
 
