@@ -230,6 +230,9 @@ class ServiceTest(unittest.TestCase):
             response = client.post("/search", json={"question": QUESTION})
             self.assertEqual(response.status_code, 409)
             self.assertEqual(response.json()["detail"]["reason"], "empty_index")
+            browsing = client.get("/chunks")
+            self.assertEqual(browsing.status_code, 409)
+            self.assertEqual(browsing.json()["detail"]["reason"], "empty_index")
 
     def test_validation_rejects_bad_requests(self):
         for payload in ({"question": ""}, {"question": "x" * 3000},
@@ -391,6 +394,48 @@ class ConsoleEndpointsTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         sys.modules.pop("sentence_transformers", None)
+
+    def test_chunk_browser_lists_and_reads_stored_chunks(self):
+        listed = self.client.get("/chunks")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        body = listed.json()
+        self.assertGreater(body["total"], 0)
+        self.assertEqual(body["chunking_now"]["mode"], "size")
+        self.assertTrue(str(body["collection"]).startswith("raglab_app_"))
+        docs = {d["source"]: d for d in body["documents"]}
+        self.assertIn("note.md", docs)                    # single-doc corpus
+        self.assertEqual(docs["note.md"]["chunks"], body["total"])
+        first = body["items"][0]
+        self.assertEqual((first["source"], first["index"]), ("note.md", 1))
+        self.assertIn("Atlas", first["text"])
+        # pagination continues in order without overlap
+        page1 = self.client.get("/chunks?limit=2&offset=0").json()
+        page2 = self.client.get("/chunks?limit=2&offset=2").json()
+        self.assertEqual(len(page1["items"]), 2)
+        self.assertNotEqual(page1["items"][0]["id"], page2["items"][0]["id"])
+        # per-document filter, including a source with no chunks
+        filtered = self.client.get("/chunks?source=note.md").json()
+        self.assertEqual(filtered["total"], body["total"])
+        self.assertEqual(self.client.get("/chunks?source=nope.md").json()["total"], 0)
+        # one chunk in full: text, neighbors, overlap with the previous chunk
+        target = page2["items"][0]
+        one = self.client.get(f"/chunks/{target['id']}")
+        self.assertEqual(one.status_code, 200, one.text)
+        detail = one.json()
+        self.assertEqual(detail["chunk"]["text"], target["text"])
+        self.assertEqual(detail["document"]["chunks"], body["total"])
+        self.assertIsNotNone(detail["neighbors"]["prev"])
+        self.assertIsInstance(detail["chunk"]["ingested_at"], str)
+        # the FIRST chunk of a document has no prev neighbor and no overlap
+        first_detail = self.client.get(f"/chunks/{first['id']}").json()
+        self.assertIsNone(first_detail["neighbors"]["prev"])
+        self.assertIsNone(first_detail["overlap_with_prev"])
+        # unknown id and bad query params
+        unknown = self.client.get("/chunks/note.md::chunk_9999")
+        self.assertEqual(unknown.status_code, 404, unknown.text)
+        self.assertEqual(unknown.json()["detail"]["reason"], "unknown_chunk")
+        for bad in ("/chunks?limit=0", "/chunks?limit=101", "/chunks?offset=-1"):
+            self.assertEqual(self.client.get(bad).status_code, 400, bad)
 
     def test_keys_endpoints(self):
         saved = os.environ.get("KIRA_API_KEY")
@@ -1134,6 +1179,9 @@ class IngestConcurrencyTest(unittest.TestCase):
             self.assertEqual(response.status_code, 409, response.text)
             self.assertEqual(response.json()["detail"]["reason"],
                              "ingest_in_progress", path)
+        browsing = self.client.get("/chunks")
+        self.assertEqual(browsing.status_code, 409, browsing.text)
+        self.assertEqual(browsing.json()["detail"]["reason"], "ingest_in_progress")
         switched = self.client.post("/profile", json={"retrieval": {"top_k": 6}})
         self.assertEqual(switched.status_code, 409, switched.text)
         pushed = self.client.post("/documents", json={

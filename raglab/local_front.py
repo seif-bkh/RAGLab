@@ -958,6 +958,168 @@ class Console:
                 self.action_ingest()
         # loop back to the list
 
+    # -- chunk browser (menu 15) ------------------------------------------------
+
+    def _pick_document(self, docs: list, *, quit_label: str = "q=quit") -> str | None:
+        """Numbered document picker. Returns the chosen source, None to abort,
+        or "" for all documents."""
+        while True:
+            print("\n[browser] documents in the index:")
+            for i, doc in enumerate(docs, 1):
+                langs = ",".join(doc.get("languages") or ["?"])
+                print(f"  {i:>3}  {doc['source']}  ({doc['chunks']} chunks, "
+                      f"tokens {doc.get('tokens_min')}–{doc.get('tokens_max')}, {langs})")
+            print("   0  all documents")
+            try:
+                pick = prompt(f"browse which document? [Enter=all, {quit_label}]: ").strip().lower()
+            except EOFError:
+                return None
+            if pick in ("q", "quit"):
+                return None
+            if pick in ("", "0", "all"):
+                return ""
+            if pick.isdigit() and 1 <= int(pick) <= len(docs):
+                return docs[int(pick) - 1]["source"]
+            print("[front] pick a number from the list.")
+
+    def _show_chunk_row(self, row: dict, number: int | None = None) -> None:
+        prefix = f"  {number:>3}" if number is not None else "     "
+        text = " ".join((row.get("text") or "").split())
+        if len(text) > 84:
+            text = text[:84] + "…"
+        print(f"{prefix}  {row['id']}  {row.get('language') or '?'} "
+              f"tok={row.get('tokens') or '?'} chars={row.get('chars', '?')}\n"
+              f"        heading: {row.get('heading') or '(none)'}\n"
+              f"        {text}")
+
+    def _read_one_chunk(self, chunk_id: str) -> str:
+        """Reader loop for one chunk. Returns 'q' (quit browser) or 'b' (back)."""
+        while True:
+            status, body = self.api.get(f"/chunks/{chunk_id}")
+            if status != 200:
+                print(f"[front] HTTP {status}: {detail_of(body)}")
+                return "b"
+            chunk, doc = body["chunk"], body["document"]
+            neighbors, overlap = body["neighbors"], body["overlap_with_prev"]
+            print("-" * 78)
+            print(f"{chunk['id']}  |  {doc['source']} ({doc['chunks']} chunks)")
+            print(f"heading   : {chunk.get('heading') or '(none)'}")
+            print(f"language  : {chunk.get('language')}   section: "
+                  f"{chunk.get('section_type') or '?'}   origin: {chunk.get('origin') or '?'}")
+            print(f"tokens    : {chunk.get('tokens')}   chars: {chunk.get('chars')}   "
+                  f"index: {chunk.get('index')}")
+            print(f"embedded  : {chunk.get('embedding_model') or '?'} "
+                  f"at {chunk.get('ingested_at') or '?'}")
+            if overlap:
+                shown = overlap["text"] if len(overlap["text"]) <= 200 \
+                    else overlap["text"][:200] + "…"
+                print(f"overlap   : {overlap['chars']} chars shared with the previous "
+                      "chunk (the chunker's overlap landing here):")
+                print(f"            {shown!r}")
+            else:
+                print("overlap   : none with the previous chunk "
+                      "(or first chunk of the document)")
+            print("-" * 78)
+            print(chunk["text"])
+            print("-" * 78)
+            prev_id = (neighbors.get("prev") or {}).get("id")
+            next_id = (neighbors.get("next") or {}).get("id")
+            moves = []
+            if prev_id:
+                moves.append("- = previous")
+            if next_id:
+                moves.append("Enter = next")
+            print("[reader] " + " | ".join(moves + ["b = back to the list", "q = quit"])
+                  + " > ", end="")
+            try:
+                choice = input().strip().lower()
+            except EOFError:
+                return "q"
+            if choice in ("q", "quit"):
+                return "q"
+            if choice in ("b", "back"):
+                return "b"
+            if choice in ("", "n", "next") and next_id:
+                chunk_id = next_id
+                continue
+            if choice in ("-", "p", "prev") and prev_id:
+                chunk_id = prev_id
+                continue
+            if choice in ("", "n", "next"):
+                print("[reader] this is the last chunk of the document.")
+                continue
+            print("[reader] unknown command.")
+
+    def action_chunk_browser(self) -> None:
+        PAGE = 8
+        status, body = self.api.get("/chunks", params={"limit": 1})
+        if status != 200:
+            print(f"[front] HTTP {status}: {detail_of(body)}")
+            return
+        print(f"[browser] {body['total']} stored chunk(s) in {body['collection']} "
+              "— exactly what retrieval supplies to the model")
+        chunking = body.get("chunking_now") or {}
+        print(f"[browser] current chunking settings: mode={chunking.get('mode')} "
+              f"size={chunking.get('size')} overlap={chunking.get('overlap')} "
+              "(a stale index was built with other values — see /health)")
+        docs = body.get("documents") or []
+        if not docs:
+            print("[browser] no documents in this index — push some (menu 14) and "
+                  "ingest (menu 7) first.")
+            return
+        source = self._pick_document(docs)
+        if source is None:
+            return
+        offset = 0
+        while True:
+            params = {"limit": PAGE, "offset": offset}
+            if source:
+                params["source"] = source
+            status, body = self.api.get("/chunks", params=params)
+            if status != 200:
+                print(f"[front] HTTP {status}: {detail_of(body)}")
+                return
+            items = body.get("items") or []
+            label = source or "all documents"
+            print(f"\n[browser] {label} — {body['total']} chunk(s), "
+                  f"showing {offset + 1}–{offset + len(items)}")
+            for i, row in enumerate(items, offset + 1):
+                self._show_chunk_row(row, i)
+            commands = ["Enter = next page"]
+            if offset > 0:
+                commands.append("p = previous page")
+            commands += ["<number> = read that chunk", "d = pick another document",
+                         "q = quit"]
+            try:
+                choice = prompt("[" + " | ".join(commands) + "] > ").strip().lower()
+            except EOFError:
+                return
+            if choice in ("q", "quit"):
+                return
+            if choice in ("d", "doc"):
+                picked = self._pick_document(docs, quit_label="q=quit browser")
+                if picked is None:
+                    return
+                source, offset = picked, 0
+                continue
+            if choice in ("", "n", "next"):
+                if offset + PAGE < body["total"]:
+                    offset += PAGE
+                else:
+                    print("[browser] already at the last page.")
+                continue
+            if choice in ("p", "prev"):
+                offset = max(0, offset - PAGE)
+                continue
+            if choice.isdigit():
+                number = int(choice)
+                if offset < number <= offset + len(items):
+                    if self._read_one_chunk(items[number - offset - 1]["id"]) == "q":
+                        return
+                else:
+                    print(f"[front] pick a row number between {offset + 1} and "
+                          f"{offset + len(items)}.")
+
     # -- menu loop -------------------------------------------------------------------------------
 
     MENU = [
@@ -975,6 +1137,7 @@ class Console:
         ("12", "service settings (chunking, retrieval, corpus)", "action_settings"),
         ("13", "diagnostics (offline harness50, xKiro catalog)", "action_diagnostics"),
         ("14", "documents (push / list / remove — the gateway feed)", "action_documents"),
+        ("15", "chunk browser (read the stored chunks one by one)", "action_chunk_browser"),
     ]
 
     def menu_loop(self) -> None:
@@ -1127,6 +1290,24 @@ def run_suite(api: Api, *, spend: bool = True) -> tuple[int, int]:
                 and isinstance(config.get("embedding_model"), str)
                 and isinstance(config.get("editable"), dict)
                 and "capabilities" in config, f"status={status}")
+
+    status, listing = api.get("/chunks", params={"limit": 3})
+    suite.check("GET /chunks lists stored chunks (or names why not)",
+                status in (200, 409) and isinstance(listing, dict)
+                and (status == 409 or (isinstance(listing.get("items"), list)
+                                       and isinstance(listing.get("total"), int)
+                                       and isinstance(listing.get("documents"), list))),
+                f"status={status}")
+    if status == 200 and listing.get("items"):
+        one = api.get(f"/chunks/{listing['items'][0]['id']}")
+        suite.check("GET /chunks/{id} reads one chunk in full",
+                    one[0] == 200 and isinstance(one[1].get("chunk"), dict)
+                    and isinstance(one[1]["chunk"].get("text"), str)
+                    and "neighbors" in one[1] and "overlap_with_prev" in one[1],
+                    f"status={one[0]}")
+    else:
+        suite.check("GET /chunks/{id} reads one chunk in full", True,
+                    "skipped — no index yet (build one with menu 7)")
 
     status, body = api.post("/profile", payload={})
     if status == 403 and reason_of(body) == "profile_switching_disabled":

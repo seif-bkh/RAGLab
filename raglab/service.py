@@ -39,6 +39,8 @@ Endpoints:
     GET  /ingest/status   what the ingest job is doing / last did
     GET  /inspect         chunking preview over the corpus (no model calls)
     POST /chunks/search   is a quote inside ONE chunk? (citation-gate diagnostic)
+    GET  /chunks          browse the STORED chunks (paginated, per-doc rollup)
+    GET  /chunks/{id}     one chunk in full: text, metadata, neighbors, overlap
     POST /embeddings/sanity  one batched embedding call + 3-language cosine report
     POST /evaluate        run a question set against the index (embeddings!)
     POST /diagnostics/harness50  offline BM25 chunking A/B (subprocess, ~10-20s)
@@ -106,7 +108,7 @@ from scrub import scrub_pii
 
 import docstore as docstore_mod
 
-SERVICE_VERSION = "1.2.4"
+SERVICE_VERSION = "1.2.5"
 
 
 # ---------------------------------------------------------------------------
@@ -982,6 +984,126 @@ def create_app(profile: dict | None = None, *, generator=None,
         if found["full"]:
             payload["first_full_text"] = found["full"][0][0]
         return payload
+
+    # -- stored-chunk browser (rate the chunking strategy) --------------------------
+
+    def _browser_records(where=None):
+        """All stored chunk records, sorted by (source, chunk_index)."""
+        from store import get_collection
+        collection = get_collection(runtime.local(), reset=False)
+        count = collection.count()
+        if not count:
+            raise ServiceError(409, "empty_index",
+                               hint="POST /ingest to build this profile's index")
+        query = {"include": ["documents", "metadatas"]}
+        if where:
+            query["where"] = where
+        got = collection.get(**query)
+        records = []
+        for cid, text, meta in zip(got.get("ids") or [],
+                                    got.get("documents") or [],
+                                    got.get("metadatas") or []):
+            meta = meta or {}
+            records.append({
+                "id": cid, "text": text or "",
+                "source": meta.get("source") or meta.get("document") or "?",
+                "index": meta.get("chunk_index") if isinstance(meta.get("chunk_index"), int) else 0,
+                "meta": meta})
+        records.sort(key=lambda r: (r["source"], r["index"]))
+        return records
+
+    @app.get("/chunks")
+    def list_chunks(source: str = "", limit: int = 20, offset: int = 0):
+        """Browse the STORED chunks — exactly what retrieval supplies to the
+        model — to judge how the chunking strategy cut the corpus. Paginated;
+        optional per-document filter; per-document rollup for browsing."""
+        _reject_during_ingest()      # reads race the ingest job's writes
+        if not 1 <= limit <= 100:
+            raise ServiceError(400, "bad_limit", limit=limit, allowed="1-100")
+        if offset < 0:
+            raise ServiceError(400, "bad_offset", offset=offset)
+        local = runtime.local()
+        records = _browser_records({"source": source} if source else None)
+        documents = {}
+        for rec in records:
+            entry = documents.setdefault(
+                rec["source"],
+                {"source": rec["source"], "chunks": 0, "tokens_min": None,
+                 "tokens_max": None, "languages": set()})
+            entry["chunks"] += 1
+            tokens = rec["meta"].get("token_count")
+            if isinstance(tokens, int):
+                entry["tokens_min"] = tokens if entry["tokens_min"] is None \
+                    else min(entry["tokens_min"], tokens)
+                entry["tokens_max"] = tokens if entry["tokens_max"] is None \
+                    else max(entry["tokens_max"], tokens)
+            if rec["meta"].get("language"):
+                entry["languages"].add(rec["meta"]["language"])
+        rollup = [{"source": d["source"], "chunks": d["chunks"],
+                   "tokens_min": d["tokens_min"], "tokens_max": d["tokens_max"],
+                   "languages": sorted(d["languages"])}
+                  for d in sorted(documents.values(), key=lambda d: d["source"])]
+        items = [{
+            "id": rec["id"], "source": rec["source"], "index": rec["index"],
+            "heading": rec["meta"].get("heading") or None,
+            "language": rec["meta"].get("language"),
+            "section_type": rec["meta"].get("section_type"),
+            "origin": rec["meta"].get("origin"),
+            "tokens": rec["meta"].get("token_count"),
+            "chars": len(rec["text"]), "text": rec["text"]}
+            for rec in records[offset:offset + limit]]
+        return {"collection": local.CHROMA_COLLECTION_NAME,
+                "total": len(records), "offset": offset, "limit": limit,
+                "chunking_now": {"mode": local.CHUNKING_MODE,
+                                 "size": local.CHUNK_SIZE_TOKENS,
+                                 "overlap": local.CHUNK_OVERLAP_TOKENS},
+                "documents": rollup, "items": items}
+
+    @app.get("/chunks/{chunk_id}")
+    def read_chunk(chunk_id: str):
+        """One stored chunk in full — text, metadata, its document, both
+        neighbors and the character overlap with the previous chunk (how
+        the chunker's overlap actually landed)."""
+        _reject_during_ingest()
+        records = _browser_records()
+        position = next((i for i, r in enumerate(records) if r["id"] == chunk_id), None)
+        if position is None:
+            raise ServiceError(404, "unknown_chunk", chunk=chunk_id,
+                               hint="list valid ids with GET /chunks")
+        rec = records[position]
+        meta = rec["meta"]
+        siblings = [r for r in records if r["source"] == rec["source"]]
+        sib_pos = next(i for i, r in enumerate(siblings) if r["id"] == chunk_id)
+
+        def brief(other):
+            if other is None:
+                return None
+            return {"id": other["id"], "index": other["index"],
+                    "heading": other["meta"].get("heading") or None}
+
+        overlap = None
+        prev_rec = siblings[sib_pos - 1] if sib_pos > 0 else None
+        if prev_rec is not None:
+            prev_text, text = prev_rec["text"], rec["text"]
+            for size in range(min(400, len(prev_text), len(text)), 7, -1):
+                if prev_text[-size:] == text[:size]:
+                    overlap = {"chars": size, "text": text[:size]}
+                    break
+        return {"chunk": {"id": rec["id"], "source": rec["source"],
+                          "index": rec["index"],
+                          "heading": meta.get("heading") or None,
+                          "language": meta.get("language"),
+                          "section_type": meta.get("section_type"),
+                          "origin": meta.get("origin"),
+                          "tokens": meta.get("token_count"),
+                          "chars": len(rec["text"]), "text": rec["text"],
+                          "ingested_at": meta.get("ingested_at"),
+                          "embedding_model": meta.get("embedding_model")},
+                "document": {"source": rec["source"], "chunks": len(siblings)},
+                "neighbors": {"prev": brief(prev_rec),
+                              "next": brief(siblings[sib_pos + 1])
+                              if sib_pos + 1 < len(siblings) else None},
+                "overlap_with_prev": overlap}
 
     # -- embedding sanity check (one batched embedding call) ------------------------
 

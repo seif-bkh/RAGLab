@@ -104,6 +104,11 @@ last error). During an ingest the whole app enters "sealed" mode (§4.3).
 * **Search**: same box as Ask but returns hits only — ranked list with
   similarity, heading, language, source, chunk text (PII chips as-is).
   Controls: `k`, `mode` (vector/rrf/blend), `lang_filter`.
+* **Chunk browser**: `GET /chunks` + `GET /chunks/{id}` — the STORED
+  chunks (what retrieval actually supplies), browsable per document and
+  readable one by one with neighbors and the overlap landing; the tool
+  for rating/changing the chunking strategy. local_front menu 15 is the
+  reference interaction.
 * **Corpus**: `GET /inspect` — document table + a chunk-size histogram
   (great "is my chunking sane" visual) + sample chunks.
 * **Quote check**: paste a quote → `POST /chunks/search` → verdict UI:

@@ -1,7 +1,7 @@
 # RAGLab service — HTTP contract
 
 **Audience:** the fullstack team building against this service.
-**Service version:** `1.2.4` (reported by `GET /health` → `version`).
+**Service version:** `1.2.5` (reported by `GET /health` → `version`).
 **Machine-readable schema:** FastAPI generates OpenAPI 3 at `/openapi.json` and
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
@@ -201,7 +201,7 @@ this service needs a CLI — if a console claims "configured via CLI", it is
 reading an outdated premise.
 
 ```json
-{"service": "raglab", "version": "1.2.4",
+{"service": "raglab", "version": "1.2.5",
  "chat_model": "xkiro/qwen/qwen3.8-max:free",
  "embedding_model": "nvidia/nvidia/nemotron-3-embed-1b",
  "vector_dimension": 2048,
@@ -232,7 +232,7 @@ The endpoint your UI polls. No secrets — key values never appear, only
 `set`/`missing` per env var.
 
 ```json
-{"status": "ok", "version": "1.2.4",
+{"status": "ok", "version": "1.2.5",
  "profile": {"embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
              "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
              "chunking": {"mode": "restructure", "size": 220, "overlap": 40},
@@ -347,6 +347,56 @@ chunk?* — i.e. could a verbatim quote of it ever pass the citation gate?
 `full` empty but `head`/`tail` non-empty → the text crosses a chunk boundary —
 a faithful quote of it can **never** pass the gate (chunking must change, not
 the model). Use this to explain "the model quoted correctly but was refused".
+
+### 3.7b `GET /chunks` + `GET /chunks/{chunk_id}` — the stored-chunk browser (free)
+
+`GET /inspect` previews what the CURRENT settings would produce; the browser
+reads what is ACTUALLY STORED — exactly what retrieval supplies to the model.
+Use it to rate the chunking strategy: how each document was cut, heading by
+heading, chunk by chunk, overlap by overlap.
+
+`GET /chunks?source=<doc>&limit=20&offset=0` — paginated listing
+(`limit` 1–100 → `400 bad_limit`; `offset` ≥ 0 → `400 bad_offset`; `source`
+optional, a source with no chunks is `total: 0`, not an error):
+
+```json
+{"collection": "raglab_app_nvidia_nemotron_3_embed_1b_restructure",
+ "total": 346, "offset": 0, "limit": 20,
+ "chunking_now": {"mode": "restructure", "size": 220, "overlap": 40},
+ "documents": [{"source": "tarif-2026.md", "chunks": 12,
+                "tokens_min": 180, "tokens_max": 220, "languages": ["fr"]}],
+ "items": [{"id": "tarif-2026.md::chunk_0001", "source": "tarif-2026.md",
+            "index": 1, "heading": "## Carte Atlas", "language": "fr",
+            "section_type": "content", "origin": "documents/",
+            "tokens": 210, "chars": 1180, "text": "## Carte Atlas\n\n…"}]}
+```
+
+`chunking_now` is the CURRENT profile's chunking — if `/health` says the index
+is stale, the stored chunks were built with different values.
+
+`GET /chunks/{chunk_id}` — one chunk in full, with both neighbors inside the
+same document and the character overlap with the previous chunk (how the
+chunker's overlap actually landed; `null` for a document's first chunk or when
+nothing is shared):
+
+```json
+{"chunk": {"id": "note.md::chunk_0002", "source": "note.md", "index": 2,
+           "heading": "## Prices", "language": "en", "section_type": "content",
+           "origin": "docs/", "tokens": 86, "chars": 401, "text": "## Prices\n\n…",
+           "ingested_at": "2026-09-23T00:48:39+00:00",
+           "embedding_model": "Qwen/Qwen3-Embedding-0.6B"},
+ "document": {"source": "note.md", "chunks": 30},
+ "neighbors": {"prev": {"id": "note.md::chunk_0001", "index": 1,
+                        "heading": "## Prices"},
+               "next": {"id": "note.md::chunk_0003", "index": 3,
+                        "heading": "## Prices"}},
+ "overlap_with_prev": {"chars": 173, "text": "## Prices\n\nThe Atlas card costs…"}}
+```
+
+Errors: `409 empty_index` (no stored chunks for this profile — build with
+`POST /ingest`), `409 ingest_in_progress` (sealed while a job runs, like every
+index read), `404 unknown_chunk` (bad id — list valid ids with `GET /chunks`).
+The console equivalent is local_front menu 15.
 
 ### 3.8 `POST /ingest?reset=false` + `GET /ingest/status` — build the index
 `POST /ingest` validates the embedding key (`503 missing_api_key`), refuses a
@@ -626,6 +676,9 @@ no re-ingest:
 | `invalid_document_push` | 400 | `/documents` | Body is neither valid JSON nor a valid push payload. | — |
 | `document_too_large` | 413 | `/documents` | Bytes over `RAGLAB_MAX_DOCUMENT_BYTES` (limit in body). | Split or raise the cap. |
 | `unknown_document` | 404 | `/documents/{id}` | No such document id. | `GET /documents` lists the ids. |
+| `unknown_chunk` | 404 | `/chunks/{chunk_id}` | No such stored chunk id. | `GET /chunks` lists valid ids. |
+| `bad_limit` | 400 | `/chunks` | `limit` outside 1–100. | Use 1–100. |
+| `bad_offset` | 400 | `/chunks` | Negative `offset`. | Use 0 or more. |
 | `bad_mode` / `bad_lang_filter` / `bad_query_lang` | 400 | `/search`, `/answer` | Bad enum value. | — |
 | `bad_limit` | 400 | `/inspect` | limit ∉ 0–50. | — |
 | `unknown_key_env` | 400 | `/keys` | Env var not known (registered list in body). | — |

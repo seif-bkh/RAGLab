@@ -97,6 +97,8 @@ docker compose up --build            # http://localhost:8000/docs
 | POST | `/ingest?reset=false` | build/rebuild this profile's index as a background job (embeds every chunk; the cache makes re-runs cheap) |
 | GET | `/ingest/status` | what the ingest job is doing / last did |
 | GET | `/inspect?limit=` | the chunking preview: documents, chunk/token totals, sample chunks (no model calls) |
+| GET | `/chunks` | the stored-chunk browser: paginated chunk listing with a per-document rollup (chunk counts, token ranges, languages) — exactly what retrieval supplies, for rating the chunking strategy |
+| GET | `/chunks/{chunk_id}` | one stored chunk in full: text, metadata, both neighbors and the character overlap with the previous chunk |
 | POST | `/chunks/search` | quote-vs-chunk diagnostic: is this text inside ONE chunk (`full` — a verbatim quote can pass the citation gate) or does it cross a boundary (`head`/`tail` in different chunks — it can never validate). No model calls |
 | POST | `/embeddings/sanity` | one batched embedding call, 3 phrases (en/fr/ar), cosine-similarity report |
 | POST | `/evaluate` | run a question set (`questions.json` / `questions_50.json` / `questions_real.json` or an absolute host path): metrics + per-question outcomes; the full run is saved under `results/` |
