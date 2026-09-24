@@ -105,6 +105,26 @@ Current state of the work:
   requires the suite to pass over actual HTTP in CI; `ConsoleEndpointsTest`
   covers the keys/inspect/chunks-search/sanity/evaluate/profile-switch
   endpoints directly (stubbed). Exit codes 0/1/2 (ok / failed / unreachable).
+- **Windows native run + production image** (2026-09-24, session
+  `arena/01a0d2f6-raglab`): two packaging layers for the same service, both
+  additive (endpoint freeze untouched).
+  1. Windows, no Docker: `raglab/setup.ps1` (venv + requirements-service.txt
+     + .env), `raglab/run_server.ps1` (docker-compose equivalent: uvicorn on
+     0.0.0.0:8000, token resolved -Token>env>.env), `raglab/run_front.ps1`
+     (UTF-8 console + token auto-pickup) + `.bat` twins; guide `raglab/WINDOWS.md`.
+  2. `Dockerfile.prod` (multi-stage: deps venv + baked cl100k_base via
+     TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache → slim non-root uid 10001 runtime
+     with HEALTHCHECK `raglab/container_healthcheck.py` that treats 401 as
+     alive because the API is token-gated). Served with `--network none` in
+     CI (`.github/workflows/docker-image.yml`: tag `v*` → build + offline
+     smoke (docker/offline_smoke.py copied into the container) + GHCR push
+     `ghcr.io/seif-bkh/raglab-service` + Release tarball; dispatch default =
+     build+smoke only). `docker-compose.prod.yml` = image-only compose
+     (pull_policy env-tunable, prod volume names), `docker/save-image.sh|.ps1`
+     export `dist/raglab-service_<v>.tar.gz` for air-gapped docker load.
+     Guide: `raglab/PROD_IMAGE.md`. Offline means START/SERVE offline — the
+     provider calls (NVIDIA/xKiro) egress by design; HTTPS_PROXY works
+     (stdlib HTTPS clients).
 
 ## 2. Hard constraints (never violate)
 

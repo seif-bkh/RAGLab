@@ -63,6 +63,12 @@ python main.py query "What is Murabaha?" --query-lang en
 python main.py answer "What is Murabaha?" --query-lang en
 ```
 
+Ship it as an image anyone can run (no clone, no pip, works offline): the
+multi-stage `Dockerfile.prod` + `docker/save-image.sh .ps1` export a portable
+tarball, and CI publishes `ghcr.io/seif-bkh/raglab-service` on `v*` tags —
+see [raglab/PROD_IMAGE.md](raglab/PROD_IMAGE.md). On Windows natively without
+Docker at all: `raglab/setup.ps1` → `raglab/run_server.ps1` (WINDOWS.md).
+
 **Not production-ready for a banking service.** The measured Qwen profile passed
 13/14 development rubric checks, 18/18 held-out answer checks and three synthetic
 source-injection fixtures. That small, correlated test set is not a security,

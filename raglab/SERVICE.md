@@ -86,6 +86,9 @@ cp raglab/.env.example raglab/.env   # fill keys; the image never bakes them
 docker compose up --build            # http://localhost:8000/docs
 ```
 
+Production image (multi-stage, published to GHCR / shippable as an offline
+tarball — the run-anywhere packaging of this service): `raglab/PROD_IMAGE.md`.
+
 ## Endpoints
 
 | Method | Path | What it does |
