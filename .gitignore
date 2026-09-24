@@ -23,3 +23,6 @@ raglab/front_state.json
 
 # pushed documents (the gateway feed target)
 raglab/documents/
+
+# exported image tarballs (docker/save-image.sh)
+dist/
