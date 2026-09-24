@@ -4,7 +4,7 @@ If you are an agent (or human) resuming work on RAGLab: **read this file first, 
 and keep it updated whenever you learn something that changes the truth.** It is the
 contract between sessions. Facts here were verified by running things, not guessed.
 
-Last verified: 2026-09-07 (branch `arena/01a07b8c-raglab`).
+Last verified: 2026-09-24 (branch `arena/01a0d2f5-raglab`).
 
 ---
 
@@ -105,6 +105,49 @@ Current state of the work:
   requires the suite to pass over actual HTTP in CI; `ConsoleEndpointsTest`
   covers the keys/inspect/chunks-search/sanity/evaluate/profile-switch
   endpoints directly (stubbed). Exit codes 0/1/2 (ok / failed / unreachable).
+
+## 1b. Target-state transition: the gap analysis (2026-09-24)
+
+The user delivered a **target-state design report** (external, Arabic) for evolving this
+lab into a governed "banking RAG decision system": intent understanding + evidence plan,
+sufficiency checks, conflict precedence, document governance, controlled vocabulary,
+knowledge units with functional types, relations, structured numeric data, per-user
+permissions, audit logging. Its transition plan's Phase 1 is exactly: match the
+current-state spec against the target report, converting its assumptions into facts.
+
+**`RAGLAB_GAP_ANALYSIS.md`** (repo root, Arabic, evidence-cited like RAGLAB_SPEC.md) is
+that deliverable. Key outcomes (all verified in code this session):
+
+- The target's assumed "simple RAG" current state is wrong in BOTH directions. Ahead of
+  assumptions: post-generation citation gate (verbatim quote + numeric membership,
+  `answer.py:100-219`), explicit output contract (`grounded-v1/v2`), structured refusal
+  taxonomy, fingerprint staleness refusal, docstore content-hash versioning, structural
+  chunking with breadcrumbs + Arabic visual-order repair, full hybrid machinery
+  (BM25+RRF/blend), Arabic normalization shared by docs AND queries
+  (`evaluate.prepare_query_text`), disciplined measured evaluation (NOT impressionistic).
+- Behind assumptions (start-from-zero gaps): intent layer, evidence plan + deterministic
+  sufficiency, conflict precedence, relations ("exception always retrieved with its rule"
+  unguaranteed), document governance axes (effectivity/audience/authority), structured
+  numeric path, per-user permissions (single shared service token only), audit log,
+  partial/clarification answer states, reranker, controlled lexicon, stable unit ids.
+- Decisive architectural fact: **the answer model never touches the query** (no rewriting;
+  policy raises on translation: `pipeline_policy.py:16-17`), so retrieval is
+  model-independent BY CONSTRUCTION — the target's "fix context, swap model" decisive test
+  is implementable today via profile switching + the citation gate as automated judge.
+- Transition-plan rescoping recorded in the doc: Phase 3 "add hybrid search" becomes
+  "enable existing hybrid as default + measure"; permission/version mandatory filters
+  depend on metadata that doesn't exist yet (Phase 4 must partially precede); Phase 6 is
+  half-built already. Recommended next step (Phase 2): extend `VALID_CATEGORIES` in
+  `evaluate.py` with the target's symptom categories (colloquial/synonyms/implicit/
+  compound/ambiguous) — backward-compatibly — plus a `questions_v2.json` with expected
+  evidence per question, then baseline vector vs rrf per category.
+- Implementation constraints the target plan must respect here: endpoint freeze
+  (additive only, §2.7), pinned-pipeline policy (no number attribution to other models),
+  sandbox network (live runs only via CI `real-test.yml`), hard-harness files untouchable,
+  offline gate green before every push.
+
+
+---
 
 ## 2. Hard constraints (never violate)
 
