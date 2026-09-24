@@ -218,8 +218,12 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35804225687 on HEAD `32904f4` (offline suite: 227 unittests
+- **CI green**: run 35987012326 on HEAD `961afe9` (offline suite: 227 unittests
   — 180 core + 47 service — + 96 checks + inspect + pip check).
+- **Reverse-engineering spec** (961afe9): repo-root `RAGLAB_SPEC.md` —
+  evidence-based spec of the whole system (pipelines, 25 routes, security,
+  gap analysis), every claim cited file/symbol/line, tagged
+  Observed/Inferred/Unknown. Investigation was read-only; no code changed.
 - **Endpoint freeze directive recorded** (896dd5b, §2.7): existing HTTP
   endpoints never change (path/method/schemas/semantics); additive only;
   local_front is the integration testbed over HTTP; bump SERVICE_VERSION on
