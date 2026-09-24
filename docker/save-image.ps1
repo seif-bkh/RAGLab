@@ -2,8 +2,11 @@
 <#
 .SYNOPSIS
   Build the RAGLab production image (Dockerfile.prod, multi-stage) and export
-  it as a portable tarball - the artifact you hand to a machine that never
-  touches the internet (docker load + docker run). Guide: raglab\PROD_IMAGE.md.
+  it as portable artifacts for BOTH target platforms:
+    dist\raglab-service_<v>.zip      -> Windows machines (the native one)
+    dist\raglab-service_<v>.tar.gz   -> Linux/macOS machines (when bsdtar is present)
+  The image inside is the SAME docker-save tar in both files (docker load is
+  cross-platform) - only the packaging differs. Guide: raglab\PROD_IMAGE.md.
 
 .EXAMPLE
   .\docker\save-image.ps1            # version = SERVICE_VERSION from raglab\service.py
@@ -32,29 +35,42 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "docker build failed (exit $LASTEXITCODE)" }
 
     New-Item -ItemType Directory -Force -Path dist | Out-Null
-    $tar   = "dist\raglab-service_$Version.tar"
-    $gzout = "$tar.gz"
-    Write-Host "[save-image] exporting $gzout ..."
+    $base = "raglab-service_$Version"
+    $tar  = "dist\$base.tar"
+    $zip  = "dist\$base.zip"
+    $gz   = "dist\$base.tar.gz"
+
+    Write-Host "[save-image] exporting ${image}:$Version ..."
     docker save "${image}:$Version" -o $tar
     if ($LASTEXITCODE -ne 0) { throw "docker save failed (exit $LASTEXITCODE)" }
-    tar -czf $gzout -C dist "raglab-service_$Version.tar"   # bsdtar ships with Windows 10/11
-    if ($LASTEXITCODE -ne 0) { throw "gzip step failed (exit $LASTEXITCODE) - plain $tar is kept and loadable as-is" }
+
+    # Windows-native artifact: .zip (Compress-Archive, no external tools needed)
+    Compress-Archive -LiteralPath $tar -DestinationPath $zip -Force
+    $artifacts = @($zip)
+
+    # Linux/macOS artifact: .tar.gz (only with bsdtar, shipping since Win10 1803)
+    if (Get-Command tar -ErrorAction SilentlyContinue) {
+        tar -czf $gz -C dist "$base.tar" 2>$null
+        if ($LASTEXITCODE -eq 0) { $artifacts += $gz } else { Remove-Item $gz -ErrorAction SilentlyContinue }
+    } else {
+        Write-Host "[save-image] NOTE: tar.exe not found - .zip only (Linux targets can be served by CI or docker/save-image.sh)"
+    }
     Remove-Item $tar -ErrorAction SilentlyContinue
-    $hash = (Get-FileHash $gzout -Algorithm SHA256).Hash.ToLower()
-    "$hash  raglab-service_$Version.tar.gz" | Out-File -Encoding ascii "$gzout.sha256"
-    $size = "{0:N1} MB" -f ((Get-Item $gzout).Length / 1MB)
+
+    # one sidecar covering every artifact produced
+    $lines = foreach ($a in $artifacts) { "{0}  {1}" -f (Get-FileHash $a -Algorithm SHA256).Hash.ToLower(), (Split-Path $a -Leaf) }
+    $shaFile = "dist\$base.sha256"
+    $lines | Out-File -Encoding ascii $shaFile
+    $artifacts += $shaFile
 
     Write-Host ""
-    Write-Host "[save-image] done: $gzout ($size)"
-    Write-Host "Ship the .tar.gz (+ .sha256) to the target machine, then:"
-    Write-Host "  tar -xzf raglab-service_$Version.tar.gz -O | docker load"
-    Write-Host "  docker run -d --name raglab -p 8000:8000 ``"
-    Write-Host "    -e NVIDIA_API_KEY=... -e XKIRO_API_KEY=... ``"
-    Write-Host "    -e RAGLAB_SERVICE_TOKEN=your-long-random-token ``"
-    Write-Host "    -v raglab-index:/app/raglab/chroma_db ``"
-    Write-Host "    ${image}:$Version"
-    Write-Host "or with compose (uses the loaded image, never pulls):"
-    Write-Host "  `$env:RAGLAB_VERSION='$Version'; `$env:RAGLAB_PULL_POLICY='never'; docker compose -f docker-compose.prod.yml up -d"
+    Write-Host "[save-image] done:"
+    foreach ($a in $artifacts) { Write-Host ("  {0} ({1:N1} MB)" -f $a, ((Get-Item $a).Length / 1MB)) }
+    Write-Host ""
+    Write-Host "Ship the files to the target machine, then load+run with the helpers:"
+    Write-Host "  Windows:      .\docker\load-image.ps1 $zip   (or load-image.bat)"
+    if (Test-Path $gz) { Write-Host "  Linux/macOS:  docker/load-image.sh $gz" }
+    Write-Host "Image reference after load: ${image}:$Version"
 } finally {
     Pop-Location
 }

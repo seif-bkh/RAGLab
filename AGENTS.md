@@ -118,10 +118,13 @@ Current state of the work:
      alive because the API is token-gated). Served with `--network none` in
      CI (`.github/workflows/docker-image.yml`: tag `v*` → build + offline
      smoke (docker/offline_smoke.py copied into the container) + GHCR push
-     `ghcr.io/seif-bkh/raglab-service` + Release tarball; dispatch default =
-     build+smoke only). `docker-compose.prod.yml` = image-only compose
-     (pull_policy env-tunable, prod volume names), `docker/save-image.sh|.ps1`
-     export `dist/raglab-service_<v>.tar.gz` for air-gapped docker load.
+     `ghcr.io/seif-bkh/raglab-service` + Release exports; dispatch default =
+     build+smoke only). Exports ship in TWO packagings of the same docker-save
+     tar: `.tar.gz` (Linux/macOS) + `.zip` (Windows) + one `.sha256` sidecar;
+     `docker/save-image.sh|.ps1` produce them locally and
+     `docker/load-image.sh|.ps1|(load-image.bat)` verify+load+print the run
+     command on the target. `docker-compose.prod.yml` = image-only compose
+     (pull_policy env-tunable, prod volume names).
      Guide: `raglab/PROD_IMAGE.md`. Offline means START/SERVE offline — the
      provider calls (NVIDIA/xKiro) egress by design; HTTPS_PROXY works
      (stdlib HTTPS clients).
