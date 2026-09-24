@@ -47,6 +47,16 @@ python -m uvicorn service:app --host 0.0.0.0 --port 8000
 # interactive OpenAPI docs: http://localhost:8000/docs
 ```
 
+On **Windows** (PowerShell, no Docker — same service, same port, same data;
+the full guide with banking-app integration notes is `raglab/WINDOWS.md`):
+
+```powershell
+cd raglab
+.\setup.ps1        # one-time: venv + deps + .env   (setup.bat from CMD)
+.\run_server.ps1   # http://localhost:8000/docs — the docker-compose equivalent
+.\run_front.ps1    # second window: the console over REST (run_front.bat --status)
+```
+
 Test it from another terminal — `local_front.py` is the console's twin over
 REST: same 13 menus as `app.py` (status/doctor, providers & models, API keys,
 inspect, chunk search, sanity, ingest, retrieval, answer, chat, evaluate,
