@@ -288,9 +288,15 @@ Channels that WORK (use in this order):
   The old Atlas sheets + their chunk maps were `git rm`'d; migration script kept at
   `raglab/tools/migrate_questions_albaraka.py`.
 - Pipeline stats (restructure mode, LOCAL chars/4 estimator — CI's real cl100k is the
-  arbiter, expect drift): 362 chunks total: Circulaire 15, Guide 52, Loi 218, Madkhal 40,
-  albaraka ar 18, albaraka fr 19. `main.py inspect` exits 0. (Pre-2026-09-24 Atlas-era
-  CI stats were 346: Guide 61, Loi 232, ar 10, fr 11.)
+  arbiter, expect drift): 367 chunks total: Circulaire 15, Guide 52, Loi 218, Madkhal 40,
+  albaraka ar 18, albaraka fr 24. `main.py inspect` exits 0. The FR sheet gained ### 4.1-4.5
+  tariff subheadings during the 2026-09-24 review pass (structural parity with AR — the
+  sheets must stay structurally parallel for the cross-lingual category). Manual chunk maps
+  for both sheets were then split per tariff table and re-tiled EXACTLY in normalized-text
+  coordinates (ar 16 / fr 18 chunks; `chunk_maps.py check` OK). Gotcha learned: chunk-map
+  offsets live in the NORMALIZED text domain (what load_all returns) — writing a map against
+  the raw file text trips the source fingerprint guard in `semantic_chunking.load_map`.
+  (Pre-2026-09-24 Atlas-era CI stats were 346: Guide 61, Loi 232, ar 10, fr 11.)
 
 ## 7. Key results (update this section when numbers change)
 
@@ -426,8 +432,9 @@ Channels that WORK (use in this order):
   cross-provider carry-over. One token, no spaces → else 400 bad_model.
 - **BM25-only A/B on the Al Baraka corpus (2026-09-24, post-migration baselines)** —
   the pre-migration Atlas-era numbers below are historical, sets changed:
-  - `questions_50.json` (45 evaluable; k=20): size 42/62/69 → restructure **47/80/80**
-    (hit@1/3/5). By language fr: 13/40/47 → 40/53/53.
+  - `questions_50.json` (45 evaluable; k=20; after the FR tariff-subheading fix):
+    size 42/62/69 → restructure **49/80/82** (hit@1/3/5). By language fr: 13/40/47 →
+    40/53/53 (pre-fix restructure was 47/80/80).
   - `questions_v2.json` (33 evaluable; k=20; symptom categories): size 24/33/39 →
     restructure **52/67/67**. colloquial 0→**57**, synonyms 29→**57**, implicit 14→**43**
     (86 @3), compound 43→**57** (86 @3), ambiguous 40→40 (hit@1). OOS max top-1: 23.3 vs

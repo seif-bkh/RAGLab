@@ -2,9 +2,9 @@
  "document": "fiche_produit_banque_albaraka_ar.md",
  "source_text_fp": "6fd15419e00104fe8772f76edbd90164",
  "tokenizer": "estimator-char4-v1",
- "chunk_count": 12,
- "tokens_total": 1476,
- "note": "drafted by chunk_maps.py (target 620, max 900 tokens); needs human review of each idea label",
+ "chunk_count": 16,
+ "tokens_total": 1478,
+ "note": "drafted by chunk_maps.py (target 620, max 900 tokens); needs human review of each idea label | tariff tables split per-section; exact tiling to document end (human review 2026-09-24)",
  "chunks": [
   {
    "start": 0,
@@ -71,17 +71,45 @@
   },
   {
    "start": 3660,
-   "end": 4136,
-   "tokens": 119,
+   "end": 4106,
+   "tokens": 112,
    "idea": "3.3 الاجراءات الواجب اتباعها",
    "heading": "3.3 الاجراءات الواجب اتباعها"
   },
   {
-   "start": 4136,
-   "end": 5458,
-   "tokens": 331,
+   "start": 4106,
+   "end": 4675,
+   "tokens": 143,
+   "idea": "4.1 البطاقات الالكترونية",
+   "heading": "4.1 البطاقات الالكترونية"
+  },
+  {
+   "start": 4675,
+   "end": 4867,
+   "tokens": 48,
    "idea": "4.2 اقساط ادارة الحساب (على ثلاثة اشهر)",
    "heading": "4.2 اقساط ادارة الحساب (على ثلاثة اشهر)"
+  },
+  {
+   "start": 4867,
+   "end": 5092,
+   "tokens": 57,
+   "idea": "4.3 الشيكات",
+   "heading": "4.3 الشيكات"
+  },
+  {
+   "start": 5092,
+   "end": 5270,
+   "tokens": 45,
+   "idea": "4.4 العروض الشهرية",
+   "heading": "4.4 العروض الشهرية"
+  },
+  {
+   "start": 5270,
+   "end": 5458,
+   "tokens": 47,
+   "idea": "4.5 الخدمة المصرفية عن بعد",
+   "heading": "4.5 الخدمة المصرفية عن بعد"
   },
   {
    "start": 5458,

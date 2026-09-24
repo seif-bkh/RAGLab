@@ -1,10 +1,10 @@
 {
  "document": "fiche_produit_banque_albaraka_fr.md",
- "source_text_fp": "c3b713ae135a97a63d5877e6b4158468",
+ "source_text_fp": "11fd831aa75a885403630342b9437bfa",
  "tokenizer": "estimator-char4-v1",
- "chunk_count": 14,
- "tokens_total": 2035,
- "note": "drafted by chunk_maps.py (target 620, max 900 tokens); needs human review of each idea label",
+ "chunk_count": 18,
+ "tokens_total": 2077,
+ "note": "drafted by chunk_maps.py (target 620, max 900 tokens); needs human review of each idea label | tariff tables split per-section; exact tiling to document end (human review 2026-09-24)",
  "chunks": [
   {
    "start": 0,
@@ -92,14 +92,42 @@
   },
   {
    "start": 5937,
-   "end": 7545,
-   "tokens": 402,
-   "idea": "| Cartes électroniques | Assiette | Tarifs Hors Taxe | | --- | --- | --- | | Car",
-   "heading": ""
+   "end": 6617,
+   "tokens": 170,
+   "idea": "4.1 Cartes électroniques",
+   "heading": "4.1 Cartes électroniques"
   },
   {
-   "start": 7545,
-   "end": 8123,
+   "start": 6617,
+   "end": 6903,
+   "tokens": 72,
+   "idea": "4.2 Frais de tenue de compte (par trimestre)",
+   "heading": "4.2 Frais de tenue de compte (par trimestre)"
+  },
+  {
+   "start": 6903,
+   "end": 7279,
+   "tokens": 94,
+   "idea": "4.3 Chèques certifiés et incidents",
+   "heading": "4.3 Chèques certifiés et incidents"
+  },
+  {
+   "start": 7279,
+   "end": 7481,
+   "tokens": 51,
+   "idea": "4.4 Packs",
+   "heading": "4.4 Packs"
+  },
+  {
+   "start": 7481,
+   "end": 7707,
+   "tokens": 57,
+   "idea": "4.5 Banque à distance",
+   "heading": "4.5 Banque à distance"
+  },
+  {
+   "start": 7707,
+   "end": 8285,
    "tokens": 145,
    "idea": "5. Mentions et sources",
    "heading": "5. Mentions et sources"

@@ -76,6 +76,8 @@ Al Baraka Bank vous propose un produit d’épargne assorti d’un financement s
 
 ## 4. Conditions tarifaires 2023 (extraits)
 
+### 4.1 Cartes électroniques
+
 | Cartes électroniques | Assiette | Tarifs Hors Taxe |
 | --- | --- | --- |
 | Carte Epargne Al Baraka | carte | 18 TND |
@@ -91,12 +93,16 @@ Al Baraka Bank vous propose un produit d’épargne assorti d’un financement s
 | Carte Ettwensa El Kol EXPRESS | carte | 96 TND |
 | Carte Ettwensa El Kol RELAX | carte | 144 TND |
 
+### 4.2 Frais de tenue de compte (par trimestre)
+
 | Frais de tenue de compte (par trimestre) | Assiette | Tarifs Hors Taxe |
 | --- | --- | --- |
 | Compte chèque | compte | 18 u |
 | Compte courant | compte | 33 u |
 | Compte d’épargne | compte | 6 u |
 | Autres comptes | compte | 32 u |
+
+### 4.3 Chèques certifiés et incidents
 
 | Chèques certifiés et incidents | Assiette | Tarifs Hors Taxe |
 | --- | --- | --- |
@@ -105,11 +111,15 @@ Al Baraka Bank vous propose un produit d’épargne assorti d’un financement s
 | Etablissement de préavis (chèque sans provision) | chèque | 100 TND |
 | Etablissement du CNP (chèque sans provision) | chèque | 80 TND |
 
+### 4.4 Packs
+
 | Packs | Assiette | Tarifs Hors Taxe |
 | --- | --- | --- |
 | Pack CONFORT | pack | 19,135 TND/mois |
 | Pack PLATINUM | pack | 22,900 TND/mois |
 | Pack PLATINUM + | pack | 28 TND/mois |
+
+### 4.5 Banque à distance
 
 | Banque à distance | Assiette | Tarifs Hors Taxe |
 | --- | --- | --- |
