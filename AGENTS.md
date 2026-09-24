@@ -261,8 +261,9 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35987012326 on HEAD `961afe9` (offline suite: 227 unittests
-  — 180 core + 47 service — + 96 checks + inspect + pip check).
+- **CI green**: run 35988879011 on HEAD `fa1c09f` (offline suite: 227 unittests
+  — 180 core + 47 service — + 96 checks + inspect + pip check). That commit is the
+  Phase‑1 deliverable of the target-state transition (§1b): `RAGLAB_GAP_ANALYSIS.md`.
 - **Reverse-engineering spec** (961afe9): repo-root `RAGLAB_SPEC.md` —
   evidence-based spec of the whole system (pipelines, 25 routes, security,
   gap analysis), every claim cited file/symbol/line, tagged
