@@ -123,9 +123,15 @@ jobs:
           V="${{ steps.meta.outputs.version }}"
           docker pull "$IMAGE:$V"   # the pushed image is registry-side; round-trip it for the export
           mkdir -p dist
-          docker save "$IMAGE:$V" | gzip -1 > "dist/raglab-service_${V}.tar.gz"
-          ( cd dist && sha256sum "raglab-service_${V}.tar.gz" > "raglab-service_${V}.tar.gz.sha256" )
-          SIZE="$(du -h "dist/raglab-service_${V}.tar.gz" | cut -f1)"
+          BASE="raglab-service_${V}"
+          # ONE docker save -> BOTH packagings (the image inside is identical;
+          # only the wrapper differs per target platform)
+          docker save "$IMAGE:$V" -o "dist/${BASE}.tar"
+          gzip -c -1 "dist/${BASE}.tar" > "dist/${BASE}.tar.gz"            # Linux/macOS targets
+          ( cd dist && zip -q -1 "${BASE}.zip" "${BASE}.tar" )             # Windows targets (double-click extract)
+          ( cd dist && rm -f "${BASE}.tar" )
+          ( cd dist && sha256sum "${BASE}.tar.gz" "${BASE}.zip" > "${BASE}.sha256" )
+          SIZES="$(du -h "dist/${BASE}.tar.gz" | cut -f1)/$(du -h "dist/${BASE}.zip" | cut -f1)"
           if [ "${{ github.event_name }}" = "push" ]; then REF="$GITHUB_REF_NAME"; else REF="image-$V"; fi
           if ! gh release view "$REF" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             if [ "${{ github.event_name }}" = "push" ]; then
@@ -134,13 +140,13 @@ jobs:
             else
               gh release create "$REF" --repo "${{ github.repository }}" \
                 --title "RAGLab service image $V" --target "$(git rev-parse HEAD)" \
-                --notes "Manual publish of the production image (workflow_dispatch). Pull: \`docker pull $IMAGE:$V\`, or load the attached tarball offline." || true
+                --notes "Manual publish of the production image (workflow_dispatch). Pull: \`docker pull $IMAGE:$V\`, or load an attached export offline — .tar.gz for Linux/macOS targets, .zip for Windows targets (the image inside is the same docker-save tar; docker load is cross-platform). Load+run: docker/load-image.sh or docker\\load-image.ps1." || true
             fi
           fi
           gh release upload "$REF" --repo "${{ github.repository }}" \
-            "dist/raglab-service_${V}.tar.gz" "dist/raglab-service_${V}.tar.gz.sha256" --clobber
+            "dist/${BASE}.tar.gz" "dist/${BASE}.zip" "dist/${BASE}.sha256" --clobber
           DIGEST="$(docker buildx imagetools inspect "$IMAGE:$V" --format '{{.Manifest.Digest}}' 2>/dev/null || echo unknown)"
-          echo "::notice::PUBLISHED $IMAGE:$V (+:latest) digest=$DIGEST tarball=$SIZE — pull: docker pull $IMAGE:$V — offline: download raglab-service_$V.tar.gz from Release '$REF' and 'gunzip -c | docker load'"
+          echo "::notice::PUBLISHED $IMAGE:$V (+:latest) digest=$DIGEST artifacts=tar.gz+zip $SIZES — pull: docker pull $IMAGE:$V — offline export from Release '$REF': ${BASE}.tar.gz (Linux/macOS) or ${BASE}.zip (Windows); same image inside both."
 
       - name: Run summary (annotations API readable)
         if: success()

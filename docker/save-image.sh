@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # save-image.sh — build the RAGLab production image (Dockerfile.prod, multi-stage)
-# and export it as a portable tarball: the artifact you hand to a machine that
-# never touches the internet (docker load + docker run). Guide: raglab/PROD_IMAGE.md.
+# and export it as portable artifacts for BOTH target platforms:
+#   dist/raglab-service_<v>.tar.gz   -> Linux/macOS machines (gunzip -c | docker load)
+#   dist/raglab-service_<v>.zip      -> Windows machines (double-click extract -> docker load)
+#   dist/raglab-service_<v>.<fmt>.sha256
+# The image inside is the SAME docker-save tar in both files (docker load is
+# cross-platform) — only the packaging differs. Guide: raglab/PROD_IMAGE.md.
 #
 #   docker/save-image.sh            # version = SERVICE_VERSION from raglab/service.py
 #   docker/save-image.sh 1.2.6      # explicit version/tag
@@ -19,28 +23,36 @@ docker build -f Dockerfile.prod \
     -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .
 
 mkdir -p dist
-OUT="dist/raglab-service_${VERSION}.tar.gz"
-echo "[save-image] exporting $OUT ..."
-docker save "$IMAGE:$VERSION" | gzip -1 > "$OUT"
-( cd dist && sha256sum "raglab-service_${VERSION}.tar.gz" > "raglab-service_${VERSION}.tar.gz.sha256" )
-SIZE="$(du -h "$OUT" | cut -f1)"
+BASE="raglab-service_${VERSION}"
+TAR="dist/${BASE}.tar"
+GZ="dist/${BASE}.tar.gz"
+ZIP="dist/${BASE}.zip"
 
+echo "[save-image] exporting $IMAGE:$VERSION ..."
+docker save "$IMAGE:$VERSION" -o "$TAR"
+gzip -c -1 "$TAR" > "$GZ"
+if command -v zip >/dev/null 2>&1; then
+    ( cd dist && zip -q -1 "${BASE}.zip" "${BASE}.tar" && rm -f "${BASE}.tar" )
+    ( cd dist && sha256sum "${BASE}.tar.gz" "${BASE}.zip" > "${BASE}.sha256" )
+    ARTIFACTS="$GZ $ZIP"
+else
+    echo "[save-image] NOTE: 'zip' not installed here — shipping the .tar.gz only"
+    echo "             (CI and docker\\save-image.ps1 produce the .zip for Windows targets)"
+    rm -f "$TAR"
+    ( cd dist && sha256sum "${BASE}.tar.gz" > "${BASE}.sha256" )
+    ARTIFACTS="$GZ"
+fi
+
+echo
+echo "[save-image] done:"
+for f in $ARTIFACTS "dist/${BASE}.sha256"; do echo "  $f ($(du -h "$f" | cut -f1))"; done
 cat <<EOF
 
-[save-image] done: $OUT ($SIZE)
-Ship the .tar.gz (+ .sha256 next to it) to the target machine, then:
+Ship the files to the target machine, then load+run with the helpers:
+  Linux/macOS:  docker/load-image.sh $GZ
+  Windows:      .\\docker\\load-image.ps1 $ZIP      (or load-image.bat)
 
-  sha256sum -c raglab-service_${VERSION}.tar.gz.sha256   # integrity check
-  gunzip -c raglab-service_${VERSION}.tar.gz | docker load
-  docker run -d --name raglab -p 8000:8000 \\
-    -e NVIDIA_API_KEY=... -e XKIRO_API_KEY=... \\
-    -e RAGLAB_SERVICE_TOKEN=your-long-random-token \\
-    -v raglab-index:/app/raglab/chroma_db \\
-    -v raglab-embed-cache:/app/raglab/caches \\
-    -v raglab-documents:/app/raglab/documents \\
-    $IMAGE:$VERSION
-
-or with compose (uses the loaded image, never pulls):
-  RAGLAB_VERSION=$VERSION RAGLAB_PULL_POLICY=never \\
-    docker compose -f docker-compose.prod.yml up -d
+Manual equivalent (Linux):  sha256sum -c ${BASE}.sha256 && gunzip -c ${BASE}.tar.gz | docker load
+Manual equivalent (Windows): expand the .zip, then: docker load -i ${BASE}.tar
+Image reference after load: $IMAGE:$VERSION
 EOF

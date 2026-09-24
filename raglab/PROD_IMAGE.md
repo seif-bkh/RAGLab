@@ -38,7 +38,9 @@ Push a tag matching `v*` — the workflow
 
 ```
 ghcr.io/seif-bkh/raglab-service:<version>     # + :latest
-GitHub Release <tag> → raglab-service-<version>.tar.gz (+ .sha256)
+GitHub Release <tag> → raglab-service-<version>.tar.gz (Linux/macOS targets)
+                       raglab-service-<version>.zip    (Windows targets)
+                       raglab-service-<version>.sha256  (one file, both artifacts)
 ```
 
 Manual alternative: *Actions → RAGLab docker image → Run workflow* with
@@ -64,26 +66,37 @@ docker run -d --name raglab -p 8000:8000 --env-file raglab/.env \
 # API docs: http://localhost:8000/docs
 ```
 
-### B) Export a tarball and carry it to an offline machine
+### B) Export a portable archive and carry it to an offline machine
 
-On any machine with Docker (needs internet once, for the build):
+On any machine with Docker (needs internet once, for the build). The exporters
+emit **both packagings of the same docker-save tar** — `docker load` is
+cross-platform, so only the wrapper differs per target:
+
+| File | Target machines | Load with |
+|---|---|---|
+| `raglab-service-<v>.tar.gz` | Linux / macOS | `docker/load-image.sh <file>` (or `gunzip -c … \| docker load`) |
+| `raglab-service-<v>.zip` | Windows | `.\docker\load-image.ps1 <file>` / `load-image.bat` (or extract, `docker load -i`) |
+| `raglab-service-<v>.sha256` | both | one sidecar; the load helpers verify it automatically |
 
 ```bash
-docker/save-image.sh            # bash — version defaults to SERVICE_VERSION
-docker\save-image.ps1           # Windows (Docker Desktop)
-# -> dist/raglab-service_<version>.tar.gz (+ .sha256)
+docker/save-image.sh            # Linux/macOS build host — produces .tar.gz (+ .zip when 'zip' is installed)
+docker\save-image.ps1           # Windows build host (Docker Desktop) — produces .zip (+ .tar.gz when bsdtar is present)
 ```
 
-On the target machine (no internet at any step):
+Then on the target machine (no internet at any step):
 
 ```bash
-sha256sum -c raglab-service_<version>.tar.gz.sha256
-gunzip -c raglab-service_<version>.tar.gz | docker load
-docker run -d --name raglab -p 8000:8000 --env-file raglab/.env \
-  -e RAGLAB_SERVICE_TOKEN=your-long-random-token \
-  -v raglab-index:/app/raglab/chroma_db \
-  ghcr.io/seif-bkh/raglab-service:<version>
+# Linux/macOS target:
+docker/load-image.sh raglab-service_1.2.5.tar.gz     # verifies sha256, docker load, prints the run command
 ```
+
+```powershell
+# Windows target:
+.\docker\load-image.ps1 .\raglab-service_1.2.5.zip   # verifies sha256, docker load, prints the run command
+```
+
+The helpers print the exact `docker run` line; the reference after load is
+always `ghcr.io/seif-bkh/raglab-service:<version>`.
 
 ### C) Compose, image-only (no build, no dev Dockerfile)
 
