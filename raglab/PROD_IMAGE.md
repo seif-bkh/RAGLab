@@ -98,6 +98,23 @@ docker/load-image.sh raglab-service_1.2.5.tar.gz     # verifies sha256, docker l
 The helpers print the exact `docker run` line; the reference after load is
 always `ghcr.io/seif-bkh/raglab-service:<version>`.
 
+**Windows, importing the `.zip` without any script:** Docker Desktop's GUI has
+no image-import button (it can only pull from registries), so the minimum is
+ONE command — pick either way:
+
+1. **Double-click way:** right-click the `.zip` → *Extract All…* → in the
+   extracted folder run `docker load -i raglab-service_<v>.tar`. The image
+   appears in Docker Desktop → *Images*; from there you can even *Run* it
+   from the GUI (port `8000:8000`, env vars, volumes under Optional settings).
+2. **One-command way** (no extraction; `tar.exe` ships with Windows 10/11 and
+   reads `.zip`): `tar -xOf raglab-service_<v>.zip raglab-service_<v>.tar | docker load`
+   (same line works in PowerShell and CMD).
+
+Always `docker load`, never `docker import`: `import` is for filesystem
+snapshots and strips the tag, ENV and HEALTHCHECK from the image.
+Optional integrity check without scripts: `certutil -hashfile <file> SHA256`
+against the first column of the `.sha256` sidecar.
+
 ### C) Compose, image-only (no build, no dev Dockerfile)
 
 ```bash
