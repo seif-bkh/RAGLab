@@ -474,11 +474,11 @@ def run_steps() -> None:
 
     if not REAL_ONLY:
         rc = main.main(["query",
-                        "Quel est le frais mensuel du Compte Courant Atlas ?",
+                        "Quel est le tarif annuel de la carte VISA Classique ?",
                         "--k", "5", "--skip-sanity-check"])
         check("vector query exits 0", rc == 0, f"rc={rc}")
         rc = main.main(["query",
-                        "Which Atlas account is meant for independent professionals?",
+                        "Which Al Baraka card is the cheapest one?",
                         "--k", "5", "--hybrid", "--lang", "fr", "--skip-sanity-check"])
         check("hybrid query exits 0", rc == 0, f"rc={rc}")
 

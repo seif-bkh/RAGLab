@@ -327,7 +327,7 @@ Corpus + chunk statistics with sample chunks. `limit` 0–50 (`400 bad_limit`);
             "histogram": [{"bucket": "12-24", "chunks": 2}]},
  "sample": [{"index": 0, "source": "note.md", "language": "en", "tokens": 15,
              "section": "front-matter", "heading": "# Account",
-             "text": "# Account\n\nThe Atlas current account has no management fee."}]}
+             "text": "# Account\n\nThe Baraka current account has no management fee."}]}
 ```
 
 ### 3.7 `POST /chunks/search` — quote-vs-chunk diagnostic (free)
@@ -336,11 +336,11 @@ chunk?* — i.e. could a verbatim quote of it ever pass the citation gate?
 
 ```json
 {"description": "2 freshly chunked chunk(s) with the current settings …",
- "needle": "the atlas card costs 10 dinars",
+ "needle": "the baraka card costs 10 dinars",
  "full":  [{"source": "note.md", "chunk_index": 1, "heading": "## Fees"}],
  "head":  [{"source": "note.md", "chunk_index": 1, "heading": "## Fees"}],
  "tail":  [{"source": "note.md", "chunk_index": 1, "heading": "## Fees"}],
- "first_full_text": "## Fees\n\nThe Atlas card costs 10 dinars per year."}
+ "first_full_text": "## Fees\n\nThe Baraka card costs 10 dinars per year."}
 ```
 
 `full` non-empty → a quote of `needle` **can** validate from those chunks.
@@ -366,9 +366,9 @@ optional, a source with no chunks is `total: 0`, not an error):
  "documents": [{"source": "tarif-2026.md", "chunks": 12,
                 "tokens_min": 180, "tokens_max": 220, "languages": ["fr"]}],
  "items": [{"id": "tarif-2026.md::chunk_0001", "source": "tarif-2026.md",
-            "index": 1, "heading": "## Carte Atlas", "language": "fr",
+            "index": 1, "heading": "## Carte Baraka", "language": "fr",
             "section_type": "content", "origin": "documents/",
-            "tokens": 210, "chars": 1180, "text": "## Carte Atlas\n\n…"}]}
+            "tokens": 210, "chars": 1180, "text": "## Carte Baraka\n\n…"}]}
 ```
 
 `chunking_now` is the CURRENT profile's chunking — if `/health` says the index
@@ -390,7 +390,7 @@ nothing is shared):
                         "heading": "## Prices"},
                "next": {"id": "note.md::chunk_0003", "index": 3,
                         "heading": "## Prices"}},
- "overlap_with_prev": {"chars": 173, "text": "## Prices\n\nThe Atlas card costs…"}}
+ "overlap_with_prev": {"chars": 173, "text": "## Prices\n\nThe Baraka card costs…"}}
 ```
 
 Errors: `409 empty_index` (no stored chunks for this profile — build with
@@ -434,13 +434,13 @@ query_lang?}`. `query_lang` forces the query's language detection
 invalid enum values → `400 bad_mode` / `bad_lang_filter` / `bad_query_lang`.
 
 ```json
-{"question": "What does the Atlas card cost?", "language": "en", "k": 2,
+{"question": "What does the Baraka card cost?", "language": "en", "k": 2,
  "mode": "vector",
  "embedder": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
- "variants": [{"label": "en(original)", "text": "What does the Atlas card cost?"}],
+ "variants": [{"label": "en(original)", "text": "What does the Baraka card cost?"}],
  "hits": [{"rank": 1, "id": "note.md::chunk_0001", "similarity": 0.83,
            "language": "en", "heading": "## Fees", "source": "note.md",
-           "chunk_index": 1, "text": "## Fees\n\nThe Atlas card costs 10 dinars per year."}]}
+           "chunk_index": 1, "text": "## Fees\n\nThe Baraka card costs 10 dinars per year."}]}
 ```
 
 Errors: `503 missing_api_key` (embedding), `409 empty_index` (ingest first),
@@ -497,10 +497,10 @@ reply, PII-scrubbed) for display like "[model said, not accepted]". Render
 
 ```json
 {"status": "answered", "reason": "supported",
- "answer": "The Atlas card costs 10 dinars per year. [S1]",
- "claims": [{"text": "The Atlas card costs 10 dinars per year.",
+ "answer": "The Baraka card costs 10 dinars per year. [S1]",
+ "claims": [{"text": "The Baraka card costs 10 dinars per year.",
              "evidence": [{"source_id": "S1",
-                           "quote": "## Fees The Atlas card costs 10 dinars p"}]}],
+                           "quote": "## Fees The Baraka card costs 10 dinars p"}]}],
  "sources": [{"source_id": "S1", "document": "note.md",
               "chunk_id": "note.md::chunk_0001", "heading": "## Fees"}],
  "model": "nvidia/nemotron-3.5-lightning-30b-a3b", "language": "en",
@@ -564,7 +564,7 @@ usable for cross-lingual retrieval at all".
 
 ### 3.12 `POST /evaluate` — run a question set
 Request: `{questions: "questions.json" | "questions_50.json" |
-"questions_real.json" | absolute path on the service host, top_k? (1–50,
+"questions_v2.json" / "questions_real.json" | absolute path on the service host, top_k? (1–50,
 default 20)}`. Unknown name/path → `400 unknown_question_set`; empty set →
 `400 empty_question_set`. Embeds every question (spends budget, minutes).
 

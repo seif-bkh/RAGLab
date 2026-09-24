@@ -17,6 +17,7 @@ Output: results/harness50/{arm_baseline.json, arm_restructure.json,
 """
 from __future__ import annotations
 
+import argparse
 import json
 import statistics
 import sys
@@ -121,8 +122,18 @@ def build_arm(name: str, mode: str, docs: list[dict]) -> dict:
         hits = store.keyword_search(collection, q, k=TOP_K,
                                     include_metadata=True, cfg=None)
         is_oos = case["category"] == "out-of-scope"
-        correct = None if is_oos else evaluate.find_correct_hit(case, hits)
-        any_lang = None if is_oos else evaluate.find_correct_any_lang(case, hits)
+        if is_oos or not case.get("expected_substrings"):
+            correct = None if is_oos else evaluate.find_correct_hit(case, hits)
+            any_lang = None if is_oos else evaluate.find_correct_any_lang(case, hits)
+        else:
+            # Multi-requirement case: the hit completing the requirement set
+            # carries the rank (same semantics as evaluate.run_evaluation).
+            complete_rank = evaluate.requirement_completion_rank(case, hits)
+            correct = (next((h for h in hits if h["rank"] == complete_rank), None)
+                       if complete_rank is not None else None)
+            any_lang = None
+        reqs = (evaluate.requirement_coverage(case, [h["text"] for h in hits])
+                if not is_oos else None)
         per_question.append({
             "id": case["id"],
             "question": case["question"],
@@ -149,6 +160,9 @@ def build_arm(name: str, mode: str, docs: list[dict]) -> dict:
             "correct_id": correct["id"] if correct else None,
             "correct_any_lang_rank": any_lang["rank"] if any_lang else None,
             "correct_any_lang_id": any_lang["id"] if any_lang else None,
+            "requirements_found": reqs["found"] if reqs else None,
+            "requirements_total": reqs["total"] if reqs else None,
+            "requirements_missing": reqs["missing"] if reqs else None,
             "hit_at_1": bool(correct and correct["rank"] <= 1),
             "hit_at_3": bool(correct and correct["rank"] <= 3),
             "hit_at_5": bool(correct and correct["rank"] <= 5),
@@ -181,38 +195,44 @@ def validate_substrings(cases: list[dict], docs: list[dict],
     """Every expected_substring must exist (a) in the raw document text and
     (b) inside at least one restructure-arm chunk of the expected document.
     (a) can legitimately fail for the scrambled PDFs — that is precisely the
-    baseline's weakness — so it is reported, not fatal. (b) is fatal."""
+    baseline's weakness — so it is reported, not fatal. (b) is fatal.
+    Multi-requirement cases (expected_substrings) follow the same rule per
+    requirement."""
     by_name = {d["name"]: d for d in docs}
     chunk_text_by_doc: dict[str, list[str]] = {}
     for c in restructure_chunks:
         chunk_text_by_doc.setdefault(c.source, []).append(c.text)
 
-    lines = ["# questions_50.json — expected_substring validation",
+    lines = [f"# {QUESTIONS.name} — expected evidence validation",
              "",
-             "| id | doc | in raw text | in restructure chunks |",
+             "| id | requirement | in raw text | in restructure chunks |",
              "|---|---|---|---|"]
     fatal = []
     for case in cases:
-        sub = case.get("expected_substring")
-        if not sub:
+        reqs = ([case["expected_substring"]]
+                if case.get("expected_substring") else [])
+        reqs.extend(case.get("expected_substrings") or [])
+        if not reqs:
             continue
         doc = case.get("expected_document", "")
         raw = by_name.get(doc, {}).get("text", "")
-        in_raw = evaluate.normalize_for_match(sub) in evaluate.normalize_for_match(raw)
-        in_re = any(evaluate.normalize_for_match(sub)
-                    in evaluate.normalize_for_match(t)
-                    for t in chunk_text_by_doc.get(doc, []))
-        flag = "YES" if in_re else "**NO — fix the case**"
-        lines.append(f"| {case['id']} | {doc} | {'yes' if in_raw else 'no (baseline misses by design)'} | {flag} |")
-        if not in_re:
-            fatal.append(case["id"])
+        for sub in reqs:
+            in_raw = evaluate.normalize_for_match(sub) in evaluate.normalize_for_match(raw)
+            in_re = any(evaluate.normalize_for_match(sub)
+                        in evaluate.normalize_for_match(t)
+                        for t in chunk_text_by_doc.get(doc, []))
+            flag = "YES" if in_re else "**NO — fix the case**"
+            lines.append(f"| {case['id']} | {sub[:48]} | "
+                         f"{'yes' if in_raw else 'no (baseline misses by design)'} | {flag} |")
+            if not in_re:
+                fatal.append(case["id"])
     report = "\n".join(lines) + "\n"
     (RESULTS / "validation.md").write_text(report, encoding="utf-8")
     if fatal:
-        print(f"[harness50] VALIDATION FAILED — substrings missing from the "
-              f"restructure arm for: {', '.join(fatal)}")
+        print(f"[harness50] VALIDATION FAILED — evidence missing from the "
+              f"restructure arm for: {', '.join(sorted(set(fatal)))}")
     else:
-        print(f"[harness50] validation OK — every expected_substring is "
+        print(f"[harness50] validation OK — every expected evidence item is "
               f"present in the restructure arm")
     return fatal
 
@@ -225,17 +245,25 @@ def pct(x):
     return "n/a" if x is None else f"{x * 100:.0f}%"
 
 
-def comparison_table(base: dict, restr: dict) -> str:
+def comparison_table(base: dict, restr: dict, questions_name: str = "") -> str:
     b, r = base["metrics"], restr["metrics"]
-    L = ["# harness50 — size-220/40 baseline vs restructure (BM25-only, k=20)",
+    qs = base["questions"]
+    n_total = len(qs)
+    n_answerable = sum(1 for q in qs if not q["is_out_of_scope"])
+    langs = sorted({str(q.get("language")) for q in qs})
+    lang_counts = ", ".join(
+        f"{sum(1 for q in qs if q.get('language') == lg)} {lg}" for lg in langs)
+    n_oos = n_total - n_answerable
+    L = [f"# harness50 — size-220/40 baseline vs restructure (BM25-only, k=20)",
          "",
          "Corpus: 6 documents (4 Arabic docs — 2 PDFs stored in visual word "
          "order with corrupted digits — + 1 Arabic guide + 1 Arabic intro; "
-         "2 parallel fictional FR/AR product sheets). Retrieval: BM25 lexical "
+         "2 parallel FR/AR Al Baraka Bank Tunisie product sheets (official public data, 2026-09-24)). Retrieval: BM25 lexical "
          "only, identical for both arms; the only variable is the chunking "
-         "strategy. Questions: 50 (17 ar / 17 fr / 16 en, 5 out-of-scope).",
+         f"strategy. Questions{' (' + questions_name + ')' if questions_name else ''}: "
+         f"{n_total} ({lang_counts}, {n_oos} out-of-scope).",
          "",
-         "## Overall (45 answerable)",
+         f"## Overall ({n_answerable} answerable)",
          "",
          "| arm | hit@1 | hit@3 | hit@5 |",
          "|---|---|---|---|",
@@ -283,18 +311,35 @@ def comparison_table(base: dict, restr: dict) -> str:
 
 # ---------------------------------------------------------------------------
 def main() -> int:
+    global QUESTIONS, RESULTS
+    parser = argparse.ArgumentParser(
+        prog="harness50",
+        description="Offline BM25 A/B: size vs restructure chunking over the "
+                    "6-document corpus, scored with the lab judge.")
+    parser.add_argument("--questions", default="questions_50.json",
+                        help="question-set file name in raglab/ or an absolute "
+                             "path (default: questions_50.json)")
+    parser.add_argument("--results", default=None,
+                        help="output dir name under raglab/results/ "
+                             "(default: harness50)")
+    args = parser.parse_args()
+    q_path = Path(args.questions)
+    QUESTIONS = q_path if q_path.is_absolute() else HERE / q_path
+    if args.results:
+        RESULTS = HERE / "results" / args.results
+
     docs = load_all(DOCS_DIRS)
     cases = evaluate.load_question_set(QUESTIONS)
     langs = {c["language"] for c in cases}
-    print(f"[harness50] corpus: {len(docs)} docs | questions: {len(cases)} | "
-          f"langs: {sorted(langs)}")
+    print(f"[harness50] corpus: {len(docs)} docs | questions: {QUESTIONS.name} "
+          f"({len(cases)}) | langs: {sorted(langs)}")
 
     base, _base_chunks = build_arm("baseline", "size", docs)
     restr, restr_chunks = build_arm("restructure", "restructure", docs)
 
     fatal = validate_substrings(cases, docs, restr_chunks)
 
-    table = comparison_table(base, restr)
+    table = comparison_table(base, restr, questions_name=QUESTIONS.name)
     (RESULTS / "comparison.md").write_text(table, encoding="utf-8")
     print("\n" + table)
     print(f"[harness50] wrote {RESULTS / 'comparison.md'}")

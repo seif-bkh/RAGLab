@@ -912,8 +912,8 @@ from retrieval import retrieve  # noqa: E402
 
 _app_tmp = Path(tempfile.mkdtemp())
 (_app_tmp / "note.md").write_text(
-    "# Account\n\nThe Atlas current account has no management fee.\n\n"
-    "## Fees\n\nThe Atlas card costs 10 dinars per year.\n", encoding="utf-8")
+    "# Account\n\nThe Baraka current account has no management fee.\n\n"
+    "## Fees\n\nThe Baraka card costs 10 dinars per year.\n", encoding="utf-8")
 
 _app_state = app_mod.default_state()
 _app_state["embedding"] = {"provider": "huggingface", "model": "Qwen/Qwen3-Embedding-0.6B"}
@@ -957,7 +957,7 @@ class _FakeChatClient:
         source = payload["sources"][0]
         quote = " ".join(source["text"].split())[:40]
         return {"text": json.dumps({"answerable": True, "claims": [
-            {"text": "The Atlas card costs 10 dinars per year.",
+            {"text": "The Baraka card costs 10 dinars per year.",
              "evidence": [{"source_id": source["source_id"], "quote": quote}]}]}),
             "served_model": model, "usage": {}, "seconds": 0.0}
 
@@ -980,7 +980,7 @@ try:
     _gen = AnswerGenerator(_local, client=_FakeChatClient(),
                            approved_models=(_app_state["answer"]["model"],))
     _result = app_mod.chat_mod.ask(_local, _emb, _col, _gen,
-                                   "What does the Atlas card cost?")
+                                   "What does the Baraka card cost?")
     check("app: one chat turn returns a validated, cited answer",
           _result["status"] == "answered" and _result["validation_ok"]
           and _result["claims"] and _result["sources"]
@@ -1183,13 +1183,13 @@ check("answer: unsourced_numbers ignores prose without digits",
       answer_mod.unsourced_numbers("no numbers here", ["none at all"]) == [])
 
 _gate_sources = [{"source_id": "S1",
-                  "text": "The Atlas card costs 10 dinars per year."}]
+                  "text": "The Baraka card costs 10 dinars per year."}]
 try:
     _claims = answer_mod.validate_answer(
         {"answerable": True, "claims": [
-            {"text": "The Atlas card costs 10 dinars.",
+            {"text": "The Baraka card costs 10 dinars.",
              "evidence": [{"source_id": "S1",
-                           "quote": "Atlas card costs 10 dinars"}]}]},
+                           "quote": "Baraka card costs 10 dinars"}]}]},
         _gate_sources)
     check("answer: gate accepts a claim whose numbers are in its evidence",
           len(_claims) == 1)
@@ -1199,9 +1199,9 @@ except ValueError as _exc:
 try:
     answer_mod.validate_answer(
         {"answerable": True, "claims": [
-            {"text": "The Atlas card costs 99 dinars.",
+            {"text": "The Baraka card costs 99 dinars.",
              "evidence": [{"source_id": "S1",
-                           "quote": "Atlas card costs 10 dinars"}]}]},
+                           "quote": "Baraka card costs 10 dinars"}]}]},
         _gate_sources)
     check("answer: gate refuses a claim with a number its evidence lacks",
           False, "the gate accepted 99")
@@ -1210,7 +1210,7 @@ except answer_mod.UnsourcedNumber as _exc:
           "99" in str(_exc))
 
 _scrub_cases = [
-    ("mail support@atlas.tn", "mail [EMAIL]"),
+    ("mail support@baraka.example", "mail [EMAIL]"),
     ("call +216 71 123 456", "call [PHONE]"),
     ("RIB 08 0000 0000 0000 0000 12", "RIB [RIB]"),
     ("CIN: 09123456", "CIN: [CIN]"),

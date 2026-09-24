@@ -31,9 +31,9 @@ except ImportError:  # pragma: no cover
     raise unittest.SkipTest("fastapi/httpx not installed; "
                             "pip install -r requirements-service.txt")
 
-CORPUS = ("# Account\n\nThe Atlas current account has no management fee.\n\n"
-          "## Fees\n\nThe Atlas card costs 10 dinars per year.\n")
-QUESTION = "What does the Atlas card cost?"
+CORPUS = ("# Account\n\nThe Baraka current account has no management fee.\n\n"
+          "## Fees\n\nThe Baraka card costs 10 dinars per year.\n")
+QUESTION = "What does the Baraka card cost?"
 PROFILE_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"  # fake client, no call is made
 
 
@@ -67,7 +67,7 @@ class _FakeChatClient:
         source = payload["sources"][0]
         quote = " ".join(source["text"].split())[:40]
         return {"text": json.dumps({"answerable": True, "claims": [
-            {"text": "The Atlas card costs 10 dinars per year.",
+            {"text": "The Baraka card costs 10 dinars per year.",
              "evidence": [{"source_id": source["source_id"], "quote": quote}]}]}),
             "served_model": model, "usage": {}, "seconds": 0.0}
 
@@ -352,11 +352,11 @@ class ConsoleEndpointsTest(unittest.TestCase):
     """The console-parity endpoints: keys, inspect, chunk search, sanity,
     evaluate, extended profile switching — stubbed providers, real app."""
 
-    CORPUS = ("# Products\n\nOverview of the Atlas retail range.\n\n## Prices\n\n"
+    CORPUS = ("# Products\n\nOverview of the Baraka retail range.\n\n## Prices\n\n"
               + "".join(
-                  f"The Atlas card costs 10 dinars per year, and this price "
+                  f"The Baraka card costs 10 dinars per year, and this price "
                   f"sheet {i} confirms that annual maintenance is included "
-                  f"for every Atlas customer without exception, number {i}.\n\n"
+                  f"for every Baraka customer without exception, number {i}.\n\n"
                   for i in range(30)))
 
     @classmethod
@@ -407,7 +407,7 @@ class ConsoleEndpointsTest(unittest.TestCase):
         self.assertEqual(docs["note.md"]["chunks"], body["total"])
         first = body["items"][0]
         self.assertEqual((first["source"], first["index"]), ("note.md", 1))
-        self.assertIn("Atlas", first["text"])
+        self.assertIn("Baraka", first["text"])
         # pagination continues in order without overlap
         page1 = self.client.get("/chunks?limit=2&offset=0").json()
         page2 = self.client.get("/chunks?limit=2&offset=2").json()
@@ -500,7 +500,7 @@ class ConsoleEndpointsTest(unittest.TestCase):
 
     def test_evaluate_runs_a_question_set(self):
         cases = {"cases": [{
-            "id": "t1", "question": "What does the Atlas card cost?",
+            "id": "t1", "question": "What does the Baraka card cost?",
             "language": "en", "category": "verbatim",
             "expected_substring": "10 dinars"}]}
         path = self.tmp / "mini_questions.json"
@@ -604,7 +604,7 @@ class _ScriptedChatClient:
     base_url = "https://fake.test/v1"
     api_key = "fake"
     marker = "10 dinars"
-    claim = "The Atlas card costs 10 dinars per year."
+    claim = "The Baraka card costs 10 dinars per year."
 
     def chat(self, model, messages, *, max_tokens=4096):
         payload = json.loads(messages[1]["content"])
@@ -618,14 +618,14 @@ class _ScriptedChatClient:
 
 
 class _ContactQuoteClient(_ScriptedChatClient):
-    marker = "support@atlas.tn"
-    claim = ("Atlas support is support@atlas.tn, phone +216 71 123 456, "
+    marker = "support@baraka.example"
+    claim = ("Baraka support is support@baraka.example, phone +216 71 123 456, "
              "RIB 08 0000 0000 0000 0000 12, CIN 09123456.")
 
 
 class _LyingNumberClient(_ScriptedChatClient):
     marker = "10 dinars"
-    claim = "The Atlas card costs 99 dinars per year."
+    claim = "The Baraka card costs 99 dinars per year."
 
 
 class ServiceAuthTest(unittest.TestCase):
@@ -710,13 +710,13 @@ class OutputGuardsTest(unittest.TestCase):
     numeric half of the gate (a claim number absent from its evidence quote
     refuses as unsourced_number)."""
 
-    CORPUS = ("# Atlas Bank\n\n"
+    CORPUS = ("# Baraka Bank\n\n"
               "Product sheet for testing.\n\n"
               "## Contact\n\n"
-              "Atlas support: email support@atlas.tn, phone +216 71 123 456, "
+              "Baraka support: email support@baraka.example, phone +216 71 123 456, "
               "RIB 08 0000 0000 0000 0000 12, CIN 09123456 for verification.\n\n"
               "## Fees\n\n"
-              "The Atlas card costs 10 dinars per year.\n")
+              "The Baraka card costs 10 dinars per year.\n")
 
     @classmethod
     def setUpClass(cls):
@@ -759,7 +759,7 @@ class OutputGuardsTest(unittest.TestCase):
 
     def test_answer_output_is_pii_scrubbed_after_the_gate(self):
         response = self.contact_client.post(
-            "/answer", json={"question": "How do I contact Atlas support?",
+            "/answer", json={"question": "How do I contact Baraka support?",
                              "k": 5, "include_excerpts": True})
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
@@ -771,7 +771,7 @@ class OutputGuardsTest(unittest.TestCase):
         self.assertIn("[EMAIL]", claim["text"])
         self.assertIn("[RIB]", claim["evidence"][0]["quote"])
         blob = json.dumps(body)
-        for raw in ("support@atlas.tn", "+216 71 123 456",
+        for raw in ("support@baraka.example", "+216 71 123 456",
                     "08 0000 0000 0000 0000 12", "09123456"):
             self.assertNotIn(raw, blob, raw)
         # excerpts too (order-independent: the stub embedder's ranking varies
@@ -781,10 +781,10 @@ class OutputGuardsTest(unittest.TestCase):
 
     def test_search_hits_are_pii_scrubbed(self):
         response = self.contact_client.post(
-            "/search", json={"question": "Atlas support contact email"})
+            "/search", json={"question": "Baraka support contact email"})
         self.assertEqual(response.status_code, 200, response.text)
         blob = json.dumps(response.json())
-        self.assertNotIn("support@atlas.tn", blob)
+        self.assertNotIn("support@baraka.example", blob)
         self.assertIn("[EMAIL]", blob)
 
     def test_inspect_shows_raw_text(self):
@@ -792,11 +792,11 @@ class OutputGuardsTest(unittest.TestCase):
         # scrub boundary is the user-facing /answer and /search outputs
         response = self.contact_client.get("/inspect", params={"limit": 10})
         self.assertEqual(response.status_code, 200)
-        self.assertIn("support@atlas.tn", json.dumps(response.json()))
+        self.assertIn("support@baraka.example", json.dumps(response.json()))
 
     def test_unsourced_number_refuses(self):
         response = self.lying_client.post(
-            "/answer", json={"question": "What does the Atlas card cost?"})
+            "/answer", json={"question": "What does the Baraka card cost?"})
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(body["status"], "refused")
@@ -817,7 +817,7 @@ class DocumentsApiTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp())
         (cls.tmp / "seed.md").write_text(
-            "# Seed\n\nseed doc\n\n## Info\n\nAtlas was founded in 2016.\n",
+            "# Seed\n\nseed doc\n\n## Info\n\nBaraka was founded in 2016.\n",
             encoding="utf-8")
         profile = _service_profile(cls.tmp)
         overrides = {"CHROMA_DIR": cls.tmp / "chroma",
@@ -854,7 +854,7 @@ class DocumentsApiTest(unittest.TestCase):
         sys.modules.pop("sentence_transformers", None)
 
     GUIDED_MD = ("# Guide\n\nguide doc\n\n## Fees\n\n"
-                 "The Atlas card costs 10 dinars per year.\n")
+                 "The Baraka card costs 10 dinars per year.\n")
 
     def test_push_json_lifecycle_with_versions_and_statuses(self):
         # create -> 201, pending (nothing ingested since)

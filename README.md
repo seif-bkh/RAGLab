@@ -72,5 +72,6 @@ approved nonconfidential documents, not unsupervised customer banking advice.
 See [the CLI guide](raglab/README.md), [readiness assessment](raglab/READINESS.md),
 and [measured model comparison](raglab/FREE_MODELS_REPORT.md). Historical reports
 and fixtures remain as evidence; their earlier providers are not active choices.
-The sample bank in `data/` is fictional; `docs/` contains the four real evaluation
-documents. No UI, account access, cloud vector database, or orchestration framework.
+`data/` holds product sheets compiled from Al Baraka Bank Tunisie's official public
+pages (collected 2026-09-24, for pipeline testing — not official bank documents);
+`docs/` contains the four real evaluation documents. No UI, account access, cloud vector database, or orchestration framework.

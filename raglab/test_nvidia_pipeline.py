@@ -308,17 +308,17 @@ class Contracts(unittest.TestCase):
         def chunk(index, source, language, text):
             return SimpleNamespace(index=index, source=source, language=language, text=text,
                                    heading="", origin="test/", section_type="content", token_count=20)
-        chunks = [chunk(0, "ar.md", "ar", "تاسس بنك Atlas في 1983. bank"),
-                  chunk(0, "fr.md", "fr", "La banque Atlas a été fondée en 1983. bank")]
+        chunks = [chunk(0, "ar.md", "ar", "تاسس بنك Baraka في 1983. bank"),
+                  chunk(0, "fr.md", "fr", "La banque Baraka a été fondée en 1983. bank")]
         vectors = [[1.0] + [0.0] * 2047, [0.0, 1.0] + [0.0] * 2046]
         collection = get_collection(self.cfg, reset=True)
         self.assertEqual(store_chunks(collection, list(zip(chunks, vectors)), self.cfg), 2)
         fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
         for mode in ['vector', 'rrf', 'blend']:
-            hits, _ = retrieve(self.cfg, fake_embedder, collection, 'Atlas bank', language='en',
+            hits, _ = retrieve(self.cfg, fake_embedder, collection, 'Baraka bank', language='en',
                                translator=None, mode=mode, top_k=5, lang_filter='fr')
             self.assertEqual([h['metadata']['language'] for h in hits], ['fr'])
-        case = {'id': 'q1', 'question': 'When was Atlas founded?', 'language': 'en',
+        case = {'id': 'q1', 'question': 'When was Baraka founded?', 'language': 'en',
                 'category': 'cross-lingual', 'expected_document': 'ar.md',
                 'expected_lang': 'ar', 'expected_substring': '1983'}
         run = run_evaluation(self.cfg, fake_embedder, collection, [case], top_k=5)
@@ -327,7 +327,7 @@ class Contracts(unittest.TestCase):
         # Metadata is read before any new provider calls when querying a stale index.
         self.cfg.NVIDIA_EMBEDDING_MODEL = 'wrong-space'
         with self.assertRaisesRegex(RuntimeError, 'embedding model mismatch'):
-            retrieve(self.cfg, fake_embedder, collection, 'Atlas', top_k=1)
+            retrieve(self.cfg, fake_embedder, collection, 'Baraka', top_k=1)
 
     def test_strict_ingest_preflights_before_any_write(self):
         collection = SimpleNamespace(count=lambda: 0, add=lambda **kw: self.fail('must not write'))
@@ -1316,6 +1316,213 @@ class ManualChunkMaps(unittest.TestCase):
             size = chat.chat_config(chat.CHAT_MODEL, cache_path=str(Path(tmp) / 'a2.json'))
             self.assertEqual('raglab_chat', size.CHROMA_COLLECTION_NAME,
                              'the two segmentations must not share an index')
+
+
+class TargetStateEvaluation(unittest.TestCase):
+    """Phase-2 target-state metrics: new categories, multi-requirement
+    coverage, completion rank, evidence-in-final-context."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        self.cfg = make_config(CHROMA_DIR=self.path / 'chroma',
+                               ANSWER_CACHE_PATH=self.path / 'answers.json')
+
+    def test_new_categories_accepted_and_old_ones_kept(self):
+        from evaluate import VALID_CATEGORIES
+        self.assertTrue({'colloquial', 'synonyms', 'implicit', 'compound',
+                         'ambiguous'} <= VALID_CATEGORIES)
+        self.assertTrue({'verbatim', 'paraphrase', 'cross-lingual',
+                         'out-of-scope'} <= VALID_CATEGORIES)
+
+    def test_requirement_coverage_and_completion_rank(self):
+        from evaluate import requirement_coverage, requirement_completion_rank
+        case = {'expected_document': 'ar.md',
+                'expected_substrings': ['Baraka', '1983', 'غير موجود']}
+        hits = [
+            {'rank': 1, 'text': 'La banque Baraka a été fondée en 1983.',
+             'metadata': {'document': 'fr.md'}},
+            {'rank': 2, 'text': 'تاسس بنك Baraka في 1983.',
+             'metadata': {'document': 'ar.md'}},
+        ]
+        cov = requirement_coverage(case, [h['text'] for h in hits])
+        self.assertEqual((cov['found'], cov['total']), (2, 3))
+        self.assertIn('غير موجود', cov['missing'])
+        # the unreachable third requirement keeps the set incomplete -> None
+        self.assertIsNone(requirement_completion_rank(case, hits))
+        # with only the two coverable requirements, the ar.md hit at rank 2
+        # completes the set (rank 1 is from the wrong document)
+        coverable = {'expected_document': 'ar.md',
+                     'expected_substrings': ['Baraka', '1983']}
+        self.assertEqual(requirement_completion_rank(coverable, hits), 2)
+        # without the document constraint the first hit completes nothing
+        # (both requirements are in it) -> rank 1
+        self.assertEqual(
+            requirement_completion_rank({'expected_substrings': ['Baraka', '1983']},
+                                        hits), 1)
+        # uncovered set -> None
+        self.assertIsNone(requirement_completion_rank(
+            {'expected_substrings': ['مفقود تماما']}, hits))
+        # no requirements -> None (single-requirement cases unaffected)
+        self.assertIsNone(requirement_completion_rank(
+            {'expected_substring': 'x'}, hits))
+
+    def test_load_question_set_validates_expected_substrings(self):
+        from evaluate import load_question_set
+        good = self.path / 'good.json'
+        good.write_text(json.dumps({'cases': [
+            {'id': 't1', 'question': 'q', 'language': 'ar', 'category': 'compound',
+             'expected_document': 'd.md', 'expected_substrings': ['a', 'b']},
+            {'id': 't2', 'question': 'q', 'language': 'ar', 'category': 'out-of-scope'},
+        ]}, ensure_ascii=False), encoding='utf-8')
+        cases = load_question_set(good)
+        self.assertEqual(len(cases), 2)
+        bad = self.path / 'bad.json'
+        bad.write_text(json.dumps({'cases': [
+            {'id': 't1', 'question': 'q', 'language': 'ar', 'category': 'compound',
+             'expected_substrings': []},
+            {'id': 't2', 'question': 'q', 'language': 'ar', 'category': 'out-of-scope',
+             'expected_substrings': ['x']},
+        ]}, ensure_ascii=False), encoding='utf-8')
+        with patch('builtins.print'):
+            load_question_set(bad)   # warns loudly, does not crash
+
+    def test_run_evaluation_multi_requirement_and_context_metrics(self):
+        def chunk(index, source, language, text):
+            return SimpleNamespace(index=index, source=source, language=language,
+                                   text=text, heading='', origin='test/',
+                                   section_type='content', token_count=20)
+        chunks = [chunk(0, 'ar.md', 'ar', 'تاسس بنك Baraka في 1983 بمدينة نابل.')]
+        vectors = [[1.0] + [0.0] * 2047]
+        collection = get_collection(self.cfg, reset=True)
+        store_chunks(collection, list(zip(chunks, vectors)), self.cfg)
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+        multi = {'id': 'm1', 'question': 'When was Baraka founded and where?',
+                 'language': 'en', 'category': 'compound',
+                 'expected_document': 'ar.md', 'expected_lang': 'ar',
+                 'expected_substrings': ['Baraka', '1983']}
+        single = {'id': 's1', 'question': 'When was Baraka founded?',
+                  'language': 'en', 'category': 'verbatim',
+                  'expected_document': 'ar.md', 'expected_lang': 'ar',
+                  'expected_substring': '1983'}
+        run = run_evaluation(self.cfg, fake_embedder, collection,
+                             [multi, single], top_k=5)
+        q_multi, q_single = run['questions']
+        # multi: hit@1 comes from the completion rank, both requirements in rank 1
+        self.assertTrue(q_multi['hit_at_1'])
+        self.assertEqual(q_multi['requirements_found'], 2)
+        self.assertEqual(q_multi['requirements_total'], 2)
+        self.assertTrue(q_multi['requirements_all_in_context'])
+        # single: expected evidence survives the answer-path budget
+        self.assertTrue(q_single['evidence_in_context'])
+        self.assertIn('ar.md', ' '.join(q_single['context_source_ids']))
+        m = run['metrics']
+        self.assertEqual(m['requirements']['n'], 1)
+        self.assertEqual(m['requirements']['all_requirements_top_k'], 1.0)
+        self.assertEqual(m['context']['n'], 1)
+        self.assertEqual(m['context']['evidence_in_context'], 1.0)
+        # old-style rows (harness50) without the new keys still aggregate
+        bare = [{'id': 'x', 'is_out_of_scope': False, 'category': 'verbatim',
+                 'language': 'en', 'hit_at_1': True, 'hit_at_3': True,
+                 'hit_at_5': True, 'hits': [{'rank': 1, 'id': 'ar.md::chunk_0001',
+                                             'score': 0.5}],
+                 'correct_id': 'ar.md::chunk_0001',
+                 'correct_score': 0.5, 'correct_rank': 1}]
+        from evaluate import compute_metrics
+        out = compute_metrics(bare)
+        self.assertIsNone(out['requirements'])
+        self.assertIsNone(out['context'])
+        self.assertEqual(out['overall']['hit@1'], 1.0)
+
+
+class ModelIndependenceAB(unittest.TestCase):
+    """answer_ab.run_comparison: fixed retrieval, swapped answer models."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        self.cfg = make_config(CHROMA_DIR=self.path / 'chroma',
+                               ANSWER_CACHE_PATH=self.path / 'answers.json')
+
+    def _collection(self):
+        def chunk(index, source, language, text):
+            return SimpleNamespace(index=index, source=source, language=language,
+                                   text=text, heading='', origin='test/',
+                                   section_type='content', token_count=20)
+        chunks = [chunk(0, 'ar.md', 'ar', 'تاسس بنك Baraka في 1983.'),
+                  chunk(0, 'fr.md', 'fr', 'La banque Baraka a été fondée en 1983.')]
+        vectors = [[1.0] + [0.0] * 2047, [0.0, 1.0] + [0.0] * 2046]
+        collection = get_collection(self.cfg, reset=True)
+        store_chunks(collection, list(zip(chunks, vectors)), self.cfg)
+        return collection, vectors
+
+    def test_jaccard_edge_cases(self):
+        from answer_ab import _jaccard
+        self.assertIsNone(_jaccard([], []))
+        self.assertEqual(_jaccard(['a'], ['a']), 1.0)
+        self.assertEqual(_jaccard(['a'], ['b']), 0.0)
+        self.assertAlmostEqual(_jaccard(['a', 'b'], ['b', 'c']), 1 / 3)
+
+    def test_same_hits_all_arms_and_divergence_detection(self):
+        from answer_ab import run_comparison
+        collection, vectors = self._collection()
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+
+        class FakeGen:
+            def __init__(self, status, reason='insufficient_evidence'):
+                self.status, self.reason = status, reason
+                self.seen = []
+
+            def answer(self, question, hits, language, use_cache=True):
+                self.seen.append([h['id'] for h in hits])
+                if self.status == 'answered':
+                    return {'status': 'answered', 'reason': None, 'model': 'fake',
+                            'claims': [{'text': 'x'}],
+                            'sources': [{'chunk_id': hits[0]['id']}],
+                            'validation_ok': True}
+                return {'status': self.status, 'reason': self.reason, 'model': 'fake',
+                        'claims': [], 'sources': [], 'validation_ok': True}
+
+        a, b = FakeGen('answered'), FakeGen('refused')
+        cases = [{'id': 'q1', 'question': 'Baraka bank', 'language': 'en',
+                  'category': 'verbatim'}]
+        report = run_comparison(self.cfg, fake_embedder, collection, cases,
+                                [('ref', a), ('alt', b)], top_k=2, mode='vector')
+        # both arms received the IDENTICAL hit ids (model independence)
+        self.assertEqual(a.seen, b.seen)
+        self.assertTrue(a.seen and a.seen[0])
+        # divergence detected: statuses differ -> substance-divergent question
+        pair = report['pairwise']['ref vs alt']
+        self.assertEqual(pair['status_agreement'], 0.0)
+        self.assertIn('q1', pair['substance_divergent_questions'])
+        self.assertEqual(report['per_model']['ref']['answered'], 1)
+        self.assertEqual(report['per_model']['alt']['refused'], 1)
+
+    def test_agreement_when_arms_match(self):
+        from answer_ab import run_comparison
+        collection, vectors = self._collection()
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+
+        class AgreeingGen:
+            def answer(self, question, hits, language, use_cache=True):
+                return {'status': 'answered', 'reason': None, 'model': 'fake',
+                        'claims': [{'text': 'a'}, {'text': 'b'}],
+                        'sources': [{'chunk_id': h['id']} for h in hits[:1]],
+                        'validation_ok': True}
+
+        cases = [{'id': 'q1', 'question': 'Baraka bank', 'language': 'en',
+                  'category': 'verbatim'},
+                 {'id': 'q2', 'question': 'Baraka 1983', 'language': 'en',
+                  'category': 'verbatim'}]
+        report = run_comparison(self.cfg, fake_embedder, collection, cases,
+                                [('ref', AgreeingGen()), ('alt', AgreeingGen())],
+                                top_k=2, mode='vector')
+        pair = report['pairwise']['ref vs alt']
+        self.assertEqual(pair['status_agreement'], 1.0)
+        self.assertEqual(pair['mean_source_jaccard'], 1.0)
+        self.assertEqual(pair['substance_divergent_questions'], [])
 
 
 if __name__ == '__main__':

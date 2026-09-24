@@ -24,10 +24,22 @@ Current state of the work:
   2. context breadcrumbs above sub-headings/tables;
   3. recursive structural chunking over
      `["\n# ", "\n## ", "\n### ", "\n\n", "\n", " "]` at the usual 220/40 token budget.
-- **Benchmark set**: `raglab/questions_50.json` — 50 questions I generated (17 ar /
-  17 fr / 16 en), categories `verbatim` (12), `paraphrase` (13), `cross-lingual` (20),
-  `out-of-scope` (5, must have NO expected match). Never copy from
+- **Benchmark sets**: `raglab/questions_50.json` — 50 questions (17 ar / 17 fr /
+  16 en), categories `verbatim` (12), `paraphrase` (13), `cross-lingual` (20),
+  `out-of-scope` (5, must have NO expected match). **Revised 2026-09-24**: the 20
+  former Banque Atlas cases now target the Al Baraka sheets (same ids/categories/
+  languages) — numbers must be re-baselined and are NOT comparable with pre-revision
+  runs. Plus `raglab/questions_v2.json` — 38 cases in the target-state symptom
+  categories: `colloquial` (7), `synonyms` (7), `implicit` (7), `compound` (7),
+  `ambiguous` (5, carries `ambiguity_note` for Phase 5), `out-of-scope` (5). Multi-
+  evidence cases use `expected_substrings` (list); hit@k for them = requirement-set
+  completion rank (`evaluate.requirement_completion_rank`); new metrics:
+  `requirements` (coverage@k / in-context) and `context.evidence_in_context`
+  (answer-path budget simulation) in compute_metrics output. Never copy from
   `raglab/questions.json`, `questions_real.json`, or `benchmarks/retrieval_dev.json`.
+  `raglab/answer_ab.py` = the model-independence tool (one retrieval, N answer
+  models, agreement/Jaccard/gate-refusal metrics; offline-tested with fake
+  generators; live wiring into real-test.yml is Phase-2 remainder).
 - **BM25-only A/B harness**: `raglab/harness50.py` (no API calls; deterministic).
 - **Real-model A/B**: `.github/workflows/real-test.yml` (manual trigger, spends API
   calls, reads repo secrets) + `raglab/real_report.py` (table builder).
@@ -145,6 +157,15 @@ that deliverable. Key outcomes (all verified in code this session):
   (additive only, §2.7), pinned-pipeline policy (no number attribution to other models),
   sandbox network (live runs only via CI `real-test.yml`), hard-harness files untouchable,
   offline gate green before every push.
+- **Phase 2 in progress (2026-09-24, same day)** — `RAGLAB_ROADMAP.md` (Arabic) is the
+  execution contract (all phases, gates, owner decisions recorded). Landed: corpus swap
+  Atlas→Al Baraka (owner decision), the 5 new question categories + multi-requirement
+  schema + context metrics in evaluate.py, questions_v2.json (38), q50/legacy-set
+  migration, harness50 `--questions/--results` flags + multi-evidence support,
+  answer_ab.py, service 1.3.0 (questions_v2 in the /evaluate whitelist). Local BM25
+  baselines recorded in §7. Remaining for closure: live CI arm (vector vs rrf — decides
+  the hybrid default BY DATA, owner decision), answer_ab CI wiring, human review of the
+  two auto-drafted Al Baraka chunk maps.
 
 
 ---
@@ -157,8 +178,10 @@ that deliverable. Key outcomes (all verified in code this session):
    (`tests_offline.py`, `test_nvidia_pipeline.py`, `test_hard_harness.py`,
    `main.py inspect`, …) — never move or rename them.
 3. Question-set format follows `raglab/evaluate.py`
-   (`load_question_set`): categories `{verbatim, paraphrase, cross-lingual, out-of-scope}`;
-   out-of-scope questions must have no expected match.
+   (`load_question_set`): categories `{verbatim, paraphrase, cross-lingual, out-of-scope,
+   colloquial, synonyms, implicit, compound, ambiguous}` (the five target-state ones added
+   2026-09-24); out-of-scope questions must have no expected match (including
+   `expected_substrings`).
 4. **Never commit `raglab/.env` or any API key value.** The keys exist as GitHub Actions
    repo secrets named `NVIDIA_API_KEY`, `XKIRO_API_KEY` (and `GOOGLE_API_KEY` for the
    LLM fallback) — added by the user 2026-09-07. Reference them by name in workflows;
@@ -253,11 +276,21 @@ Channels that WORK (use in this order):
   re-derive facts from the raw digit soup; take authoring substrings from the repaired
   output.
 - The Guide stores some decimals inverted — kept as-is (matches the source).
-- `raglab/data/` sheets are a **fictional "Banque Atlas"**, parallel FR/AR, each with a
-  fictional-disclosure section. Questions may quote their numbers (4.50€/mo, 2.75% brut,
-  50 000€ cap, …) — that is by design.
-- Pipeline final stats (restructure mode, 346 chunks total): Circulaire 15, Guide 61,
-  Loi 232, Madkhal 40, ar sheet 10, fr sheet 11. `main.py inspect` exits 0 on all six.
+- `raglab/data/` sheets are **Al Baraka Bank Tunisie** product sheets (owner decision
+  2026-09-24: delete the fictional Banque Atlas entirely): parallel FR/AR, built VERBATIM
+  from the bank's official public pages (albaraka.com.tn: finance islamique, leasing
+  auto, épargne Omra) + the official «Conditions tarifaires 2023» PDF, collected
+  2026-09-24, each with a sources+disclosure section. NOT official bank documents.
+  Known intentional asymmetry: the AR Omra page carries the «50% du coût total» cap the
+  FR page omits — cross-lingual questions exploit it. The AR tariff table labels are our
+  translation of the French-only official PDF. Questions quote its numbers (18/40/90/150
+  TND cards, 30% de l'épargne, 100% véhicule, 5 ans, packs 19,135/22,900/28 TND/mois …).
+  The old Atlas sheets + their chunk maps were `git rm`'d; migration script kept at
+  `raglab/tools/migrate_questions_albaraka.py`.
+- Pipeline stats (restructure mode, LOCAL chars/4 estimator — CI's real cl100k is the
+  arbiter, expect drift): 362 chunks total: Circulaire 15, Guide 52, Loi 218, Madkhal 40,
+  albaraka ar 18, albaraka fr 19. `main.py inspect` exits 0. (Pre-2026-09-24 Atlas-era
+  CI stats were 346: Guide 61, Loi 232, ar 10, fr 11.)
 
 ## 7. Key results (update this section when numbers change)
 
@@ -388,8 +421,20 @@ Channels that WORK (use in this order):
   custom ID but the service never used it. Provider-only switches: same
   provider = no-op; different provider = first registered model, never a
   cross-provider carry-over. One token, no spaces → else 400 bad_model.
-- **BM25-only A/B** (45 evaluable of 50; k=20; full table in
-  `raglab/results/harness50/comparison.md`, regenerable via `harness50.py`):
+- **BM25-only A/B on the Al Baraka corpus (2026-09-24, post-migration baselines)** —
+  the pre-migration Atlas-era numbers below are historical, sets changed:
+  - `questions_50.json` (45 evaluable; k=20): size 42/62/69 → restructure **47/80/80**
+    (hit@1/3/5). By language fr: 13/40/47 → 40/53/53.
+  - `questions_v2.json` (33 evaluable; k=20; symptom categories): size 24/33/39 →
+    restructure **52/67/67**. colloquial 0→**57**, synonyms 29→**57**, implicit 14→**43**
+    (86 @3), compound 43→**57** (86 @3), ambiguous 40→40 (hit@1). OOS max top-1: 23.3 vs
+    26.4. The colloquial zero on the lexical arm is the vocabulary-gap symptom the
+    Phase-3 lexicon targets; implicit/compound expose the Phase-5 relations need.
+  - Regenerate: `harness50.py` and `harness50.py --questions questions_v2.json
+    --results harness50_v2` (new flags; default behavior unchanged).
+- **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of
+  50; k=20; full table in `raglab/results/harness50/comparison.md`, regenerable via
+  `harness50.py`):
   - overall hit@1/3/5: size-220/40 `40/69/80` → restructure `47/78/89`
   - verbatim (12) `42/58/75 → 75/92/100`; paraphrase (13) `46/100/100 → 31/92/100`
     (paraphrase hit@1 drop is expected — BM25 has no word overlap; hit@5 is 100 both);

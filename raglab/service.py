@@ -108,7 +108,7 @@ from scrub import scrub_pii
 
 import docstore as docstore_mod
 
-SERVICE_VERSION = "1.2.5"
+SERVICE_VERSION = "1.3.0"
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +372,8 @@ class EvaluateRequest(BaseModel):
     questions: str = Field(
         "questions.json",
         description="a known set name (questions.json, questions_50.json, "
-                    "questions_real.json) or an absolute path on the service host")
+                    "questions_v2.json, questions_real.json) or an absolute "
+                    "path on the service host")
     top_k: Optional[int] = Field(None, ge=1, le=50)
 
 
@@ -1139,7 +1140,8 @@ def create_app(profile: dict | None = None, *, generator=None,
 
     # -- evaluation (embeds every question — provider calls) -------------------------
 
-    QUESTION_SETS = ("questions.json", "questions_50.json", "questions_real.json")
+    QUESTION_SETS = ("questions.json", "questions_50.json", "questions_v2.json",
+                     "questions_real.json")
 
     @app.post("/evaluate")
     def evaluate(request: EvaluateRequest):

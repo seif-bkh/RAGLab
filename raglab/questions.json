@@ -4,79 +4,81 @@
   "cases": [
     {
       "id": "q01",
-      "question": "Quel est le frais mensuel du Compte Courant Atlas ?",
+      "question": "Quel est le tarif annuel de la carte VISA Classique chez Al Baraka ?",
       "language": "fr",
       "category": "verbatim",
-      "expected_substring": "4,50",
+      "expected_substring": "40 TND",
       "expected_lang": "fr"
     },
     {
       "id": "q02",
-      "question": "Le Compte Courant Atlas Pro est-il réservé aux professionnels ?",
+      "question": "Le Al Baraka Leasing Automobile est-il réservé aux professionnels ?",
       "language": "fr",
       "category": "verbatim",
-      "expected_substring": "Atlas Pro",
+      "expected_substring": "usage professionnel",
       "expected_lang": "fr"
     },
     {
       "id": "q03",
-      "question": "كم تبلغ الرسوم الشهرية لحساب أطلس الجاري؟",
+      "question": "كم يبلغ الرسم السنوي لبطاقة الادخار البركة؟",
       "language": "ar",
       "category": "verbatim",
-      "expected_substring": "4,50",
-      "expected_lang": "ar"
+      "expected_substring": "18 دينار",
+      "expected_lang": "ar",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md"
     },
     {
       "id": "q04",
-      "question": "ما هو شرط الإعفاء من الرسوم الشهرية لحساب أطلس الجاري؟",
+      "question": "ما هي المدة الأدنية للاشتراك في ادخار العمرة لدى بنك البركة؟",
       "language": "ar",
       "category": "verbatim",
-      "expected_substring": "1 500",
-      "expected_lang": "ar"
+      "expected_substring": "سنتين كحد أدنى",
+      "expected_lang": "ar",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md"
     },
     {
       "id": "q05",
-      "question": "Combien coûte la tenue de compte chaque mois pour le compte courant standard d'Atlas ?",
+      "question": "Combien coûte la tenue de compte chaque trimestre pour un compte d’épargne chez Al Baraka ?",
       "language": "fr",
       "category": "paraphrase",
-      "expected_substring": "4,50"
+      "expected_substring": "6 u"
     },
     {
       "id": "q06",
-      "question": "How much do I pay per month for my regular checking account at Atlas?",
+      "question": "How much do I pay every three months for my savings account at Al Baraka?",
       "language": "en",
       "category": "paraphrase",
-      "expected_substring": "4,50"
+      "expected_substring": "6 u"
     },
     {
       "id": "q07",
-      "question": "ما هي تكلفة إدارة الحساب الجاري العادي شهريًا؟",
+      "question": "ما هي تكلفة الاشتراك الشهري في عرض CONFORT؟",
       "language": "ar",
       "category": "paraphrase",
-      "expected_substring": "4,50"
+      "expected_substring": "19,135"
     },
     {
       "id": "q08",
-      "question": "What is the interest rate on the Atlas savings account?",
+      "question": "What is the repayment duration of the Omra financing?",
       "language": "en",
       "category": "cross-lingual",
-      "expected_substring": "2,75",
+      "expected_substring": "une année",
       "expected_lang": "fr"
     },
     {
       "id": "q09",
-      "question": "Is the monthly fee for the Atlas current account waived under any condition?",
+      "question": "Is the Omra financing granted as a share of the savings?",
       "language": "en",
       "category": "cross-lingual",
-      "expected_substring": "1 500",
+      "expected_substring": "30% من قيمة الادخار",
       "expected_lang": "ar"
     },
     {
       "id": "q10",
-      "question": "Quel est le montant minimal pour ouvrir le livret d'épargne Atlas ?",
+      "question": "Quel est le pourcentage maximal du coût total du pèlerinage que le financement Omra ne peut dépasser ?",
       "language": "fr",
       "category": "cross-lingual",
-      "expected_substring": "100",
+      "expected_substring": "50% من الكلفة الجملية للعمرة",
       "expected_lang": "ar"
     },
     {
@@ -89,25 +91,25 @@
     },
     {
       "id": "q12",
-      "question": "Which Atlas account is meant for self-employed professionals?",
+      "question": "Which Al Baraka card is the cheapest one?",
       "language": "en",
       "category": "cross-lingual",
-      "expected_substring": "Atlas Pro",
+      "expected_substring": "18 TND",
       "expected_lang": "fr"
     },
     {
       "id": "q13",
-      "question": "Quel compte proposé par Atlas est destiné aux indépendants ?",
+      "question": "Quelle formule de financement Al Baraka repose sur une association en capital avec le client ?",
       "language": "fr",
       "category": "paraphrase",
-      "expected_substring": "Atlas Pro"
+      "expected_substring": "MOUCHARAKA"
     },
     {
       "id": "q17",
-      "question": "Which product is called \"Compte Courant Atlas Pro\"?",
+      "question": "Which product is called \"Compte Épargne Omra Al Baraka\"?",
       "language": "en",
       "category": "verbatim",
-      "expected_substring": "Atlas Pro",
+      "expected_substring": "Compte Épargne Omra Al Baraka",
       "expected_lang": "fr"
     },
     {

@@ -1,0 +1,378 @@
+{
+  "_comment": "Phase-2 target-state question set (RAGLAB_ROADMAP.md): the original symptom categories over the Al Baraka Bank Tunisie pilot sheets — colloquial (Tunisian dialect vs formal wording), synonyms (institutional vocabulary), implicit (requirement not named verbatim, expected_substrings = the evidence set), compound (explicit multi-requirement), ambiguous (materially underspecified; the expected evidence is the region any clarification-ready answer must show, ambiguity_note documents what a good answer clarifies) and out-of-scope. Baseline measured with harness50 (BM25) locally and real-test.yml (vector/rrf) in CI.",
+  "cases": [
+    {
+      "id": "c01",
+      "question": "شحال تسعر كارطة الفيزا الكلاسيك عند بنك البركة؟",
+      "language": "ar",
+      "category": "colloquial",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "بطاقة فيزا كلاسيك | 40 دينار"
+    },
+    {
+      "id": "c02",
+      "question": "بقداش ينجم يوصل التمويل في ادخار العمرة عند البركة؟",
+      "language": "ar",
+      "category": "colloquial",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "30% من قيمة الادخار"
+    },
+    {
+      "id": "c03",
+      "question": "الليزنغ متاع البركة يغطي كامل فلوس الكارية ولا لا؟",
+      "language": "ar",
+      "category": "colloquial",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "في حدود 100% من كلفة السيارة"
+    },
+    {
+      "id": "c04",
+      "question": "قداش من سنة لازم ندخر قبل ماياخذو التمويل متاع العمرة؟",
+      "language": "ar",
+      "category": "colloquial",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "ادخار بسنتين على الأقل"
+    },
+    {
+      "id": "c05",
+      "question": "واش البنك يشري السلعة و يبيعها ليا بربح متفق عليه من قبل في المرابحة؟",
+      "language": "ar",
+      "category": "colloquial",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "هامش ربح محدّد يُتفق عليه منذ البداية"
+    },
+    {
+      "id": "c06",
+      "question": "شحال يسحب البركة على الحساب الادخاري كل ثلاثة شهور؟",
+      "language": "ar",
+      "category": "colloquial",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "حساب الادخار | 6 و.خ"
+    },
+    {
+      "id": "c07",
+      "question": "التأمين على الكارية في الاجارة نخلصه كيفاش؟",
+      "language": "ar",
+      "category": "colloquial",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "سداد شهري للتامين خلال كامل مدة عقد الاجارة"
+    },
+    {
+      "id": "s01",
+      "question": "ما هو رسم الاكتتاب السنوي في البطاقة الذهبية الوطنية للأفراد؟",
+      "language": "ar",
+      "category": "synonyms",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "البطاقة الذهبية الوطنية للأفراد | 90 دينار"
+    },
+    {
+      "id": "s02",
+      "question": "ما هي الوثيقة المطلوبة من المتقاعدين لإثبات جرايتهم في ملف تمويل العمرة؟",
+      "language": "ar",
+      "category": "synonyms",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "شهادة في الانتفاع بجراية تقعد"
+    },
+    {
+      "id": "s03",
+      "question": "كم هو رسم الشيك المصدق إذا كان الزبون من نفس الوكالة؟",
+      "language": "ar",
+      "category": "synonyms",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "شيك مصدق لنفس الوكالة | 16 و.خ"
+    },
+    {
+      "id": "s04",
+      "question": "Quel est le coût annuel de la carte de retrait liée au compte d’épargne ?",
+      "language": "fr",
+      "category": "synonyms",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "Carte Epargne Al Baraka | carte | 18 TND"
+    },
+    {
+      "id": "s05",
+      "question": "Quels justificatifs de revenus sont exigés des professions libérales pour la demande de financement Omra ?",
+      "language": "fr",
+      "category": "synonyms",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "la déclaration unique des revenus (pour les professions libérales)"
+    },
+    {
+      "id": "s06",
+      "question": "ما أقصى نسبة من كلفة السيارة يمكن تمويلها لاقتناء سيارة مهنية لدى بنك البركة؟",
+      "language": "ar",
+      "category": "synonyms",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "في حدود 100% من كلفة السيارة"
+    },
+    {
+      "id": "s07",
+      "question": "La banque doit-elle annoncer sa marge dans une vente Moussawama ?",
+      "language": "fr",
+      "category": "synonyms",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "aucune obligation de déclaration du coût d’achat"
+    },
+    {
+      "id": "i01",
+      "question": "أنا موظف أريد أداء العمرة عبر منتج ادخار البركة، ما الوثائق المطلوبة وشروط التمويل؟",
+      "language": "ar",
+      "category": "implicit",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substrings": [
+        "آخر ثلاثة كشوفات راتب (للموظفين)",
+        "30% من قيمة الادخار"
+      ]
+    },
+    {
+      "id": "i02",
+      "question": "مهني أريد اقتناء سيارة عمل بأقل أثر ضريبي ممكن، ماذا يوفر لي بنك البركة؟",
+      "language": "ar",
+      "category": "implicit",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substrings": [
+        "في حدود 100% من كلفة السيارة",
+        "تقليص القاعدة الخاضعة للضريبة"
+      ]
+    },
+    {
+      "id": "i03",
+      "question": "Je veux épargner deux ans chez Al Baraka puis obtenir un financement de pèlerinage sans coût supplémentaire",
+      "language": "fr",
+      "category": "implicit",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
+      "expected_lang": "fr",
+      "expected_substrings": [
+        "Souscription à l’épargne pour une durée de 2 ans",
+        "sans marge de profit"
+      ]
+    },
+    {
+      "id": "i04",
+      "question": "ما مخاطر المضاربة على رب المال إذا كانت النتيجة سلبية؟",
+      "language": "ar",
+      "category": "implicit",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substrings": [
+        "يتحمل بنك البركة تونس الخسارة",
+        "بصفته رب المال"
+      ]
+    },
+    {
+      "id": "i05",
+      "question": "كيف أستفيد من مزايا ضريبية في إجارة المركبات؟",
+      "language": "ar",
+      "category": "implicit",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substrings": [
+        "استرجاع الضريبة على القيمة المضافة على الإيجار المدفوع",
+        "استخلاص مجزأ للقيمة المضافة"
+      ]
+    },
+    {
+      "id": "i06",
+      "question": "Quelle formule Al Baraka permet d’acquérir un bien professionnel en le louant d’abord ?",
+      "language": "fr",
+      "category": "implicit",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
+      "expected_lang": "fr",
+      "expected_substrings": [
+        "option d’acquisition du bien loué"
+      ]
+    },
+    {
+      "id": "i07",
+      "question": "ما شروط الاستفادة من تمويل العمرة للمتقاعد؟",
+      "language": "ar",
+      "category": "implicit",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substrings": [
+        "شهادة في الانتفاع بجراية تقعد",
+        "الاشتراك في الادخار لمدة سنتين كحد أدنى"
+      ]
+    },
+    {
+      "id": "m01",
+      "question": "قارن بين رسم بطاقة فيزا كلاسيك وبطاقة الادخار البركة",
+      "language": "ar",
+      "category": "compound",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substrings": [
+        "بطاقة فيزا كلاسيك | 40 دينار",
+        "بطاقة الادخار البركة | 18 دينار"
+      ]
+    },
+    {
+      "id": "m02",
+      "question": "Comparez le coût mensuel du pack CONFORT et du pack PLATINUM",
+      "language": "fr",
+      "category": "compound",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
+      "expected_lang": "fr",
+      "expected_substrings": [
+        "19,135 TND/mois",
+        "22,900 TND/mois"
+      ]
+    },
+    {
+      "id": "m03",
+      "question": "ما الفرق بين بيع المرابحة وبيع المساومة من حيث إفصاح البنك عن التكلفة وهامش الربح؟",
+      "language": "ar",
+      "category": "compound",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substrings": [
+        "هامش ربح محدّد يُتفق عليه منذ البداية",
+        "ليس ملزما بالإعلان عن تكلفة الشراء"
+      ]
+    },
+    {
+      "id": "m04",
+      "question": "Quelle est la durée de remboursement du leasing automobile et du financement Omra ?",
+      "language": "fr",
+      "category": "compound",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
+      "expected_lang": "fr",
+      "expected_substrings": [
+        "jusqu’à 5 ans",
+        "sur une année"
+      ]
+    },
+    {
+      "id": "m05",
+      "question": "من يتحمل الخسارة عند نتيجة سلبية في المضاربة وفي المشاركة؟",
+      "language": "ar",
+      "category": "compound",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substrings": [
+        "يتحمل بنك البركة تونس الخسارة",
+        "تقاسم الخسائر"
+      ]
+    },
+    {
+      "id": "m06",
+      "question": "ما رسوم اشتراك Banecti للأفراد وخدمة SMS Flash؟",
+      "language": "ar",
+      "category": "compound",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substrings": [
+        "من 3,5 إلى 7 دينار شهريًا",
+        "2 و.خ شهريًا"
+      ]
+    },
+    {
+      "id": "m07",
+      "question": "Quels documents faut-il fournir pour un salarié et pour un retraité dans le dossier Omra ?",
+      "language": "fr",
+      "category": "compound",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
+      "expected_lang": "fr",
+      "expected_substrings": [
+        "fiches de paie",
+        "Attestation de pension pour les retraités"
+      ]
+    },
+    {
+      "id": "a01",
+      "question": "كم تكلفة البطاقة؟",
+      "language": "ar",
+      "category": "ambiguous",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "البطاقات الإلكترونية",
+      "ambiguity_note": "الغموض المؤثر: أي بطاقة من اثنتي عشرة بطاقة؛ الإجابة الجيدة تطلب التحديد أو تعرض جدول البطاقات"
+    },
+    {
+      "id": "a02",
+      "question": "Quel est le plafond du financement ?",
+      "language": "fr",
+      "category": "ambiguous",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "Un financement équivalant à 30% de l’épargne",
+      "ambiguity_note": "Ambiguïté matérielle : plafond du financement Omra (30% de l’épargne, plafonné à 50% du coût) ou du leasing auto (100% du véhicule) ; produit non précisé"
+    },
+    {
+      "id": "a03",
+      "question": "كم رسوم الشيك؟",
+      "language": "ar",
+      "category": "ambiguous",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "الشيكات",
+      "ambiguity_note": "الغموض المؤثر: أي خدمة شيكات (شيك مصدق لنفس الوكالة أو لوكالة أخرى، الإنذار المسبق، شهادة عدم الخلاص)"
+    },
+    {
+      "id": "a04",
+      "question": "Quel pack choisir ?",
+      "language": "fr",
+      "category": "ambiguous",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
+      "expected_lang": "fr",
+      "expected_substring": "Pack CONFORT",
+      "ambiguity_note": "Ambiguïté matérielle : le choix dépend des besoins du client ; la bonne réponse compare les trois packs ou demande des précisions"
+    },
+    {
+      "id": "a05",
+      "question": "ما هي أفضل صيغة تمويل لمشروعي الجديد؟",
+      "language": "ar",
+      "category": "ambiguous",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
+      "expected_lang": "ar",
+      "expected_substring": "المشاركة",
+      "ambiguity_note": "الغموض المؤثر: المشاركة إذا سيساهم العميل برأس مال، أو المضاربة إذا سيساهم بعمله فقط؛ الإجابة الجيدة تستوضح"
+    },
+    {
+      "id": "o01",
+      "question": "ما هو رقم هاتف وكالة بنك البركة بنابل؟",
+      "language": "ar",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "o02",
+      "question": "ما هو سعر صرف الدينار التونسي مقابل الدولار اليوم؟",
+      "language": "ar",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "o03",
+      "question": "Quel est le taux d’intérêt du crédit immobilier ?",
+      "language": "fr",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "o04",
+      "question": "كيف أفتح محفظة بيتكوين عند بنك البركة؟",
+      "language": "ar",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "o05",
+      "question": "Où se trouve l’agence Al Baraka à Sousse ?",
+      "language": "fr",
+      "category": "out-of-scope"
+    }
+  ]
+}

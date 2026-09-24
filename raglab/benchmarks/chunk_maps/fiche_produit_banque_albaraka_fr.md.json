@@ -1,0 +1,108 @@
+{
+ "document": "fiche_produit_banque_albaraka_fr.md",
+ "source_text_fp": "c3b713ae135a97a63d5877e6b4158468",
+ "tokenizer": "estimator-char4-v1",
+ "chunk_count": 14,
+ "tokens_total": 2035,
+ "note": "drafted by chunk_maps.py (target 620, max 900 tokens); needs human review of each idea label",
+ "chunks": [
+  {
+   "start": 0,
+   "end": 775,
+   "tokens": 194,
+   "idea": "Al Baraka Bank Tunisie — Fiche produit : formules de financement islamique, Al Baraka Leasing Automobile, Comp",
+   "heading": "Al Baraka Bank Tunisie — Fiche produit : formules de financement islamique, Al Baraka Leasing Automobile, Compte Épargne Omra Al Baraka et conditions tarifaires"
+  },
+  {
+   "start": 775,
+   "end": 1299,
+   "tokens": 131,
+   "idea": "1. Formules de financement islamique",
+   "heading": "1. Formules de financement islamique"
+  },
+  {
+   "start": 1299,
+   "end": 1835,
+   "tokens": 134,
+   "idea": "1.2 Le Leasing assorti de l’option d’acquisition",
+   "heading": "1.2 Le Leasing assorti de l’option d’acquisition"
+  },
+  {
+   "start": 1835,
+   "end": 2184,
+   "tokens": 88,
+   "idea": "1.3 La prise de participation MOUCHARAKA",
+   "heading": "1.3 La prise de participation MOUCHARAKA"
+  },
+  {
+   "start": 2184,
+   "end": 2470,
+   "tokens": 72,
+   "idea": "A la fin de chaque exercice ou au terme du marché, les associés se répartissent ",
+   "heading": ""
+  },
+  {
+   "start": 2470,
+   "end": 3712,
+   "tokens": 311,
+   "idea": "1.4 La MOUDHARABA",
+   "heading": "1.4 La MOUDHARABA"
+  },
+  {
+   "start": 3712,
+   "end": 4377,
+   "tokens": 167,
+   "idea": "1.5 La vente MOUSSAWAMA",
+   "heading": "1.5 La vente MOUSSAWAMA"
+  },
+  {
+   "start": 4377,
+   "end": 4576,
+   "tokens": 50,
+   "idea": "2. Al Baraka Leasing Automobile (professionnels)",
+   "heading": "2. Al Baraka Leasing Automobile (professionnels)"
+  },
+  {
+   "start": 4576,
+   "end": 5060,
+   "tokens": 121,
+   "idea": "2.2 Les avantages",
+   "heading": "2.2 Les avantages"
+  },
+  {
+   "start": 5060,
+   "end": 5296,
+   "tokens": 59,
+   "idea": "3. Compte Épargne Omra Al Baraka",
+   "heading": "3. Compte Épargne Omra Al Baraka"
+  },
+  {
+   "start": 5296,
+   "end": 5537,
+   "tokens": 61,
+   "idea": "3.2 Les avantages",
+   "heading": "3.2 Les avantages"
+  },
+  {
+   "start": 5537,
+   "end": 5937,
+   "tokens": 100,
+   "idea": "3.3 Documents à fournir",
+   "heading": "3.3 Documents à fournir"
+  },
+  {
+   "start": 5937,
+   "end": 7545,
+   "tokens": 402,
+   "idea": "| Cartes électroniques | Assiette | Tarifs Hors Taxe | | --- | --- | --- | | Car",
+   "heading": ""
+  },
+  {
+   "start": 7545,
+   "end": 8123,
+   "tokens": 145,
+   "idea": "5. Mentions et sources",
+   "heading": "5. Mentions et sources"
+  }
+ ]
+}

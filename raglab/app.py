@@ -495,7 +495,8 @@ def action_status(state: dict) -> None:
         print(f"index built with tokenizer: {stored_tok.group(1)} ({match})")
 
     print("\nQuestion sets available")
-    for name in ("questions.json", "questions_50.json", "questions_real.json"):
+    for name in ("questions.json", "questions_50.json", "questions_v2.json",
+                 "questions_real.json"):
         path = PROJECT_DIR / name
         if path.exists():
             cases = 0
@@ -926,7 +927,8 @@ def action_chat(state: dict) -> None:
 
 
 def action_evaluate(state: dict) -> None:
-    sets = ["questions.json", "questions_50.json", "questions_real.json"]
+    sets = ["questions.json", "questions_50.json", "questions_v2.json",
+            "questions_real.json"]
     print("\nWhich question set?")
     for index, name in enumerate(sets, 1):
         path = PROJECT_DIR / name

@@ -1,5 +1,5 @@
 {
-  "_comment": "50-case evaluation set for the restructure chunking harness (harness50.py). Mix of ar/fr/en (17/17/16), 5 out-of-scope. expected_substring values are verbatim spans of the source documents (checked by the validation step of harness50.py).",
+  "_comment": "50-case evaluation set for the restructure chunking harness (harness50.py). Mix of ar/fr/en (17/17/16), 5 out-of-scope. expected_substring values are verbatim spans of the source documents (checked by the validation step of harness50.py). | Revised 2026-09-24: the 20 Banque Atlas cases now target the Al Baraka Bank Tunisie sheets (fiche_produit_banque_albaraka_{ar,fr}.md); ids/categories/languages unchanged, numbers must be re-baselined.",
   "cases": [
     {
       "id": "q01",
@@ -138,93 +138,93 @@
     },
     {
       "id": "q16",
-      "question": "Quel est le montant mensuel des frais de tenue de compte du Compte Courant Atlas ?",
+      "question": "Quel est le montant du financement accordé dans le cadre du Compte Épargne Omra Al Baraka ?",
       "language": "fr",
       "category": "verbatim",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "4,50 euros par mois"
+      "expected_substring": "Un financement équivalant à 30% de l’épargne"
     },
     {
       "id": "q17",
-      "question": "Sous quelle condition liée au salaire les frais du Compte Courant Atlas sont-ils exonérés ?",
+      "question": "À quelle condition de durée peut-on souscrire l’épargne Omra chez Al Baraka ?",
       "language": "fr",
       "category": "paraphrase",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "un salaire d'au moins 1 500 euros versé directement sur le compte"
+      "expected_substring": "Souscription à l’épargne pour une durée de 2 ans"
     },
     {
       "id": "q18",
-      "question": "Quelles sont les conditions d'âge et de résidence pour ouvrir un Compte Courant Atlas ?",
+      "question": "Quels justificatifs de revenus sont demandés pour les salariés dans le dossier du Compte Épargne Omra ?",
       "language": "fr",
       "category": "verbatim",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "âgée de 18 ans ou plus, résidant en France"
+      "expected_substring": "Les trois dernières fiches de paie"
     },
     {
       "id": "q19",
-      "question": "Quel est le plafond du découvert autorisé sur le Compte Courant Atlas ?",
+      "question": "Quel est le tarif annuel de la Carte VISA Classique ?",
       "language": "fr",
       "category": "verbatim",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "500 euros maximum"
+      "expected_substring": "Carte VISA Classique | carte | 40 TND"
     },
     {
       "id": "q20",
-      "question": "Quelles sont les trois conditions d'éligibilité au Compte Courant Atlas Pro ?",
+      "question": "Qui supporte les pertes en cas de résultat négatif dans la Moudharaba ?",
       "language": "fr",
       "category": "verbatim",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "numéro SIRET actif"
+      "expected_substring": "Al Baraka Bank Tunisia supporte intégralement les pertes"
     },
     {
       "id": "q21",
-      "question": "Combien coûtent les frais du Compte Courant Atlas Pro et comment y échapper ?",
+      "question": "Combien coûte l’abonnement mensuel au pack PLATINUM ?",
       "language": "fr",
       "category": "paraphrase",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "9,00 euros par mois"
+      "expected_substring": "22,900 TND/mois"
     },
     {
       "id": "q22",
-      "question": "Quel est le taux d'intérêt annuel brut du Livret Croissance ?",
+      "question": "Quelle est la durée de remboursement du financement Omra ?",
       "language": "fr",
       "category": "verbatim",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "2,75 %"
+      "expected_substring": "Remboursement sur une année"
     },
     {
       "id": "q23",
-      "question": "À quelle date sont capitalisés les intérêts du Livret Croissance ?",
+      "question": "Le leasing automobile d’Al Baraka peut-il financer la totalité du prix du véhicule ?",
       "language": "fr",
       "category": "paraphrase",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "capitalisés le 31 décembre"
+      "expected_substring": "100 % du prix du véhicule"
     },
     {
       "id": "q24",
-      "question": "Quel est le dépôt d'ouverture minimum du Livret Croissance ?",
+      "question": "Quelle est la durée maximale de remboursement du Al Baraka Leasing Automobile ?",
       "language": "fr",
       "category": "verbatim",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "dépôt d'ouverture minimum est de 100 euros"
+      "expected_substring": "Durée de remboursement pouvant aller jusqu’à 5 ans"
     },
     {
       "id": "q25",
-      "question": "Quel est le solde minimum à respecter après un retrait sur le Livret Croissance ?",
+      "question": "Combien je paie chaque trimestre pour la tenue de mon compte d’épargne ?",
       "language": "fr",
       "category": "paraphrase",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "solde minimum après retrait est de 30 euros"
+      "expected_substring": "Compte d’épargne | compte | 6 u"
     },
     {
       "id": "q26",
@@ -246,93 +246,93 @@
     },
     {
       "id": "q28",
-      "question": "Dans la fiche produit arabe, quel est le plafond du solde (رصيد الدفتر) du Livret Croissance ?",
+      "question": "Quel pourcentage de la valeur de l’épargne le financement Omra Al Baraka peut-il atteindre ?",
       "language": "fr",
       "category": "cross-lingual",
-      "expected_document": "fiche_produit_banque_atlas_ar.md",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
       "expected_lang": "ar",
-      "expected_substring": "50 000 يورو"
+      "expected_substring": "30% من قيمة الادخار"
     },
     {
       "id": "q29",
-      "question": "Selon la fiche produit arabe, quel est le taux annuel brut (معدل الفائدة) du Livret Croissance (دفتر التوفير) ?",
+      "question": "Le leasing automobile d’Al Baraka est-il conforme aux principes de la finance islamique ?",
       "language": "fr",
       "category": "cross-lingual",
-      "expected_document": "fiche_produit_banque_atlas_ar.md",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
       "expected_lang": "ar",
-      "expected_substring": "2,75 %"
+      "expected_substring": "مطابق لمبادئ الصيرفة الإسلامية"
     },
     {
       "id": "q30",
-      "question": "Quelle est l'âge minimum pour ouvrir le Livret Croissance (دفتر التوفير) d'après la fiche arabe de Banque Atlas ?",
+      "question": "Quelle durée minimale d’épargne est exigée pour le produit Omra Al Baraka ?",
       "language": "fr",
       "category": "cross-lingual",
-      "expected_document": "fiche_produit_banque_atlas_ar.md",
+      "expected_document": "fiche_produit_banque_albaraka_ar.md",
       "expected_lang": "ar",
-      "expected_substring": "سن 12 عاما"
+      "expected_substring": "ادخار بسنتين على الأقل"
     },
     {
       "id": "q31",
-      "question": "What is the monthly fee of the Compte Courant Atlas?",
+      "question": "How much does the Al Baraka Tech Card cost per year?",
       "language": "en",
       "category": "cross-lingual",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "4,50 euros par mois"
+      "expected_substring": "Al Baraka Tech Card PP | carte | 25 TND"
     },
     {
       "id": "q32",
-      "question": "What salary, deposited directly on the account, waives the monthly fee of the Compte Courant Atlas?",
+      "question": "In a Moudharaba, who bears the losses when the result is negative?",
       "language": "en",
       "category": "cross-lingual",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "1 500 euros"
+      "expected_substring": "supporte intégralement les pertes"
     },
     {
       "id": "q33",
-      "question": "What is the maximum balance of the Livret Croissance savings book?",
+      "question": "What is the annual fee of the international VISA card?",
       "language": "en",
       "category": "cross-lingual",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "50 000 euros"
+      "expected_substring": "Carte VISA Internationale PP | carte | 150 TND"
     },
     {
       "id": "q34",
-      "question": "Which account product is reserved for professionals holding an active SIRET number?",
+      "question": "What savings product does Al Baraka offer for the pilgrimage?",
       "language": "en",
       "category": "cross-lingual",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "SIRET actif"
+      "expected_substring": "produit d’épargne assorti d’un financement sans marge de profit"
     },
     {
       "id": "q35",
-      "question": "How much does an instant transfer to another bank cost?",
+      "question": "How much is a certified cheque for a client of the same branch?",
       "language": "en",
       "category": "cross-lingual",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "1 euro par opération"
+      "expected_substring": "Chèque certifié client même agence | chèque | 16 u"
     },
     {
       "id": "q36",
-      "question": "What minimum deposit is required to open the Livret Croissance?",
+      "question": "What is the minimum subscription period for the Omra savings product?",
       "language": "en",
       "category": "cross-lingual",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "100 euros"
+      "expected_substring": "durée de 2 ans au minimum"
     },
     {
       "id": "q37",
-      "question": "Are withdrawals from the Livret Croissance free and without notice period?",
+      "question": "Unlike Mourabaha, what is the bank not required to disclose in a Moussawama?",
       "language": "en",
       "category": "cross-lingual",
-      "expected_document": "fiche_produit_banque_atlas_fr.md",
+      "expected_document": "fiche_produit_banque_albaraka_fr.md",
       "expected_lang": "fr",
-      "expected_substring": "gratuits et illimités"
+      "expected_substring": "obligation de déclaration du coût d’achat"
     },
     {
       "id": "q38",

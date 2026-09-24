@@ -59,7 +59,8 @@ PLACEHOLDER_PATTERNS = ("paste-your", "paste your", "your-key", "your_key",
                         "your_kira", "changeme", "change-me", "xxx", "placeholder",
                         "api_key")
 MAX_SAVED_MODELS = 20
-QUESTION_SETS = ("questions.json", "questions_50.json", "questions_real.json")
+QUESTION_SETS = ("questions.json", "questions_50.json", "questions_v2.json",
+                   "questions_real.json")
 
 
 # ---------------------------------------------------------------------------

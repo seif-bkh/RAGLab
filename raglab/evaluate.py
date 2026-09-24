@@ -26,7 +26,14 @@ from artifacts import write_json
 from store import (best_variant_merge, blend_hybrid, collection_languages,
                    keyword_search, query_vector, rrf_merge)
 
-VALID_CATEGORIES = {"verbatim", "paraphrase", "cross-lingual", "out-of-scope"}
+# Core categories (the original benchmark contract) plus the target-state
+# transition categories (RAGLAB_GAP_ANALYSIS.md §10 / RAGLAB_ROADMAP.md Phase 2):
+# colloquial (Tunisian dialect vs formal wording), synonyms (institutional
+# vocabulary gap), implicit (the request is not named verbatim — needs multiple
+# evidence), compound (explicit multi-requirement), ambiguous (materially
+# underspecified — clarification expected, evidence region still defined).
+VALID_CATEGORIES = {"verbatim", "paraphrase", "cross-lingual", "out-of-scope",
+                    "colloquial", "synonyms", "implicit", "compound", "ambiguous"}
 
 
 # ---------------------------------------------------------------------------
@@ -53,9 +60,14 @@ def load_question_set(path: Path) -> list[dict]:
         if case.get("category") not in VALID_CATEGORIES:
             problems.append(f"invalid category {case.get('category')!r}")
         out_of_scope = case.get("category") == "out-of-scope"
+        subs = case.get("expected_substrings")
+        if subs is not None and (not isinstance(subs, list) or not subs
+                                 or not all(isinstance(s, str) and s.strip() for s in subs)):
+            problems.append("expected_substrings must be a non-empty list of non-empty strings")
         has_expected = (
             case.get("expected_chunk_index") is not None
             or bool(case.get("expected_substring"))
+            or bool(subs)
         )
         if out_of_scope and has_expected:
             problems.append("out-of-scope case must have no expected match")
@@ -125,6 +137,66 @@ def find_correct_any_lang(case: dict, hits: list) -> dict | None:
     return None
 
 
+def requirement_coverage(case: dict, texts: list) -> dict | None:
+    """Multi-requirement cases (expected_substrings): requirements found across texts.
+
+    A single chunk rarely carries an implicit or compound answer, so these cases
+    are not scored by first-correct-hit. This returns how many of the required
+    evidence substrings appear anywhere in the given texts (the top-k hit texts,
+    or the sources that survive the answer-path token budget).
+    Returns None when the case has no expected_substrings.
+    """
+    reqs = case.get("expected_substrings") or []
+    if not reqs:
+        return None
+    normalized = [normalize_for_match(t or "") for t in texts]
+    found = []
+    for req in reqs:
+        if any(normalize_for_match(req) in t for t in normalized):
+            found.append(req)
+    return {"found": len(found), "total": len(reqs),
+            "missing": [req for req in reqs if req not in found]}
+
+
+def requirement_completion_rank(case: dict, hits: list) -> int | None:
+    """Rank of the hit that completes the requirement set (multi-evidence cases).
+
+    For cases with expected_substrings, hit@k means "ALL required evidence is
+    covered within the first k hits" — mirroring the single-requirement meaning
+    ("the expected evidence is within top k"). When expected_document is set,
+    only hits from that document count. Returns None when the set is not fully
+    covered (or the case has no expected_substrings).
+    """
+    reqs = case.get("expected_substrings") or []
+    if not reqs:
+        return None
+    expected_document = case.get("expected_document")
+    remaining = [normalize_for_match(r) for r in reqs]
+    for hit in hits:
+        if expected_document:
+            meta = hit.get("metadata") or {}
+            doc = meta.get("document") or meta.get("source") or hit.get("document")
+            if doc != expected_document:
+                continue
+        text = normalize_for_match(hit.get("text") or "")
+        remaining = [r for r in remaining if r not in text]
+        if not remaining:
+            return hit["rank"]
+    return None
+
+
+def answer_context_sources(hits: list, cfg) -> list:
+    """Simulate the answer path's context assembly (answer.build_sources).
+
+    The §9 acceptance metric is not "did the right chunk rank high" but "did it
+    SURVIVE into what the model actually sees" — build_sources applies the
+    ANSWER_CONTEXT_TOKENS budget and drops (never truncates) what does not fit.
+    """
+    from answer import build_sources
+    budget = getattr(cfg, "ANSWER_CONTEXT_TOKENS", 3000)
+    return build_sources(hits, budget)
+
+
 # ---------------------------------------------------------------------------
 # Running the evaluation
 # ---------------------------------------------------------------------------
@@ -176,8 +248,30 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
             blend_lambda=lambd)
 
         is_oos = case["category"] == "out-of-scope"
-        correct_hit = None if is_oos else find_correct_hit(case, hits)
-        any_lang_hit = None if is_oos else find_correct_any_lang(case, hits)
+        if is_oos or not case.get("expected_substrings"):
+            correct_hit = None if is_oos else find_correct_hit(case, hits)
+            any_lang_hit = None if is_oos else find_correct_any_lang(case, hits)
+        else:
+            # Multi-requirement case: no single hit is "the" correct one — the
+            # hit that completes the requirement set carries the rank; hit@k
+            # then means "all required evidence is covered within top k".
+            complete_rank = requirement_completion_rank(case, hits)
+            correct_hit = (next((h for h in hits if h["rank"] == complete_rank), None)
+                           if complete_rank is not None else None)
+            any_lang_hit = None
+
+        # Multi-requirement + final-context evidence (target-state Phase 2
+        # metrics; None for cases without expectations — old sets unchanged).
+        reqs_topk = (requirement_coverage(case, [h["text"] for h in hits])
+                     if not is_oos else None)
+        sources = answer_context_sources(hits, cfg) if hits else []
+        reqs_context = (requirement_coverage(case, [s["text"] for s in sources])
+                        if not is_oos else None)
+        context_hit = None
+        if not is_oos and case.get("expected_substring"):
+            ctx_texts = [normalize_for_match(s["text"]) for s in sources]
+            context_hit = any(
+                normalize_for_match(case["expected_substring"]) in t for t in ctx_texts)
 
         # "score" is the metric that determined the ranking in this mode.
         def score_of(h, _key=score_key):
@@ -225,6 +319,17 @@ def run_evaluation(cfg, embedder, collection, cases: list, mode: str = "vector",
             # retrieval failure from language-routing behavior on strict cases.
             "correct_any_lang_rank": any_lang_hit["rank"] if any_lang_hit else None,
             "correct_any_lang_id": any_lang_hit["id"] if any_lang_hit else None,
+            # Multi-requirement coverage at top-k and inside the final context.
+            "requirements_found": reqs_topk["found"] if reqs_topk else None,
+            "requirements_total": reqs_topk["total"] if reqs_topk else None,
+            "requirements_missing": reqs_topk["missing"] if reqs_topk else None,
+            "requirements_in_context_found": reqs_context["found"] if reqs_context else None,
+            "requirements_all_in_context": (reqs_context["found"] == reqs_context["total"]
+                                            if reqs_context else None),
+            # Single-requirement cases: did the expected evidence survive the
+            # answer-path token budget (what the model actually sees)?
+            "evidence_in_context": context_hit,
+            "context_source_ids": [s["chunk_id"] for s in sources],
             "hit_at_1": bool(correct_hit and correct_hit["rank"] <= 1),
             "hit_at_3": bool(correct_hit and correct_hit["rank"] <= 3),
             "hit_at_5": bool(correct_hit and correct_hit["rank"] <= 5),
@@ -347,12 +452,42 @@ def compute_metrics(per_question: list) -> dict:
         ],
     }
 
+    # Multi-requirement coverage (cases with expected_substrings): implicit and
+    # compound answers span several chunks, so first-correct-hit is not the
+    # whole story. Measured at top-k and inside the final answer context.
+    multi = [q for q in evaluable if q.get("requirements_total")]
+    requirements = None
+    if multi:
+        requirements = {
+            "n": len(multi),
+            "mean_coverage_top_k": statistics.mean(
+                q["requirements_found"] / q["requirements_total"] for q in multi),
+            "all_requirements_top_k": sum(
+                1 for q in multi
+                if q["requirements_found"] == q["requirements_total"]) / len(multi),
+            "all_requirements_in_context": sum(
+                1 for q in multi if q.get("requirements_all_in_context")) / len(multi),
+        }
+
+    # Evidence-in-final-context: the right chunk must survive the answer path's
+    # token budget, not merely rank in retrieval (target report §9 metric).
+    ctx_cases = [q for q in evaluable if q.get("evidence_in_context") is not None]
+    context = None
+    if ctx_cases:
+        context = {
+            "n": len(ctx_cases),
+            "evidence_in_context": sum(
+                1 for q in ctx_cases if q["evidence_in_context"]) / len(ctx_cases),
+        }
+
     return {
         "overall": overall,
         "by_category": by_category,
         "by_language": by_language,
         "separation": separation,
         "out_of_scope": out_of_scope,
+        "requirements": requirements,
+        "context": context,
     }
 
 
@@ -426,6 +561,17 @@ def print_report(run: dict):
     for cat, d in sorted(m["by_category"].items()):
         print(f"  {cat:<14} n={d['n']:<3} hit@1={d['hit@1']:.3f} "
               f"hit@3={d['hit@3']:.3f} hit@5={d['hit@5']:.3f}")
+
+    if m.get("requirements"):
+        r = m["requirements"]
+        print("\n--- REQUIREMENT COVERAGE (multi-evidence questions) ---")
+        print(f"  n={r['n']}   mean coverage@k={r['mean_coverage_top_k']:.3f}   "
+              f"all requirements@k={r['all_requirements_top_k']:.3f}   "
+              f"all requirements in context={r['all_requirements_in_context']:.3f}")
+    if m.get("context"):
+        c = m["context"]
+        print("\n--- EVIDENCE IN FINAL CONTEXT (answer-path budget simulation) ---")
+        print(f"  n={c['n']}   evidence_in_context={c['evidence_in_context']:.3f}")
 
     print("\n--- HIT RATE BY QUERY LANGUAGE ---")
     for lang, d in sorted(m["by_language"].items()):

@@ -3,7 +3,7 @@
 A "document" is a plain dict, always with the same keys:
 
     {
-        "name":      file name, e.g. "fiche_produit_banque_atlas_fr.md",
+        "name":      file name, e.g. "fiche_produit_banque_albaraka_fr.md",
         "path":      absolute path of the source file,
         "text":      normalized full text (whitespace reflowed, Arabic normalized),
         "language":  "fr" | "ar" | "en" | "unknown",
