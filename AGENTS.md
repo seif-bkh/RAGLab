@@ -458,15 +458,21 @@ turn produced (code, docs, a diagnosis, even a pure-discussion answer), the last
 thing in the reply is copy-pasteable commands the user can run to use, verify or
 explore what was just done:
 
-- Format: a short `## Commands to run` heading followed by one fenced code block
-  (or two when both platforms apply — see below), each command preceded by a
-  one-line `# comment` saying what it does.
+- Format: a short `## Commands to run` heading followed by the fenced code
+  block(s) described below, each command preceded by a one-line `# comment`
+  saying what it does.
 - Commands must be concrete, ordered and ready to paste — no `<placeholder>`
   tokens unless a real secret must be filled in, and then name exactly which
   one on the comment line (keys never get pasted into chat).
-- Match the user's environment: they run **Windows/PowerShell** — lead with the
-  Windows commands (`.\run_server.ps1`, `python local_front.py --status`, …);
-  add the bash equivalent only when the step is CI/Linux/Docker-only.
+- **Always BOTH platforms** (user instruction 2026-09-24): the same steps
+  written out for **Windows (PowerShell)** and **Linux/macOS (bash)** as two
+  labeled blocks, using each side's native entry points (Windows:
+  `.\run_server.ps1` and the other `raglab/*.ps1|*.bat` twins; Linux: the
+  `*.sh` scripts and direct `python -m uvicorn …` equivalents). Exceptions:
+  one shared block when the commands are literally identical on both (docker,
+  git, `python …` inside a venv) — label it `Windows + Linux`; and when a
+  step genuinely has no counterpart on one side, write the block that exists
+  and mark the other `(no <platform> equivalent — reason)`.
 - Content covers the user's intent, not the sandbox mechanics the agent already
   ran: start the server, run the front, run the tests, check status/logs, try
   the new feature. For a discussion-only reply the block still carries the
