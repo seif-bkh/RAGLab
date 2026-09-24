@@ -448,3 +448,27 @@ Channels that WORK (use in this order):
   session files "untracked"), then `git ls-remote` + fetch the session branch and
   `git reset --hard` to it. Verify untracked files against the commit with
   `git show <sha>:<path> | cmp -s - <path>` before resetting.
+
+---
+
+## 9. Response-format rule (standing user instruction, 2026-09-24, session `arena/01a0d2f6-raglab`)
+
+**Every agent reply ends with a commands block — zero exceptions.** Whatever the
+turn produced (code, docs, a diagnosis, even a pure-discussion answer), the last
+thing in the reply is copy-pasteable commands the user can run to use, verify or
+explore what was just done:
+
+- Format: a short `## Commands to run` heading followed by one fenced code block
+  (or two when both platforms apply — see below), each command preceded by a
+  one-line `# comment` saying what it does.
+- Commands must be concrete, ordered and ready to paste — no `<placeholder>`
+  tokens unless a real secret must be filled in, and then name exactly which
+  one on the comment line (keys never get pasted into chat).
+- Match the user's environment: they run **Windows/PowerShell** — lead with the
+  Windows commands (`.\run_server.ps1`, `python local_front.py --status`, …);
+  add the bash equivalent only when the step is CI/Linux/Docker-only.
+- Content covers the user's intent, not the sandbox mechanics the agent already
+  ran: start the server, run the front, run the tests, check status/logs, try
+  the new feature. For a discussion-only reply the block still carries the
+  nearest useful check (e.g. service status or how to try the thing discussed).
+
