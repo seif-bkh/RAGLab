@@ -1,0 +1,9 @@
+{
+  // Opening this repo in VS Code should offer exactly these three extensions —
+  // nothing else is needed to run, debug or test the lab.
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.debugpy"
+  ]
+}

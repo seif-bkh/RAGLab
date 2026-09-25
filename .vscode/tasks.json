@@ -1,0 +1,210 @@
+{
+  // RAGLab — VS Code tasks (Terminal → Run Task, or Ctrl+Shift+B for the
+  // default one: starting the service).
+  //
+  // These wrap the repo's own Windows scripts, so the task and the terminal
+  // do exactly the same thing. Manual equivalents are in raglab\WINDOWS.md.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // One time. Finds Python 3.11+, creates raglab\.venv, installs
+      // requirements-service.txt, and copies .env.example -> raglab\.env.
+      "label": "setup: venv + dependencies (one time)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ".\\setup.ps1"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\raglab"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      // The compose equivalent: same env contract, same port, same state.
+      // Ctrl+C in the terminal stops it. Keep ONE server per chroma_db folder.
+      "label": "service: start (run_server.ps1)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ".\\run_server.ps1"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\raglab"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      // First run only (or after --reset): embeds the corpus.
+      // Needs NVIDIA_API_KEY in raglab\.env and the service running.
+      "label": "corpus: ingest (first time, needs NVIDIA_API_KEY)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ".\\run_front.ps1",
+        "--ingest"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\raglab"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      // The console: status, keys, ingest, search, answer, chat, evaluate.
+      "label": "console: front menus (local_front.py)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ".\\run_front.ps1"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\raglab"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      // Doctor report: profile, index count, which keys are set. No prompts.
+      "label": "console: doctor (--status)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ".\\run_front.ps1",
+        "--status"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\raglab"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      // State-aware sweep over every endpoint: the full HTTP contract,
+      // including the refusals (which arrive as HTTP 200 + status=refused).
+      "label": "console: endpoint smoke (--smoke)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ".\\run_front.ps1",
+        "--smoke"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\raglab"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      // Swagger UI for the running service.
+      "label": "docs: open Swagger UI (:8000/docs)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-Command",
+        "Start-Process 'http://localhost:8000/docs'"
+      ],
+      "presentation": {
+        "reveal": "never"
+      },
+      "problemMatcher": []
+    },
+    {
+      // CI's offline gate, script half (no model calls, no keys).
+      "label": "tests: tests_offline.py (offline)",
+      "type": "shell",
+      "command": "${workspaceFolder}\\raglab\\.venv\\Scripts\\python.exe",
+      "args": [
+        "tests_offline.py"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\raglab"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      // CI's offline gate, unittest half — the same three modules as
+      // raglab/run_tests.sh. Takes a few minutes; output is verbose on purpose.
+      "label": "tests: unittest trio (offline)",
+      "type": "shell",
+      "command": "${workspaceFolder}\\raglab\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "unittest",
+        "-v",
+        "test_nvidia_pipeline",
+        "test_hard_harness",
+        "test_service"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\raglab"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

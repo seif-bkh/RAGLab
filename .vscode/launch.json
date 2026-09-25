@@ -1,0 +1,162 @@
+{
+  // RAGLab — debug configurations (F5 / Run and Debug panel).
+  //
+  // Each entry runs from raglab\ because the lab resolves its data, caches and
+  // index relative to the code folder. Keys are read by config.py from
+  // raglab\.env — nothing is passed here, and nothing secret belongs in this file.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // The service the banking app links against. Starts uvicorn, and VS Code
+      // opens http://localhost:8000/docs as soon as the server reports ready.
+      // RAGLAB_ALLOW_PROFILE_SWITCH defaults to enabled; use
+      // raglab\run_server.ps1 (task "service: start") for the compose-parity
+      // env contract, including RAGLAB_SERVICE_TOKEN.
+      "name": "Service: uvicorn service:app (:8000)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "service:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ],
+      "cwd": "${workspaceFolder}\\raglab",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "serverReadyAction": {
+        "pattern": "Uvicorn running on http://[^ ]+:([0-9]+)",
+        "uriFormat": "http://localhost:%s/docs",
+        "action": "openExternally"
+      }
+    },
+    {
+      // First-time (or rebuild) index: chunk + embed the corpus into ChromaDB.
+      // Needs NVIDIA_API_KEY in raglab\.env. Costs embedding calls unless the
+      // cache file already holds them; --reset wipes the collection first.
+      "name": "Corpus: ingest --reset (docs\\)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\raglab\\main.py",
+      "args": [
+        "ingest",
+        "--reset",
+        "--data-dir",
+        "../docs"
+      ],
+      "cwd": "${workspaceFolder}\\raglab",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // Load + chunk only: prints every chunk, no embedding calls, no keys.
+      // The fastest way to see what the restructure chunker does to a document.
+      "name": "Corpus: inspect (no API calls)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\raglab\\main.py",
+      "args": [
+        "inspect",
+        "--data-dir",
+        "../docs"
+      ],
+      "cwd": "${workspaceFolder}\\raglab",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // Retrieval only: embeds the question and prints the top-k chunks.
+      // Needs NVIDIA_API_KEY and an existing index. No chat model is called.
+      "name": "Ask: query (retrieval only)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\raglab\\main.py",
+      "args": [
+        "query",
+        "${input:question}",
+        "--query-lang",
+        "${input:language}"
+      ],
+      "cwd": "${workspaceFolder}\\raglab",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // Full grounded answer with citations or a refusal.
+      // Needs NVIDIA_API_KEY + XKIRO_API_KEY and an existing index.
+      "name": "Ask: answer (cited, needs both keys)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\raglab\\main.py",
+      "args": [
+        "answer",
+        "${input:question}",
+        "--query-lang",
+        "${input:language}"
+      ],
+      "cwd": "${workspaceFolder}\\raglab",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // The interactive console over REST — the same menus as app.py, driving
+      // the running service. Start the service first (task or the config above).
+      "name": "Console: local_front.py (needs service running)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\raglab\\local_front.py",
+      "cwd": "${workspaceFolder}\\raglab",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // The CI offline gate, part 1: the scripted checks (no model calls).
+      "name": "Tests: tests_offline.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\raglab\\tests_offline.py",
+      "cwd": "${workspaceFolder}\\raglab",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // The CI offline gate, part 2: the three unittest modules run_tests.sh
+      // executes. Right-click a test in the Test Explorer to debug just one.
+      "name": "Tests: unittest trio (pipeline, hard harness, service)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "unittest",
+      "args": [
+        "-v",
+        "test_nvidia_pipeline",
+        "test_hard_harness",
+        "test_service"
+      ],
+      "cwd": "${workspaceFolder}\\raglab",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ],
+  "inputs": [
+    {
+      // Prompted on every launch of the two "Ask:" configurations.
+      "id": "question",
+      "type": "promptString",
+      "description": "Question (any of ar / fr / en)",
+      "default": "What is Murabaha?"
+    },
+    {
+      "id": "language",
+      "type": "pickString",
+      "description": "Question language",
+      "options": [
+        "en",
+        "fr",
+        "ar"
+      ],
+      "default": "en"
+    }
+  ]
+}

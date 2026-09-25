@@ -47,6 +47,44 @@ Window 2:
 
 Interactive API docs (Swagger UI): **http://localhost:8000/docs** — same as Docker.
 
+## VS Code (the same steps, from the editor)
+
+The repo ships a `.vscode\` folder, so the editor needs no hand-written
+configuration. Open the **repo root** as the folder (`C:\RAGLab`, not
+`raglab\`) — every task and launch entry sets its own working directory to
+`raglab\`, because that is where the code, the venv and the scripts live.
+
+1. **Open the folder.** VS Code offers the three recommended extensions
+   (Python, Pylance, Debugpy) — install them.
+2. **Install once:** `Ctrl+Shift+P` → *Tasks: Run Task* →
+   `setup: venv + dependencies (one time)`. Same as `\.\setup.ps1`, and it
+   creates `raglab\.env` if missing.
+3. **Paste the keys** into `raglab\.env` (`NVIDIA_API_KEY`, `XKIRO_API_KEY`).
+   They are the only two the supported pipeline needs; the file is gitignored.
+4. **Start the service:** `Ctrl+Shift+B` (the default build task runs
+   `run_server.ps1`) — or press `F5` and pick
+   *Service: uvicorn service:app (:8000)* to start it under the debugger with
+   breakpoints, which also opens `/docs` in your browser once uvicorn reports
+   ready.
+5. **First run only:** *Tasks: Run Task* → `corpus: ingest (first time…)`,
+   then browse `http://localhost:8000/docs`.
+
+| In VS Code | Wraps | What it does |
+|---|---|---|
+| Task `setup: venv + dependencies` | `setup.ps1` | venv + pinned deps + `.env` template |
+| Task `service: start` (`Ctrl+Shift+B`) | `run_server.ps1` | the service on `0.0.0.0:8000` |
+| Task `corpus: ingest` | `run_front.ps1 --ingest` | builds the index (embedding calls) |
+| Task `console: front menus` / `doctor` / `endpoint smoke` | `run_front.ps1 [--status\|--smoke]` | the console, the doctor report, the endpoint suite |
+| Task `tests: tests_offline.py` + `tests: unittest trio` | `run_tests.sh --offline` | CI's offline gate, no model calls |
+| Launch *Corpus: inspect* | `main.py inspect` | prints every chunk, no keys needed |
+| Launch *Ask: query* / *Ask: answer* | `main.py query\|answer` | prompts for the question and its language |
+| Launch *Console: local_front.py* | `local_front.py` | the menus, over REST, under the debugger |
+
+`F5` → *Tests: unittest trio* debugs the CI suite; the Test Explorer lists the
+same three modules individually (right-click a test → *Debug Test*). The
+terminal route above keeps working unchanged — the tasks call those very
+scripts, so the editor and the shell can never drift apart.
+
 ## The scripts
 
 | Script | What it is | Docker equivalent |

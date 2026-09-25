@@ -1,0 +1,47 @@
+{
+  // RAGLab — VS Code workspace settings.
+  //
+  // Open the REPO ROOT as the folder in VS Code (e.g. C:\RAGLab), not raglab\:
+  // every task and launch configuration below sets its own working directory to
+  // raglab\ (that is where service.py, setup.ps1 and run_server.ps1 live), and
+  // docs\ stays visible as the default ingest corpus.
+  //
+  // Interpreter: raglab\setup.ps1 creates the virtualenv at raglab\.venv —
+  // point VS Code at it so F5, the terminal and the Test Explorer all agree.
+  // (If you already have a .venv at the repo root, setup.ps1 reuses that one;
+  // change the path below to "${workspaceFolder}\\.venv\\Scripts\\python.exe".)
+  "python.defaultInterpreterPath": "${workspaceFolder}\\raglab\\.venv\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": true,
+
+  // The lab keeps flat modules inside raglab\ (service.py imports config,
+  // profiles, chunker, store... by name) — teach Pylance where they live so
+  // imports resolve and "Go to definition" works.
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}\\raglab"
+  ],
+
+  // Same three unittest files run_tests.sh executes in CI.
+  // tests_offline.py is a plain script (no unittest), so it stays a task.
+  "python.testing.unittestEnabled": true,
+  "python.testing.pytestEnabled": false,
+  "python.testing.unittestArgs": [
+    "-v",
+    "-s",
+    "${workspaceFolder}/raglab",
+    "-t",
+    "${workspaceFolder}/raglab",
+    "-p",
+    "test_*.py"
+  ],
+
+  // Generated at runtime (gitignored): keep them out of search results.
+  "search.exclude": {
+    "raglab/chroma_db": true,
+    "raglab/results": true,
+    "raglab/logs": true,
+    "raglab/documents": true
+  },
+  "files.exclude": {
+    "**/__pycache__": true
+  }
+}
