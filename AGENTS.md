@@ -282,6 +282,23 @@ Channels that WORK (use in this order):
   logical-order bigram scorer in `restructure.py`. **Never "repair" digits** and never
   re-derive facts from the raw digit soup; take authoring substrings from the repaired
   output.
+- **Guide AUDITED (step 1.3, 2026-09-28 —
+  `raglab/audits/Guide_Interne_Operations_Bancaires_Islamiques.md`, owner review
+  pending)**: it is Al Baraka Bank Tunisia's INTERNAL sharia-compliance manual (Jan
+  2022, authored by its compliance officer) — one of the four ORIGINAL docs/ files,
+  it stays regardless of the deleted web-compiled sheets. Extraction is CLEAN
+  (logical order). The historically noted "inverted decimals" is now precise:
+  hierarchical section numbers are stored with their components REVERSED (stored
+  «1.2-» = true 2.1) consistently in TOC and body — evidence quotes the STORED form.
+  Digits and percentages are RELIABLE here (30%/5% screening, 3-year car age, SPOT
+  = two business days, sharia-board decisions cited with numbers). Duplication
+  found: share-screening rules appear twice (murabaha controls + participation
+  controls — either hit is a correct answer), and the mudaraba wording is
+  near-duplicated with the Circulaire (q04's evidence) — Guide mudaraba questions
+  must use Guide-distinct evidence. Machinery notes: murabaha spans 9 chunks
+  (#10-18), the cards section has no own heading (content inside chunk #49 under
+  FX), the TOC itself is indexed (#01-03). The 5 existing questions are unaffected
+  (evidence verified present). Quote check 45/45 verbatim.
 - **Loi AUDITED AND OWNER-APPROVED (step 1.2, 2026-09-28 — `raglab/audits/Loi_2016-48.md`;
   the mandatory authoring rules in its section 13 are binding)**: identity clean (48-2016, 11 July 2016, JORT 58). 198 chapters in 10
   titles, content complete (no gaps); 6 chapter markers cosmetically garbled
