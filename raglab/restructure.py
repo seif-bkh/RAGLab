@@ -50,6 +50,15 @@ RTL_MIN_LEN = 40
 # The flipped score must beat the original by at least this many bigram
 # hits, otherwise the line is kept as-is (a near-tie is not a decision).
 RTL_MARGIN = 2
+# Document-level prior for visual-order extraction: when at least
+# RTL_DOMINANT_MIN lines are DECIDED flipped by the bigram scorer, and they
+# outnumber the decided-original lines by RTL_DOMINANT_RATIO to 1, the whole
+# document is treated as extracted in visual order — and the scorer's
+# near-tie lines are flipped too (counted separately as
+# rtl_ambiguous_flipped, and every one of them lands in the owner-review
+# repair diff before the change is considered adopted).
+RTL_DOMINANT_MIN = 20
+RTL_DOMINANT_RATIO = 4
 # Repeated-line garbage (page headers/footers): a line counted this many
 # times and shorter than this length is a running header, not content.
 REPEAT_HEADER_MIN_COUNT = 3
@@ -64,6 +73,22 @@ _TITLE_SKIP_RE = re.compile(r"^(بسم|الحمد|والصلاة|المدثر)|�
 _GAZETTE_HEADER_RE = re.compile(
     r"(الرائد|لجم|هورية).{0,60}(جويلية|عدد)|(جويلية|عدد).{0,60}(الرائد|لجم|هورية)")
 _GAZETTE_HEADER_MAX_LEN = 160
+# The header SPAN as it opens a page's first fused line, once "[page N]" is
+# stripped. Two orderings occur in the corpus (odd/even gazette pages):
+#   "صفحة2516 للجم الرسمي الرائد التونسية هورية–– 15 جويلية 2016 عدد58 <content>"
+#   "عدد58 التونسية للجمهورية الرسمي الرائد–– 15 جويلية 2016 صفحة2519 <content>"
+# The prefix logic below stops at the FIRST صفحة/عدد token, which leaves the
+# body of the header fused to the content line; this span consumes the whole
+# header. It only matches at line start, so the publication formula that
+# cites the gazette inside body text ("وينشر بالرائد الرسمي للجمهورية
+# التونسية ...") is never touched.
+_GAZETTE_MONTHS = (r"جانفي|فيفري|مارس|أفريل|افريل|ماي|جوان|جويلية|أوت|اوت|"
+                   r"سبتمبر|أكتوبر|اكتوبر|نوفمبر|ديسمبر")
+_GAZETTE_SPAN_RE = re.compile(
+    r"^(?:صفحة\s*\d{1,4}|عدد\s*\d{1,3})?\s*"
+    r"(?:(?:التونسية|للجمهورية|للجم|الرسمي|الرائد|هورية)[\s\u2013\u2014\-]*){2,8}"
+    r"\d{1,2}\s+(?:" + _GAZETTE_MONTHS + r")\s+\d{4}\s*"
+    r"(?:عدد\s*\d{1,3}|صفحة\s*\d{1,4})?\s*")
 
 # Common Arabic words that appear fused after a legal marker in visual-order
 # extractions ("الاولفصل" == "الفصل الاول" stored right-to-left).
@@ -157,6 +182,7 @@ class RestructureReport:
     long_lines_resplit: int = 0
     rtl_lines_marker_flipped: int = 0
     rtl_lines_repaired: int = 0
+    rtl_ambiguous_flipped: int = 0
     rtl_lines_skipped: int = 0
     markers_extracted: int = 0
     headings_invented: int = 0
@@ -177,6 +203,7 @@ class RestructureReport:
               f"long_lines_resplit={self.long_lines_resplit}")
         print(f"[restructure]   rtl_lines_repaired={self.rtl_lines_repaired} "
               f"(skipped {self.rtl_lines_skipped} ambiguous, "
+              f"ties-flipped {self.rtl_ambiguous_flipped}, "
               f"marker-flipped {self.rtl_lines_marker_flipped}) | "
               f"markers_extracted={self.markers_extracted} "
               f"headings_invented={self.headings_invented}")
@@ -211,25 +238,41 @@ def _order_score(words: list[str]) -> float:
     return bigrams * 2 + unigrams
 
 
-def repair_visual_order(line: str, report: RestructureReport) -> str:
+def _rtl_scores(line: str):
+    """(original, flipped) order scores for a repair-eligible line, else None."""
+    if len(line) < RTL_MIN_LEN or _arabic_share(line) < RTL_ARABIC_SHARE:
+        return None
+    words = line.split()
+    if len(words) < 4:
+        return None
+    return _order_score(words), _order_score(list(reversed(words)))
+
+
+def repair_visual_order(line: str, report: RestructureReport,
+                        flip_ties: bool = False) -> str:
     """Best-effort repair of a visual-order (word-flipped) Arabic line.
 
     Scores the line's word order against its mirror using curated
     logical-order bigrams (double) and content-word unigrams (single) of
     formal banking/legal Arabic; flips the line only when the mirror
     clearly wins (RTL_MARGIN). Short lines, Latin lines and near-ties are
-    left untouched and counted as skipped.
+    left untouched and counted as skipped — unless flip_ties is set:
+    a document the pre-scan found overwhelmingly visual-order (word-flipped)
+    flips its near-ties too, on the document-level prior that a tie in such
+    a document is an undecided reversal, not an undecided correct order.
+    Tie-flips are counted separately (rtl_ambiguous_flipped) and every one
+    of them is listed in the owner-review repair diff.
     """
-    if len(line) < RTL_MIN_LEN or _arabic_share(line) < RTL_ARABIC_SHARE:
+    scores = _rtl_scores(line)
+    if scores is None:
         return line
-    words = line.split()
-    if len(words) < 4:
-        return line
-    original = _order_score(words)
-    flipped = _order_score(list(reversed(words)))
+    original, flipped = scores
     if flipped >= original + RTL_MARGIN:
         report.rtl_lines_repaired += 1
-        return " ".join(reversed(words))
+        return " ".join(reversed(line.split()))
+    if flip_ties and flipped >= original:
+        report.rtl_ambiguous_flipped += 1
+        return " ".join(reversed(line.split()))
     report.rtl_lines_skipped += 1
     return line
 
@@ -274,8 +317,19 @@ def _strip_gazette_header(line: str, report: RestructureReport) -> str:
     longer line that OPENS with a gazette header (PDF extraction fuses the
     header into the page's first content line) keeps its remainder.
     """
+    m = _GAZETTE_SPAN_RE.match(line)
+    if m:
+        report.gazette_headers_removed += 1
+        return line[m.end():].strip()
     if len(line) <= _GAZETTE_HEADER_MAX_LEN:
-        if _GAZETTE_HEADER_RE.search(line):
+        # Whole-line drop only with a corroborating token: a month-year date,
+        # or the gazette-specific words هورية / للجم as standalone tokens.
+        # Otherwise a short body line that merely cites a عدد next to الرائد
+        # (law citations, the publication formula) would be dropped whole.
+        if (_GAZETTE_HEADER_RE.search(line)
+                and (re.search(_GAZETTE_MONTHS + r"\s+\d{4}", line)
+                     or re.search(r"(?:^|\s)هورية(?:^|\s)", line)
+                     or re.search(r"(?:^|\s)للجم(?:^|\s)", line))):
             report.gazette_headers_removed += 1
             return ""
         return line
@@ -461,6 +515,25 @@ def normalize_structure(doc: dict, repair_rtl: bool = True) -> tuple[str, Restru
     text = doc.get("text", "")
 
     lines, repeated_keys = _prepare_lines(text, report)
+
+    # Document-level prior for the RTL repair below: is THIS document
+    # overwhelmingly extracted in visual (word-flipped) order? Decided lines
+    # only; near-ties stay undecided here. When the prior holds, the repair
+    # flips near-ties too (see repair_visual_order).
+    flip_ties = False
+    if repair_rtl:
+        wins_flipped = wins_original = 0
+        for candidate in lines:
+            scores = _rtl_scores(candidate.strip())
+            if scores is None:
+                continue
+            if scores[1] >= scores[0] + RTL_MARGIN:
+                wins_flipped += 1
+            elif scores[0] >= scores[1] + RTL_MARGIN:
+                wins_original += 1
+        flip_ties = (wins_flipped >= RTL_DOMINANT_MIN
+                     and wins_flipped >= RTL_DOMINANT_RATIO * max(wins_original, 1))
+
     out: list[str] = []
     doc_title = _pick_title(lines, repeated_keys)
     h1_seen = False
@@ -553,7 +626,7 @@ def normalize_structure(doc: dict, repair_rtl: bool = True) -> tuple[str, Restru
             _MARKER_RE.match(line) or _FUSED_MARKER_RE.match(line)
             or _SPACED_FUSED_MARKER_RE.match(line))
         if repair_rtl and not starts_with_marker:
-            line = repair_visual_order(line, report)
+            line = repair_visual_order(line, report, flip_ties=flip_ties)
         pieces = _extract_markers(line, report)
         # No section start was exposed (the scorer's flip, if any, may have
         # moved a real marker into the middle of the line). Probe the stored

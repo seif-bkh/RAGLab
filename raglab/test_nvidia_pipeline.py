@@ -1318,5 +1318,92 @@ class ManualChunkMaps(unittest.TestCase):
                              'the two segmentations must not share an index')
 
 
+
+class GazetteAndDominanceRepair(unittest.TestCase):
+    """The 2026-09-28 corpus-defect treatments (owner decision, diff-reviewed).
+
+    Two deterministic stage-1 fixes, both grounded in the Loi audit findings:
+    (1) gazette running headers are stripped as a whole line-initial SPAN —
+        the old prefix logic stopped at the first صفحة/عدد token and left the
+        header body fused to the page's first content line (74/218 chunks
+        carried header noise);
+    (2) a document whose pre-scan shows an overwhelmingly visual-order
+        (word-flipped) extraction flips its bigram near-tie lines too
+        (document-level prior); every tie-flip is counted separately
+        (rtl_ambiguous_flipped) and lands in the owner-review repair diff
+        (raglab/audits/Loi_2016-48_repair_diff.md).
+    """
+
+    # 24 distinct word tails: the repeat-header dropper keys on digits
+    # (gazette headers differ only by page number), so digit-only line
+    # variations would be dropped as repeats before the repair ever sees
+    # them — vary with real words instead.
+    tails = ["سنويا", "شهريا", "دوريا", "فصليا", "دائما", "كليا", "جزئيا",
+             "تدريجيا", "نهائيا", "مؤقتا", "فوريا", "لاحقا", "حاليا",
+             "مستقبلا", "مباشرة", "استثنائيا", "طوارئ", "انتقاليا",
+             "تجريبيا", "استراتيجيا", "موسميا", "متكررا", "فرديا", "جماعيا"]
+
+    def test_gazette_span_stripped_whole_from_fused_line(self):
+        import restructure as rst
+        for fused, remainder in (
+            ("صفحة2518 للجم الرسمي الرائد التونسية هورية–– 15 جويلية 2016 عدد58 "
+             "الفصل14 كل القانون هذا", "الفصل14"),
+            ("عدد58 التونسية للجمهورية الرسمي الرائد–– 15 جويلية 2016 صفحة2519 "
+             "لفائدة بالعمليات", "لفائدة"),
+        ):
+            report = rst.RestructureReport(name="t")
+            out = rst._strip_gazette_header(fused, report)
+            self.assertEqual(1, report.gazette_headers_removed)
+            self.assertTrue(out.startswith(remainder), out[:60])
+            self.assertNotIn("الرائد", out)
+            self.assertNotIn("هورية", out)
+        # a standalone header line disappears entirely
+        report = rst.RestructureReport(name="t")
+        out = rst._strip_gazette_header(
+            "صفحة2516 للجم الرسمي الرائد التونسية هورية–– 15 جويلية 2016 عدد58",
+            report)
+        self.assertEqual("", out)
+        self.assertEqual(1, report.gazette_headers_removed)
+
+    def test_gazette_citations_in_body_text_are_kept(self):
+        import restructure as rst
+        # The publication formula cites the gazette but is BODY text: no
+        # month-year cluster, no هورية — must never be dropped.
+        body = ("الرائد الرسمي للجمهورية التونسية وينفذ كقانون من قوانين الدولة "
+                "ويقرأ في الجلسة العامة")
+        report = rst.RestructureReport(name="t")
+        self.assertEqual(body, rst._strip_gazette_header(body, report))
+        citation = ("عدد 48 لسنة 2016 المتعلق بالبنوك والمؤسسات المالية ينشر "
+                    "بالعديد الرسمي")  # عدد next to الرائد, still body text
+        self.assertEqual(citation, rst._strip_gazette_header(citation, report))
+        self.assertEqual(0, report.gazette_headers_removed)
+
+    def test_dominance_prior_flips_ties_in_a_flipped_document(self):
+        import restructure as rst
+        # A line with no curated bigram in either direction: a true
+        # bigram-scorer tie, so only the document prior can decide it.
+        ambiguous = "تونس بلاد في مصرف الزيتونة فروع عديدة تفتح"
+        flipped = [" ".join(reversed(
+            f"يتم التمويل على اساس المرابحة بصفة متجددة في الغرض {tail}".split()))
+            for tail in self.tails]
+        text = "\n".join(flipped + [ambiguous])
+        markdown, report = rst.normalize_structure(
+            {"text": text, "name": "dominant"}, repair_rtl=True)
+        self.assertGreaterEqual(report.rtl_lines_repaired, 20)
+        self.assertEqual(1, report.rtl_ambiguous_flipped)
+        self.assertIn(" ".join(reversed(ambiguous.split())), markdown)
+
+    def test_no_document_dominance_means_no_tie_flips(self):
+        import restructure as rst
+        ambiguous = "تونس بلاد في مصرف الزيتونة فروع عديدة تفتح"
+        logical = [f"يتم التمويل على اساس المرابحة بصفة متجددة في الغرض {tail}"
+                   for tail in self.tails]
+        text = "\n".join(logical + [ambiguous])
+        markdown, report = rst.normalize_structure(
+            {"text": text, "name": "logical"}, repair_rtl=True)
+        self.assertEqual(0, report.rtl_ambiguous_flipped)
+        self.assertIn(ambiguous, markdown)
+
+
 if __name__ == '__main__':
     unittest.main()
