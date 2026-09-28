@@ -282,6 +282,21 @@ Channels that WORK (use in this order):
   logical-order bigram scorer in `restructure.py`. **Never "repair" digits** and never
   re-derive facts from the raw digit soup; take authoring substrings from the repaired
   output.
+- **Circulaire AUDITED (step 1.1, 2026-09-28 — `raglab/audits/Circulaire_BCT_2019-08.md`,
+  owner review pending)**: official identity is منشور عدد 8 لسنة 2019 of 14 Oct 2019
+  (JORT 2019-092; BCT's Arabic 2019 list says 08). Our copy's header reads «عدد 80
+  لسنة2019» — unresolved (extraction artifact or BCT Arabic-version numbering); kept as
+  the conventional in-set identity because the stored corpus carries it verbatim.
+  **28 digit tokens are corrupted in the STORED text**, including ALL chapter numbers
+  14-20 (they render as «الفصل 11» four times + «الفصل81» + «الفصل 02») and every
+  law-reference number in the visa. True values pinned from the JORT text: laws 89-1994
+  (26 July), 35-2016, 48-2016 (11 July), chapters 11/42/54, committee opinion 8 of
+  2 Oct 2019, circular chapters 14-20 by position. Body quantities are spelled in words,
+  so chapter CONTENT stays usable. Question evidence MUST avoid corrupted spans — audit
+  §9 lists one clean candidate evidence span per chapter. Convention: in audit reports,
+  every «...» span is verbatim stored-corpus text, machine-checked by
+  `raglab/audits/check_audit_quotes.py <report.md> <doc-name>` (run it after editing
+  any report; it is the reusable verifier for steps 1.2-1.4).
 - The Guide stores some decimals inverted — kept as-is (matches the source).
 - `raglab/data/` is EMPTY by owner decision (2026-09-28): both fictional/web bank
   sheets (Banque Atlas, then a web-compiled Al Baraka set) were deleted with their
