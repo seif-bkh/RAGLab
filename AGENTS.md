@@ -320,20 +320,29 @@ Channels that WORK (use in this order):
   (1/39/99/133/144/195 — content present between neighbours). **Digits are
   RELIABLE in this document** (verified against the official French text — the
   exact OPPOSITE of the Circulaire). The dominant defect was REVERSED WORD ORDER
-  body-wide (206/438 candidate lines decided, 232 skipped ambiguous) — TREATED
-  2026-09-28 by owner decision: a document-dominance pre-scan (>=20 decided
-  flipped lines at >=4:1) flips the bigram near-ties too (233 lines in the Loi),
-  gated on owner review of the full before/after diff in
-  `raglab/audits/Loi_2016-48_repair_diff.md`. Lines OPENING with chapter markers
-  intentionally keep stored order (flipping would break marker extraction).
-  AUTHORING RULE (post-repair): expected_substring must match the form present
-  in the REPAIRED corpus — verify per question (the 4 existing ones pass
-  unchanged: their lines are marker-opening or pre-repaired). Gazette page
-  headers polluted 74/218 chunks — TREATED 2026-09-28: whole line-initial span
-  stripping removes 31/31 headers (odd/even orderings), plus a corroboration
-  guard so short body lines citing both عدد and الرائد are never dropped;
-  remaining gazette-word hits are legitimate publication clauses in the law
-  text (arts. 26/36/144-157). The PDF tail
+  body-wide — TREATED 2026-09-28 (owner decision, then REFINED after the owner's
+  review of the first diff rejected whole-line flipping as insufficient): the
+  extractor scrambles each PHYSICAL rendered line as ZONES — pure-Arabic runs
+  arrive word-reversed, digit runs keep logical order, zones themselves are in
+  logical order, sentence-terminal punctuation is re-emitted at the raw line's
+  end, and words fuse with their numbers at zone boundaries. restructure now
+  keeps PDF rendered lines un-reflowed in the loader (normalize_text
+  reflow=False) and, when a document passes the dominance gate (>=20 lines
+  scoring clearly better reconstructed, >=4:1), zone-reconstructs each rendered
+  line: letters fused to digits split BEFORE zoning, Arabic runs un-reversed,
+  digit islands kept, chapter-marker prefixes and trailing periods preserved,
+  then paragraphs are re-formed. The law-49 tail after the president's
+  signature stays in stored form (different extraction order; foreign law).
+  Full before/after diff (2334 lines) + 485 residual-fragment proposals for
+  owner decision: `raglab/audits/Loi_2016-48_repair_diff.md` (adoption gated
+  on that review). Known residual: the title and signature blocks are
+  quasi-logical zones that violate the model (listed in the diff). AUTHORING
+  RULE (post-repair): expected_substring must match the REPAIRED corpus form —
+  the 4 existing Loi questions were migrated and re-validated (30/30). Gazette
+  page headers polluted 74/218 chunks — TREATED: whole line-initial span
+  stripping removes 31/31 headers, with a corroboration guard so short body
+  lines citing both عدد and الرائد are never dropped; remaining gazette-word
+  hits are legitimate publication clauses (arts. 26/36/144-157). The PDF tail
   contains the start of ANOTHER law (49-2016, Raiffeisen loan) in chunks
   #216-217 — not our law, avoid in questions. One confirmed quantity loss: art.
   11's circular deadline stored as شهر where the official text says شهران (two
@@ -368,11 +377,18 @@ Channels that WORK (use in this order):
   `loader.load_all` tolerates the empty/missing dir (warning + continue), so a fresh
   clone stays green.
 - Pipeline stats (restructure mode, LOCAL chars/4 estimator — CI's real cl100k is the
-  arbiter, expect drift): 326 chunks total: Circulaire 15, Guide 52, Loi 219, Madkhal
-  40 — the Loi-only +1 reflects the 2026-09-28 gazette/RTL treatments (owner
-  decision; diff at `raglab/audits/Loi_2016-48_repair_diff.md`); the other three
-  documents are byte-identical before/after. `main.py inspect` exits 0 on all four.
-  (Historical: Atlas-era 346, Al Baraka-era 367/369, pre-treatment docs/ 325.)
+  arbiter, expect drift): 330 chunks total: Circulaire 15, Guide 52, Loi 223, Madkhal
+  40 — the Loi change reflects the 2026-09-28 gazette/zone-reconstruction
+  treatments (owner decision; diff at `raglab/audits/Loi_2016-48_repair_diff.md`);
+  Guide/Madkhal are untouched, Circulaire differs only in paragraph boundaries
+  (PDF page breaks now paragraph breaks; 4 repeated page-number lines dropped).
+  `main.py inspect` exits 0 on all four. (Historical: Atlas-era 346, Al
+  Baraka-era 367/369, pre-treatment docs/ 325, first-fix 326.)
+- Loader: PDFs keep their physical rendered lines (normalize_text reflow=False)
+  because the RTL zone reconstruction must un-reverse each rendered line
+  separately; restructure re-forms paragraphs afterwards. DOCX/TXT reflow as
+  before. The audit-quote checker whitespace-normalizes both sides, so quote
+  checks are insensitive to the line-structure change (verified 90/36/45/31).
 - General chunk-map gotcha (mechanism remains in repo): chunk-map offsets live in the
   NORMALIZED text domain (what `load_all` returns) — writing a map against the raw
   file text trips the source fingerprint guard in `semantic_chunking.load_map`.

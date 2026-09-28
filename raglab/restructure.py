@@ -50,13 +50,13 @@ RTL_MIN_LEN = 40
 # The flipped score must beat the original by at least this many bigram
 # hits, otherwise the line is kept as-is (a near-tie is not a decision).
 RTL_MARGIN = 2
-# Document-level prior for visual-order extraction: when at least
-# RTL_DOMINANT_MIN lines are DECIDED flipped by the bigram scorer, and they
-# outnumber the decided-original lines by RTL_DOMINANT_RATIO to 1, the whole
-# document is treated as extracted in visual order — and the scorer's
-# near-tie lines are flipped too (counted separately as
-# rtl_ambiguous_flipped, and every one of them lands in the owner-review
-# repair diff before the change is considered adopted).
+# Document-level gate for the visual-order (RTL) zone reconstruction: when
+# at least RTL_DOMINANT_MIN rendered lines score clearly better AFTER zone
+# reconstruction than before (by RTL_MARGIN), and they outnumber the
+# opposite direction by RTL_DOMINANT_RATIO to 1, the document is treated as
+# extracted in visual order and EVERY rendered line gets zone-reconstructed
+# (the reconstruction is the inverse of the extraction transform, not a
+# per-line guess). Documents that fail the gate are left byte-identical.
 RTL_DOMINANT_MIN = 20
 RTL_DOMINANT_RATIO = 4
 # Repeated-line garbage (page headers/footers): a line counted this many
@@ -180,10 +180,10 @@ class RestructureReport:
     repeated_lines_dropped: int = 0
     gazette_headers_removed: int = 0
     long_lines_resplit: int = 0
-    rtl_lines_marker_flipped: int = 0
-    rtl_lines_repaired: int = 0
-    rtl_ambiguous_flipped: int = 0
-    rtl_lines_skipped: int = 0
+    rtl_doc_dominant: bool = False
+    rtl_lines_reconstructed: int = 0
+    rtl_marker_prefixes: int = 0
+    rtl_digit_islands: int = 0
     markers_extracted: int = 0
     headings_invented: int = 0
     tables_normalized: int = 0
@@ -201,10 +201,10 @@ class RestructureReport:
               f"repeated_lines_dropped={self.repeated_lines_dropped} "
               f"gazette_headers_removed={self.gazette_headers_removed} "
               f"long_lines_resplit={self.long_lines_resplit}")
-        print(f"[restructure]   rtl_lines_repaired={self.rtl_lines_repaired} "
-              f"(skipped {self.rtl_lines_skipped} ambiguous, "
-              f"ties-flipped {self.rtl_ambiguous_flipped}, "
-              f"marker-flipped {self.rtl_lines_marker_flipped}) | "
+        print(f"[restructure]   rtl: visual-order doc={self.rtl_doc_dominant} "
+              f"rendered-lines reconstructed={self.rtl_lines_reconstructed} "
+              f"(marker prefixes {self.rtl_marker_prefixes}, "
+              f"digit islands {self.rtl_digit_islands}) | "
               f"markers_extracted={self.markers_extracted} "
               f"headings_invented={self.headings_invented}")
         print(f"[restructure]   tables_normalized={self.tables_normalized} "
@@ -238,43 +238,122 @@ def _order_score(words: list[str]) -> float:
     return bigrams * 2 + unigrams
 
 
-def _rtl_scores(line: str):
-    """(original, flipped) order scores for a repair-eligible line, else None."""
-    if len(line) < RTL_MIN_LEN or _arabic_share(line) < RTL_ARABIC_SHARE:
-        return None
-    words = line.split()
-    if len(words) < 4:
-        return None
-    return _order_score(words), _order_score(list(reversed(words)))
+def _has_digit(tok: str) -> bool:
+    return any(c.isdigit() for c in tok)
 
 
-def repair_visual_order(line: str, report: RestructureReport,
-                        flip_ties: bool = False) -> str:
-    """Best-effort repair of a visual-order (word-flipped) Arabic line.
+# Sentence-terminal punctuation re-emitted by the extractor at the raw
+# line's END regardless of where it belongs in the logical line (verified
+# on Loi 2016-48). Commas are NOT in this set: they ride their own word.
+_TERMINAL_SUFFIX_RE = re.compile(r"[.!\u061F\u061B:]+$")
 
-    Scores the line's word order against its mirror using curated
-    logical-order bigrams (double) and content-word unigrams (single) of
-    formal banking/legal Arabic; flips the line only when the mirror
-    clearly wins (RTL_MARGIN). Short lines, Latin lines and near-ties are
-    left untouched and counted as skipped — unless flip_ties is set:
-    a document the pre-scan found overwhelmingly visual-order (word-flipped)
-    flips its near-ties too, on the document-level prior that a tie in such
-    a document is an undecided reversal, not an undecided correct order.
-    Tie-flips are counted separately (rtl_ambiguous_flipped) and every one
-    of them is listed in the owner-review repair diff.
+
+def _is_digit_island(tok: str) -> bool:
+    """True for tokens that belong to a keep-in-place digit run.
+
+    The extractor keeps digit runs in logical order while reversing the
+    Arabic around them, and fuses boundary material into single tokens.
+    Discriminator = the Arabic residue left after stripping digits,
+    punctuation and dashes: at most a clinging short prefix/suffix (و، ن،
+    ولا — "47و", "ن48", "ولا78") rides the digit run (island); a real word
+    fused with its number ("الصادرة64", "يتعلق)1(", "المبرم30") belongs to
+    its Arabic run and is un-reversed with it (verified line-by-line on the
+    Loi body: "عدد بالقانون الصادرة64" -> "الصادرة 64 بالقانون عدد").
     """
-    scores = _rtl_scores(line)
-    if scores is None:
+    if not _has_digit(tok):
+        return False
+    residue = re.sub(r"[\d\s\(\)\[\]\{\}.,،؛:!\u061F\u061B\u061D?\-\u2010-\u2015\u0640]", "", tok)
+    return len(residue) <= 3
+
+
+def _reconstruct_line_visual_order(line: str,
+                                   report: "RestructureReport | None" = None) -> str:
+    """Un-reverse ONE physical rendered line of a visual-order Arabic PDF.
+
+    Empirical extraction model (verified line-by-line on Loi 2016-48, the
+    JORT gazette PDF): each rendered line reaches us as a sequence of runs —
+    pure-Arabic runs are word-REVERSED, runs containing digits keep their
+    logical order, and the runs themselves appear in logical order. The
+    sentence-terminal period is re-emitted at the raw line's end. The
+    faithful inverse is therefore NOT a whole-line flip (which would also
+    reverse the digit runs and the run order, scrambling enumerations and
+    sentence halves): keep each maximal digit-token run ("island") in place,
+    reverse each pure-Arabic run back, and re-attach the trailing period at
+    the end. A leading structural marker (الفصلNN ـ ...) stays in place,
+    with its content reconstructed after it. Letters fused to digits inside
+    a token are split at the boundary (الفصول46و -> الفصول 46 و).
+
+    Only ever called for documents that passed the document-dominance gate
+    (see normalize_structure); logical-order documents never reach this.
+    """
+    s = line.strip()
+    if not s or s.startswith("|"):
         return line
-    original, flipped = scores
-    if flipped >= original + RTL_MARGIN:
-        report.rtl_lines_repaired += 1
-        return " ".join(reversed(line.split()))
-    if flip_ties and flipped >= original:
-        report.rtl_ambiguous_flipped += 1
-        return " ".join(reversed(line.split()))
-    report.rtl_lines_skipped += 1
-    return line
+    prefix = ""
+    m = (_MARKER_RE.match(s) or _FUSED_MARKER_RE.match(s)
+         or _SPACED_FUSED_MARKER_RE.match(s))
+    if m:
+        prefix = m.group(0).rstrip()
+        s = s[m.end():].strip()
+        # a bare dash/tatweel separator token belongs to the marker, not content
+        head = s.split()
+        if head and head[0] in ("ـ", "—", "–", "-"):
+            prefix += " " + head[0]
+            s = " ".join(head[1:])
+    if not s:
+        return prefix
+
+    # Split letters fused to digits BEFORE zoning (with an optional
+    # parenthesis cluster in between, as in يتعلق)1( ): the Arabic part of a
+    # fused token belongs to its (reversed) Arabic run and the digit part
+    # to the keep-in-place island — verified on the Loi body: stored
+    # "عدد بالقانون الصادرة64 لسنة 2009" must give "الصادرة بالقانون عدد 64
+    # لسنة 2009", which only this order produces.
+    s = re.sub(r"(?<=[\u0600-\u06FF])(?=[()\[\]]*\d)", " ", s)
+    s = re.sub(r"(?<=\d)(?=[\u0600-\u06FF])", " ", s)
+    s = re.sub(r"(?<=\d\))(?=[\u0600-\u06FF])", " ", s)
+    s = re.sub(r"(?<=\d\()(?=[\u0600-\u06FF])", " ", s)
+
+    toks = s.split()
+    # Hold the raw line's trailing sentence punctuation aside: it belongs at
+    # the TRUE end of the line, i.e. the end of the reconstructed line.
+    trail = ""
+    if toks:
+        last = toks[-1]
+        if _TERMINAL_SUFFIX_RE.fullmatch(last):
+            trail = last
+            toks.pop()
+        else:
+            mm = _TERMINAL_SUFFIX_RE.search(last)
+            if mm and mm.start() > 0 and not last[:mm.start()].isdigit():
+                trail = last[mm.start():]
+                toks[-1] = last[:mm.start()]
+
+    out: list[str] = []
+    i = 0
+    while i < len(toks):
+        if _is_digit_island(toks[i]):
+            j = i
+            while j < len(toks) and _is_digit_island(toks[j]):
+                j += 1
+            out.extend(toks[i:j])
+            if report is not None:
+                report.rtl_digit_islands += j - i
+            i = j
+        else:
+            j = i
+            while j < len(toks) and not _is_digit_island(toks[j]):
+                j += 1
+            out.extend(reversed(toks[i:j]))
+            i = j
+    body = re.sub(r"\s{2,}", " ", " ".join(out)).strip()
+    if trail:
+        body = (body + " " + trail).strip()
+    if report is not None:
+        report.rtl_lines_reconstructed += 1
+        if prefix:
+            report.rtl_marker_prefixes += 1
+    return (prefix + " " + body).strip() if prefix else body
 
 
 def _drop_repeated_headers(lines: list[str], report: RestructureReport) -> list[str]:
@@ -298,9 +377,15 @@ def _drop_repeated_headers(lines: list[str], report: RestructureReport) -> list[
         # Table rows are exempt: TOC tables legitimately repeat row shapes
         # (different section numbers collapse to the same digit-stripped
         # key), and flush_table already dedupes true header repeats.
+        # A line ending in sentence-terminal punctuation is a complete
+        # sentence, not a running header: legal texts legitimately repeat
+        # standard closing formulas after several chapters (Loi 2016-48 has
+        # "ويضبط البنك المركزي التونسي شروط تطبيق هذا الفصل" after 3 of
+        # them) — those are content and must survive.
         if (stripped and not stripped.startswith("|")
                 and counts[k] >= REPEAT_HEADER_MIN_COUNT
-                and len(stripped) <= REPEAT_HEADER_MAX_LEN):
+                and len(stripped) <= REPEAT_HEADER_MAX_LEN
+                and not stripped.endswith((".", "؟", "؛", "!"))):
             repeated_keys.add(k)
             seen[k] = seen.get(k, 0) + 1
             if seen[k] > 1:
@@ -343,12 +428,85 @@ def _strip_gazette_header(line: str, report: RestructureReport) -> str:
     return line
 
 
-def _prepare_lines(text: str, report: RestructureReport) -> tuple[list[str], set[str]]:
+def _is_structural_line(line: str) -> bool:
+    """Lines that must never be reflow-joined (mirrors loader._is_block_line):
+    headings, table rows, list items, horizontal rules."""
+    s = line.strip()
+    if not s:
+        return False
+    if s.startswith("#") or s.startswith("|"):
+        return True
+    if re.match(r"^[-*+]\s+\S", s):
+        return True
+    if re.match(r"^\d+[.)]\s+\S", s):
+        return True
+    if re.match(r"^(---+|\*\*\*+)\s*$", s):
+        return True
+    return False
+
+
+def _resplit_long(line: str, report: RestructureReport) -> list[str]:
+    """A text block that lost its line breaks: resplit into sentence-sized
+    lines so the later per-line passes see units they can judge."""
+    if len(line) > LONG_LINE_MAX and not line.startswith("|"):
+        parts = [p.strip() for p in _SENTENCE_SPLIT_RE.split(line) if p.strip()]
+        if len(parts) > 1:
+            report.long_lines_resplit += len(parts) - 1
+            return parts
+    return [line] if line else []
+
+
+def _reflow_lines(lines: list[str], report: RestructureReport) -> list[str]:
+    """Re-form paragraphs from physical extracted lines.
+
+    PDFs now arrive with every rendered line on its own line break (loader
+    reflow=False — the RTL zone reconstruction needs them separate). After
+    the per-line reconstruction, consecutive paragraph lines are joined back
+    into paragraphs (blank lines and structural lines are boundaries), then
+    over-long joined lines are resplit. For sources that already arrive
+    reflowed (DOCX: blank-separated paragraphs), this is a no-op.
+    """
+    out: list[str] = []
+    para: list[str] = []
+
+    def flush() -> None:
+        if para:
+            joined = re.sub(r"[ \t]+", " ", " ".join(para)).strip()
+            out.extend(_resplit_long(joined, report))
+            para.clear()
+
+    for line in lines:
+        s = line.strip()
+        if not s:
+            flush()
+            continue
+        if _is_structural_line(s):
+            flush()
+            out.extend(_resplit_long(s, report))
+            continue
+        para.append(s)
+    flush()
+    return out
+
+
+# End-of-document signature anchor (Loi 2016-48): the president's signature
+# closes law 48. Everything AFTER it in the file is the start of ANOTHER law
+# printed on the same gazette pages (49-2016, the Raiffeisen loan — foreign
+# contamination documented in the 1.2 audit). That tail is extracted in a
+# different, quasi-logical order and is left in stored form.
+_RECONSTRUCT_TAIL_STOP = ("السبسي",)
+
+
+def _prepare_lines(text: str, report: RestructureReport,
+                   reconstruct: bool = False) -> tuple[list[str], set[str]]:
     """Pre-pass over the raw normalized extraction, in dependency order:
 
     1. strip "[page N]" markers (and bare page-number remainders),
     2. drop official-gazette running headers (whole lines or fused prefixes),
-    3. drop other repeated short lines (running headers/footers).
+    3. un-reverse each physical rendered line (zone reconstruction) when the
+       document passed the visual-order dominance gate,
+    4. re-form paragraphs from the rendered lines, resplitting long ones,
+    5. drop other repeated short lines (running headers/footers).
 
     Returns (lines, repeated_keys) — the keys of dropped repeated groups,
     used later to keep garbage out of the title pick.
@@ -361,18 +519,21 @@ def _prepare_lines(text: str, report: RestructureReport) -> tuple[list[str], set
             report.pages_removed += 1
             rest = line[m.end():].strip()
             line = rest if rest and not rest.isdigit() else ""
+            if not line:
+                lines.append("")      # page break = paragraph boundary
+                continue
         line = _strip_gazette_header(line, report)
         if not line:
+            lines.append("")
             continue
-        # A text block that lost its line breaks: resplit into sentence-sized
-        # lines so the later per-line passes see units they can judge.
-        if len(line) > LONG_LINE_MAX and not line.startswith("|"):
-            parts = [p.strip() for p in _SENTENCE_SPLIT_RE.split(line) if p.strip()]
-            if len(parts) > 1:
-                report.long_lines_resplit += len(parts) - 1
-                lines.extend(parts)
-                continue
+        if reconstruct:
+            line = _reconstruct_line_visual_order(line, report)
+            if any(marker in line for marker in _RECONSTRUCT_TAIL_STOP):
+                # signature reached: the rest of the file is another law's
+                # text (different extraction order) — keep it as stored
+                reconstruct = False
         lines.append(line)
+    lines = _reflow_lines(lines, report)
     lines, repeated_keys = _drop_repeated_headers(lines, report)
     return lines, repeated_keys
 
@@ -514,25 +675,31 @@ def normalize_structure(doc: dict, repair_rtl: bool = True) -> tuple[str, Restru
     report = RestructureReport(name=doc.get("name", "?"))
     text = doc.get("text", "")
 
-    lines, repeated_keys = _prepare_lines(text, report)
-
-    # Document-level prior for the RTL repair below: is THIS document
-    # overwhelmingly extracted in visual (word-flipped) order? Decided lines
-    # only; near-ties stay undecided here. When the prior holds, the repair
-    # flips near-ties too (see repair_visual_order).
-    flip_ties = False
+    # Document-level gate for the RTL zone reconstruction: is THIS document
+    # extracted in visual order? Sample every scorable rendered line and
+    # compare its curated-bigram score before vs after zone reconstruction.
+    # Only a document that wins this comparison overwhelmingly gets its
+    # lines un-reversed; everything else is left byte-identical.
+    dominant = False
     if repair_rtl:
-        wins_flipped = wins_original = 0
-        for candidate in lines:
-            scores = _rtl_scores(candidate.strip())
-            if scores is None:
+        wins_recon = wins_raw = 0
+        for raw in text.split("\n"):
+            s = raw.strip()
+            if (len(s) < RTL_MIN_LEN or _arabic_share(s) < RTL_ARABIC_SHARE
+                    or len(s.split()) < 4 or s.startswith("|")):
                 continue
-            if scores[1] >= scores[0] + RTL_MARGIN:
-                wins_flipped += 1
-            elif scores[0] >= scores[1] + RTL_MARGIN:
-                wins_original += 1
-        flip_ties = (wins_flipped >= RTL_DOMINANT_MIN
-                     and wins_flipped >= RTL_DOMINANT_RATIO * max(wins_original, 1))
+            recon = _reconstruct_line_visual_order(s)
+            o = _order_score(s.split())
+            r = _order_score(recon.split())
+            if r >= o + RTL_MARGIN:
+                wins_recon += 1
+            elif o >= r + RTL_MARGIN:
+                wins_raw += 1
+        dominant = (wins_recon >= RTL_DOMINANT_MIN
+                    and wins_recon >= RTL_DOMINANT_RATIO * max(wins_raw, 1))
+    report.rtl_doc_dominant = dominant
+
+    lines, repeated_keys = _prepare_lines(text, report, reconstruct=dominant)
 
     out: list[str] = []
     doc_title = _pick_title(lines, repeated_keys)
@@ -616,35 +783,12 @@ def normalize_structure(doc: dict, repair_rtl: bool = True) -> tuple[str, Restru
             out.append("")
             continue
 
-        # -- RTL visual-order repair, coordinated with marker extraction. ----
-        # A line that OPENS with a legal marker is already in structural form
-        # (marker before its body): flipping it would push the marker into
-        # the middle of the line and break the split, so such lines are kept
-        # as stored even when their body words are in visual order.
-        line0 = line
-        starts_with_marker = bool(
-            _MARKER_RE.match(line) or _FUSED_MARKER_RE.match(line)
-            or _SPACED_FUSED_MARKER_RE.match(line))
-        if repair_rtl and not starts_with_marker:
-            line = repair_visual_order(line, report, flip_ties=flip_ties)
+        # -- RTL repair already happened per physical rendered line in
+        # _prepare_lines (zone reconstruction under the document-dominance
+        # gate: digit islands kept, Arabic runs un-reversed, markers kept at
+        # line start). Here we only split the — now logical-order — line on
+        # its structural markers.
         pieces = _extract_markers(line, report)
-        # No section start was exposed (the scorer's flip, if any, may have
-        # moved a real marker into the middle of the line). Probe the stored
-        # line and its full mirror: in a visual-order line the marker sits at
-        # the stored END (= the logical beginning), and only the mirror
-        # reading exposes it as a section start. The first reading that
-        # yields a split wins; structural evidence beats the bigram tie.
-        if (repair_rtl and len(line) >= RTL_MIN_LEN
-                and _arabic_share(line) >= RTL_ARABIC_SHARE
-                and not any(p.startswith("!") for p in pieces)
-                and (_MARKER_RE.search(line) or _FUSED_MARKER_RE.search(line)
-                     or _SPACED_FUSED_MARKER_RE.search(line))):
-            for candidate in (line0, " ".join(reversed(line.split()))):
-                probe = _extract_markers(candidate, report)
-                if any(p.startswith("!") for p in probe):
-                    line, pieces = candidate, probe
-                    report.rtl_lines_marker_flipped += 1
-                    break
         line = _normalize_bullets(line, report)
         for piece in pieces:
             if piece.startswith("!"):

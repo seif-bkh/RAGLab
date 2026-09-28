@@ -1322,26 +1322,18 @@ class ManualChunkMaps(unittest.TestCase):
 class GazetteAndDominanceRepair(unittest.TestCase):
     """The 2026-09-28 corpus-defect treatments (owner decision, diff-reviewed).
 
-    Two deterministic stage-1 fixes, both grounded in the Loi audit findings:
-    (1) gazette running headers are stripped as a whole line-initial SPAN —
-        the old prefix logic stopped at the first صفحة/عدد token and left the
-        header body fused to the page's first content line (74/218 chunks
-        carried header noise);
-    (2) a document whose pre-scan shows an overwhelmingly visual-order
-        (word-flipped) extraction flips its bigram near-tie lines too
-        (document-level prior); every tie-flip is counted separately
-        (rtl_ambiguous_flipped) and lands in the owner-review repair diff
-        (raglab/audits/Loi_2016-48_repair_diff.md).
+    Stage-1 fixes grounded in the Loi audit findings and in the owner's
+    review of the first repair diff (whole-line flipping was rejected as
+    insufficient — the extraction scrambles each PHYSICAL rendered line as
+    zones: pure-Arabic runs reversed, digit runs kept in logical order):
+    (1) gazette running headers are stripped as a whole line-initial SPAN;
+    (2) visual-order documents (document-dominance gate) get each rendered
+        line zone-reconstructed: Arabic runs un-reversed, digit islands kept,
+        letters fused to numbers split BEFORE zoning, marker prefixes and
+        sentence-terminal punctuation preserved, the law-49 tail excluded.
+    The full before/after diff for (2) is owner-reviewed in
+    raglab/audits/Loi_2016-48_repair_diff.md before adoption.
     """
-
-    # 24 distinct word tails: the repeat-header dropper keys on digits
-    # (gazette headers differ only by page number), so digit-only line
-    # variations would be dropped as repeats before the repair ever sees
-    # them — vary with real words instead.
-    tails = ["سنويا", "شهريا", "دوريا", "فصليا", "دائما", "كليا", "جزئيا",
-             "تدريجيا", "نهائيا", "مؤقتا", "فوريا", "لاحقا", "حاليا",
-             "مستقبلا", "مباشرة", "استثنائيا", "طوارئ", "انتقاليا",
-             "تجريبيا", "استراتيجيا", "موسميا", "متكررا", "فرديا", "جماعيا"]
 
     def test_gazette_span_stripped_whole_from_fused_line(self):
         import restructure as rst
@@ -1357,7 +1349,6 @@ class GazetteAndDominanceRepair(unittest.TestCase):
             self.assertTrue(out.startswith(remainder), out[:60])
             self.assertNotIn("الرائد", out)
             self.assertNotIn("هورية", out)
-        # a standalone header line disappears entirely
         report = rst.RestructureReport(name="t")
         out = rst._strip_gazette_header(
             "صفحة2516 للجم الرسمي الرائد التونسية هورية–– 15 جويلية 2016 عدد58",
@@ -1367,42 +1358,88 @@ class GazetteAndDominanceRepair(unittest.TestCase):
 
     def test_gazette_citations_in_body_text_are_kept(self):
         import restructure as rst
-        # The publication formula cites the gazette but is BODY text: no
-        # month-year cluster, no هورية — must never be dropped.
         body = ("الرائد الرسمي للجمهورية التونسية وينفذ كقانون من قوانين الدولة "
                 "ويقرأ في الجلسة العامة")
         report = rst.RestructureReport(name="t")
         self.assertEqual(body, rst._strip_gazette_header(body, report))
         citation = ("عدد 48 لسنة 2016 المتعلق بالبنوك والمؤسسات المالية ينشر "
-                    "بالعديد الرسمي")  # عدد next to الرائد, still body text
+                    "بالعديد الرسمي")
         self.assertEqual(citation, rst._strip_gazette_header(citation, report))
         self.assertEqual(0, report.gazette_headers_removed)
 
-    def test_dominance_prior_flips_ties_in_a_flipped_document(self):
+    def test_zone_reconstruction_unreverses_arabic_keeps_digits(self):
         import restructure as rst
-        # A line with no curated bigram in either direction: a true
-        # bigram-scorer tie, so only the document prior can decide it.
-        ambiguous = "تونس بلاد في مصرف الزيتونة فروع عديدة تفتح"
-        flipped = [" ".join(reversed(
-            f"يتم التمويل على اساس المرابحة بصفة متجددة في الغرض {tail}".split()))
-            for tail in self.tails]
-        text = "\n".join(flipped + [ambiguous])
-        markdown, report = rst.normalize_structure(
-            {"text": text, "name": "dominant"}, repair_rtl=True)
-        self.assertGreaterEqual(report.rtl_lines_repaired, 20)
-        self.assertEqual(1, report.rtl_ambiguous_flipped)
-        self.assertIn(" ".join(reversed(ambiguous.split())), markdown)
+        # art. 194 of Loi 2016-48, verbatim stored form (zones model):
+        line = ("الفصول46و 47و 51و 52و 57 و58 اجل في القانون هذا من")
+        out = rst._reconstruct_line_visual_order(line)
+        self.assertEqual(
+            "الفصول 46 و 47 و 51 و 52 و 57 و 58 من هذا القانون في اجل", out)
+        # a word fused with its number splits BEFORE zoning so each part
+        # lands in its own zone (art. 2 area):
+        out = rst._reconstruct_line_visual_order(
+            "عدد بالقانون الصادرة64 لسنة 2009 في المؤرخ 12 أوت")
+        self.assertEqual(
+            "الصادرة بالقانون عدد 64 لسنة 2009 المؤرخ في 12 أوت", out)
 
-    def test_no_document_dominance_means_no_tie_flips(self):
+    def test_zone_reconstruction_preserves_marker_and_period(self):
         import restructure as rst
-        ambiguous = "تونس بلاد في مصرف الزيتونة فروع عديدة تفتح"
-        logical = [f"يتم التمويل على اساس المرابحة بصفة متجددة في الغرض {tail}"
-                   for tail in self.tails]
-        text = "\n".join(logical + [ambiguous])
+        out = rst._reconstruct_line_visual_order(
+            "الفصل194 ـ تمارس التي المالية والمؤسسات البنوك على")
+        self.assertTrue(out.startswith("الفصل194"), out)
+        self.assertIn("على البنوك والمؤسسات المالية التي تمارس", out)
+        # sentence-terminal punctuation is re-emitted at the raw line's end
+        # and therefore lands at the TRUE end of the reconstructed line
+        out = rst._reconstruct_line_visual_order("حكومي بأمر.")
+        self.assertEqual("بأمر حكومي .", out)
+
+    def test_dominance_gate_reconstructs_visual_order_document(self):
+        import restructure as rst
+        tails = ["سنويا", "شهريا", "دوريا", "فصليا", "دائما", "كليا", "جزئيا",
+                 "تدريجيا", "نهائيا", "مؤقتا", "فوريا", "لاحقا", "حاليا",
+                 "مستقبلا", "مباشرة", "استثنائيا", "طوارئ", "انتقاليا",
+                 "تجريبيا", "استراتيجيا", "موسميا", "متكررا", "فرديا", "جماعيا"]
+        # 24 reversed rendered lines + digit enumeration lines: a document the
+        # pre-scan must classify as visual-order
+        lines = [" ".join(reversed(
+            f"يتم التمويل على اساس المرابحة بصفة متجددة في الغرض {tail}".split()))
+            for tail in tails]
+        lines.append("الفصول46و 47و 51و 52و 57 و58 اجل في القانون هذا من")
+        text = "\n".join(lines)
+        markdown, report = rst.normalize_structure(
+            {"text": text, "name": "visual"}, repair_rtl=True)
+        self.assertTrue(report.rtl_doc_dominant)
+        self.assertGreaterEqual(report.rtl_lines_reconstructed, 20)
+        self.assertIn("الفصول 46 و 47 و 51 و 52 و 57 و 58 من هذا القانون في اجل",
+                      markdown)
+        self.assertIn("يتم التمويل على اساس المرابحة", markdown)
+
+    def test_logical_document_left_untouched(self):
+        import restructure as rst
+        tails = ["سنويا", "شهريا", "دوريا", "فصليا", "دائما", "كليا", "جزئيا",
+                 "تدريجيا", "نهائيا", "مؤقتا", "فوريا", "لاحقا", "حاليا",
+                 "مستقبلا", "مباشرة", "استثنائيا", "طوارئ", "انتقاليا",
+                 "تجريبيا", "استراتيجيا", "موسميا", "متكررا", "فرديا", "جماعيا"]
+        lines = [f"يتم التمويل على اساس المرابحة بصفة متجددة في الغرض {tail}"
+                 for tail in tails]
+        text = "\n".join(lines)
         markdown, report = rst.normalize_structure(
             {"text": text, "name": "logical"}, repair_rtl=True)
-        self.assertEqual(0, report.rtl_ambiguous_flipped)
-        self.assertIn(ambiguous, markdown)
+        self.assertFalse(report.rtl_doc_dominant)
+        self.assertEqual(0, report.rtl_lines_reconstructed)
+        self.assertIn("يتم التمويل على اساس المرابحة بصفة متجددة", markdown)
+
+    def test_reconstruct_stops_at_signature_tail(self):
+        import restructure as rst
+        # everything after law 48's signature line stays in stored form
+        text = ("شأنها من بأعمال القيام يمكنه لا الحالات كل وفي\n"
+                "السبسي قايد الباجي محمد\n"
+                "ايتعلق اتفاق على بالموافقة لقرض بتاريخ المبرم30 مارس")
+        report = rst.RestructureReport(name="t")
+        lines, _ = rst._prepare_lines(text, report, reconstruct=True)
+        joined = "\n".join(lines)
+        self.assertIn("وفي كل الحالات لا يمكنه القيام بأعمال من شأنها", joined)
+        self.assertIn("محمد الباجي قايد السبسي", joined)
+        self.assertIn("ايتعلق اتفاق على بالموافقة لقرض بتاريخ المبرم30 مارس", joined)
 
 
 if __name__ == '__main__':

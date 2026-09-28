@@ -87,7 +87,7 @@ def _is_block_line(line: str) -> bool:
     return False
 
 
-def normalize_text(text: str) -> str:
+def normalize_text(text: str, reflow: bool = True) -> str:
     """Normalize whitespace and line breaks, preserving paragraph boundaries,
     headings and table rows.
 
@@ -95,6 +95,13 @@ def normalize_text(text: str) -> str:
     - Non-breaking spaces -> plain spaces
     - One blank line between paragraphs, none inside a paragraph
     - Heading/table/list lines stay on their own line
+
+    reflow=False keeps EVERY extracted line on its own line break (no blank
+    separators inside a page; page boundaries survive as blank lines). Used
+    for PDFs: their physical rendered lines each carry one visual-order
+    scramble, and the RTL repair stage in restructure.py must un-reverse
+    each rendered line SEPARATELY before paragraphs are re-formed. Reflowing
+    here would destroy the rendered-line boundaries and make that impossible.
     """
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.replace("\u00a0", " ").replace("\u2028", "\n").replace("\u2029", "\n")
@@ -135,8 +142,16 @@ def normalize_text(text: str) -> str:
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
-            flush_paragraph()
+            if reflow:
+                flush_paragraph()
+            else:
+                # keep the real boundary (e.g. between PDF pages)
+                out_lines.append("")
             prev_blank = True
+            continue
+        if not reflow:
+            out_lines.append(line)
+            prev_blank = False
             continue
         if _is_block_line(line):
             flush_paragraph()
@@ -197,10 +212,10 @@ def read_pdf(path: Path) -> str:
     NOTE (real-world finding): Arabic PDFs produced by some Tunisian official
     publishers store the text in VISUAL order and/or with presentation-form
     glyphs. NFKC in normalize_arabic fixes the glyphs; the visual-order
-    scrambling of whole lines cannot be fixed without an RTL reordering pass,
-    so some paragraphs of such PDFs remain word-order-jumbled. This is
-    reported per document in `inspect` output; DOCX extraction is unaffected
-    (logical order).
+    scrambling is repaired per rendered line by the RTL zone-reconstruction
+    stage in restructure.py (this is why read_pdf's lines must survive
+    normalize_text unwrapped — see the reflow=False path). DOCX extraction
+    is unaffected (logical order).
     """
     from pypdf import PdfReader
 
@@ -281,7 +296,9 @@ def load_document(path: Path, origin: str = "data/") -> dict:
     else:
         raw = path.read_text(encoding="utf-8", errors="replace")
 
-    text = normalize_text(raw)
+    # PDFs keep their physical rendered lines (visual-order repair needs
+    # them); DOCX/TXT arrive in logical order and reflow as before.
+    text = normalize_text(raw, reflow=(suffix != ".pdf"))
     text = normalize_arabic(text)
     language = detect_language(text)
 

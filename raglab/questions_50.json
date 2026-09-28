@@ -89,7 +89,7 @@
       "category": "paraphrase",
       "expected_document": "Loi_2016-48.pdf",
       "expected_lang": "ar",
-      "expected_substring": "القانون هذا يهدف"
+      "expected_substring": "يهدف هذا القانون الى تنظيم شروط ممارسة"
     },
     {
       "id": "q11",
@@ -98,7 +98,7 @@
       "category": "paraphrase",
       "expected_document": "Loi_2016-48.pdf",
       "expected_lang": "ar",
-      "expected_substring": "المالية والمؤسسات بالصرف"
+      "expected_substring": "والمؤسسات المالية غير المقيمة على معنى التشريع المتعلق بالصرف"
     },
     {
       "id": "q12",
@@ -107,7 +107,7 @@
       "category": "paraphrase",
       "expected_document": "Loi_2016-48.pdf",
       "expected_lang": "ar",
-      "expected_substring": "بالاستئناف الطعن يتم"
+      "expected_substring": "يتم الطعن بالاستئناف في الحكم الصادر"
     },
     {
       "id": "q13",
@@ -224,7 +224,7 @@
       "category": "cross-lingual",
       "expected_document": "Loi_2016-48.pdf",
       "expected_lang": "ar",
-      "expected_substring": "العموم من ودائع"
+      "expected_substring": "تعتبر ودائع من العموم"
     },
     {
       "id": "q46",
