@@ -384,6 +384,15 @@ Channels that WORK (use in this order):
   (PDF page breaks now paragraph breaks; 4 repeated page-number lines dropped).
   `main.py inspect` exits 0 on all four. (Historical: Atlas-era 346, Al
   Baraka-era 367/369, pre-treatment docs/ 325, first-fix 326.)
+- ACTIVE TRACK (owner decision 2026-09-28, supersedes the v2 adoption gate):
+  `raglab/audits/Loi_2016-48_llm_repair.md` — language-model repair of the Loi,
+  sentence by sentence, with per-entry notes (fix codes ح1-ح9, unresolved ش⚠) and a
+  machine guard `raglab/audits/llm_repair_check.py` (source fidelity of every quoted
+  line + word-inventory conservation vs documented fixes + algorithm-agreement stat).
+  Batch 1 (pages 1-4, 32 entries) done; batches 2-7 to follow; the strict algorithm
+  is DERIVED from this file afterwards if possible — the v2 zone-reconstruction
+  stays in the code as comparison material only (0/32 exact agreement, ~28%
+  positional). No baselines until this track completes.
 - Loader: PDFs keep their physical rendered lines (normalize_text reflow=False)
   because the RTL zone reconstruction must un-reverse each rendered line
   separately; restructure re-forms paragraphs afterwards. DOCX/TXT reflow as
