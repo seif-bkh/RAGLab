@@ -276,12 +276,32 @@ Channels that WORK (use in this order):
 - `docs/` real corpus is **all Arabic** despite French filenames:
   `Circulaire_BCT_2019-08.pdf` (logical order, corrupted digits),
   `Guide_Interne_Operations_Bancaires_Islamiques.docx`,
-  `Loi_2016-48.pdf` (gazette, visual order, ~232 chunks),
+  `Loi_2016-48.pdf` (gazette, REVERSED word order, reliable digits — see audit),
   `Madkhal_Sayrafa_Islamiya.docx` (clean).
 - PDF text comes out in **visual order with corrupted digits** → repaired only by the
   logical-order bigram scorer in `restructure.py`. **Never "repair" digits** and never
   re-derive facts from the raw digit soup; take authoring substrings from the repaired
   output.
+- **Loi AUDITED (step 1.2, 2026-09-28 — `raglab/audits/Loi_2016-48.md`, owner review
+  pending)**: identity clean (48-2016, 11 July 2016, JORT 58). 198 chapters in 10
+  titles, content complete (no gaps); 6 chapter markers cosmetically garbled
+  (1/39/99/133/144/195 — content present between neighbours). **Digits are
+  RELIABLE in this document** (verified against the official French text — the
+  exact OPPOSITE of the Circulaire). The dominant defect is REVERSED WORD ORDER
+  body-wide: restructure's repair fixed only 206/438 candidate lines (232 skipped
+  ambiguous), so the INDEXED text is largely reversed Arabic — BM25 survives
+  (bag of words), embeddings are degraded, generation from these chunks is
+  garbled. MANDATORY AUTHORING RULE: expected_substring for this document is
+  quoted in the STORED reversed form (the 4 existing Loi questions already do).
+  Gazette page headers pollute 74/218 chunks (only 2 removed). The PDF tail
+  contains the start of ANOTHER law (49-2016, Raiffeisen loan) in chunks
+  #216-217 — not our law, avoid in questions. One confirmed quantity loss: art.
+  11's circular deadline stored as شهر where the official text says شهران (two
+  months) — no quantity questions on that phrase. Islamic-finance cluster fully
+  pinned from the French (arts 4, 11-16, 22, 23, 43, 54 committee+auditor,
+  63-64 supervision, 75 Moucharaka exception, 76 investment-deposit obligations,
+  169-170 sanctions, 198) with a chapter->chunk map and a clean stored-form
+  evidence matrix in audit sections 9/12. Quote check 36/36 verbatim.
 - **Circulaire AUDITED AND OWNER-APPROVED (step 1.1, 2026-09-28 —
   `raglab/audits/Circulaire_BCT_2019-08.md`)**. Two standing decisions: (1) the
   in-set identity stays 80/2019 (stored verbatim; official 8/2019 documented in the

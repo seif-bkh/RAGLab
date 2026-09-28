@@ -32,6 +32,11 @@ def main(argv):
     doc = load_document(DOCS_DIR / doc_name, origin="docs/")
     text = doc["text"]
 
+    # Report line-wrapping must not break verbatim checking: collapse all whitespace
+    # runs (newline + indent) in both the quoted span and the corpus text to single
+    # spaces before comparing. Everything else stays strictly literal.
+    norm = lambda s: re.sub(r"\s+", " ", s).strip()
+    text_flat = norm(text)
     spans = re.findall(r"«([^»]+)»", report)
     checked, skipped, failures = 0, 0, []
     for span in spans:
@@ -39,7 +44,7 @@ def main(argv):
             skipped += 1  # ellipsis placeholders like «...», not real quotes
             continue
         checked += 1
-        if span not in text:
+        if norm(span) not in text_flat:
             failures.append(span)
 
     print(f"[audit-check] report={report_path.name} document={doc_name}")
