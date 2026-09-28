@@ -49,7 +49,7 @@ def parse_entries(md: str):
     for line in md.split("\n"):
         m = ENTRY_RE.match(line)
         if m:
-            cur = {"id": m.group(1), "page": m.group(2), "title": m.group(3),
+            cur = {"id": m.group(1).strip(), "page": m.group(2), "title": m.group(3),
                    "q": [], "b": [], "m": [], "where": None}
             entries.append(cur)
             continue
@@ -77,6 +77,23 @@ def parse_entries(md: str):
         elif cur["where"] == "m" and line.strip():
             cur["m"].append(line.strip())
     return entries
+
+
+def canon(s: str) -> list:
+    """Presentation artifacts out: standalone tatweel dashes are separator
+    decoration, not content — both sides drop them before comparing."""
+    return [t for t in norm_ws(s).split() if t != "ـ"]
+
+
+def agreement(alg: str, lm: str) -> float:
+    """Positional agreement via token alignment (a single inserted token
+    must not zero the score)."""
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, canon(alg), canon(lm)).ratio()
+
+
+def is_exact(alg: str, lm: str) -> bool:
+    return canon(alg) == canon(lm)
 
 
 def main(argv):
@@ -125,13 +142,11 @@ def main(argv):
             alg = norm_ws(" ".join(
                 rst._reconstruct_line_visual_order(l) for l in e["q"]))
             lm = norm_ws("\n".join(e["b"]))
-            if alg == lm:
+            if is_exact(alg, lm):
                 exact_alg += 1
                 ratio = 1.0
             else:
-                ra, rb = alg.split(), lm.split()
-                same = sum(1 for a, b in zip(ra, rb) if a == b)
-                ratio = same / max(len(ra), len(rb), 1)
+                ratio = agreement(alg, lm)
             total_ratio += ratio
             n_cmp += 1
         except Exception as exc:  # noqa: BLE001
@@ -139,8 +154,9 @@ def main(argv):
 
     print(f"[llm-check] source fidelity: {'OK' if src_fail == 0 else str(src_fail) + ' ENTRIES FAILED'}")
     if n_cmp:
-        print(f"[llm-check] algorithm-vs-LM: exact {exact_alg}/{n_cmp} entries, "
-              f"mean position agreement {total_ratio / n_cmp:.1%}")
+        print(f"[llm-check] algorithm-vs-LM (v2 zones baseline): "
+              f"exact {exact_alg}/{n_cmp} entries, "
+              f"mean agreement {total_ratio / n_cmp:.1%}")
     return 1 if src_fail else 0
 
 
