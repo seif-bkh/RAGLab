@@ -282,8 +282,12 @@ Channels that WORK (use in this order):
   logical-order bigram scorer in `restructure.py`. **Never "repair" digits** and never
   re-derive facts from the raw digit soup; take authoring substrings from the repaired
   output.
-- **Circulaire AUDITED (step 1.1, 2026-09-28 — `raglab/audits/Circulaire_BCT_2019-08.md`,
-  owner review pending)**: official identity is منشور عدد 8 لسنة 2019 of 14 Oct 2019
+- **Circulaire AUDITED AND OWNER-APPROVED (step 1.1, 2026-09-28 —
+  `raglab/audits/Circulaire_BCT_2019-08.md`)**. Two standing decisions: (1) the
+  in-set identity stays 80/2019 (stored verbatim; official 8/2019 documented in the
+  audit); (2) corruption handling = KEEP THE TEXT VERBATIM, the audit's corrections
+  table becomes governed Phase-4 metadata, and question evidence must avoid corrupted
+  spans (audit section 9 matrix complies). official identity is منشور عدد 8 لسنة 2019 of 14 Oct 2019
   (JORT 2019-092; BCT's Arabic 2019 list says 08). Our copy's header reads «عدد 80
   لسنة2019» — unresolved (extraction artifact or BCT Arabic-version numbering); kept as
   the conventional in-set identity because the stored corpus carries it verbatim.
