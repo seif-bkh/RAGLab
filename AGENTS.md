@@ -298,12 +298,13 @@ Channels that WORK (use in this order):
 
 ## 7. Key results (update this section when numbers change)
 
-- **CI green**: run 35997051758 on HEAD `8a6f94a` (offline suite: 234 unittests
-  — 187 core + 47 service — + 96 checks + inspect + pip check, under CI's REAL
-  cl100k tokenizer). That commit is the Phase‑2 corpus swap + target-state
-  evaluation categories + questions_v2 + answer_ab (§1b, RAGLAB_ROADMAP.md).
-  Prior green: 35989037732/35988879011 on `742feb5`/`fa1c09f` (227 tests, the
-  Phase‑1 gap-analysis commits).
+- **CI green**: run 36395791517 on HEAD `d2e3f0c` (offline suite: 227 unittests
+  — 180 core + 47 service — + 96 checks + inspect + pip check, under CI's REAL
+  cl100k tokenizer). That commit is Step 0 of the re-planned Phase 2: full revert
+  to the docs/-only corpus (§1b). Prior green (historical, reverted round):
+  36000876551/35997175104/35997051758 on `d13267e`/`8b2f8c1`/`8a6f94a` (234
+  tests, Al Baraka era); 35989037732/35988879011 on `742feb5`/`fa1c09f` (Phase‑1
+  gap analysis).
 - **Reverse-engineering spec** (961afe9): repo-root `RAGLAB_SPEC.md` —
   evidence-based spec of the whole system (pipelines, 25 routes, security,
   gap analysis), every claim cited file/symbol/line, tagged
