@@ -282,6 +282,21 @@ Channels that WORK (use in this order):
   logical-order bigram scorer in `restructure.py`. **Never "repair" digits** and never
   re-derive facts from the raw digit soup; take authoring substrings from the repaired
   output.
+- **Madkhal AUDITED (step 1.4, 2026-09-28 — `raglab/audits/Madkhal_Sayrafa_Islamiya.md`,
+  owner review pending)**: internal TRAINING material (an introduction to Islamic
+  banking for Al Baraka Tunisia staff) — one of the four ORIGINAL docs/ files, it
+  stays. Extraction CLEAN. It carries the corpus's richest RELIABLE numbers
+  (1962 Tabung Haji, 1963/1967 Mit Ghamr, 1971 Nasser, 1975 Jeddah, 1977-1985
+  wave, 15-20% growth, 500->1166 bn USD 2007->2012, 716 = 511 + 205 institutions)
+  — it is the home of history/quantity questions (q13-15, q26-27, q40-41, q44 all
+  live on it, all evidence verified present). ONE numeric defect found: 59,000 is
+  stored as «(000 59)» (reversed digit groups) — quote as stored or avoid.
+  Spelling without hamzas in places («القران الكريم», «تاسيس») — evidence uses the
+  stored spelling. The document itself uses internal «» around proper names —
+  never quote a span containing them (checker ambiguity). Structure: 5 sections;
+  the 5th heading («5اهم منتجات الصيرفة الاسلامية») was not extracted (no
+  separator after the digit) — its deposits/financing content sits in chunks
+  #30-39. Quote check 31/31 verbatim.
 - **Guide AUDITED (step 1.3, 2026-09-28 —
   `raglab/audits/Guide_Interne_Operations_Bancaires_Islamiques.md`, owner review
   pending)**: it is Al Baraka Bank Tunisia's INTERNAL sharia-compliance manual (Jan
