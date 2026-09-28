@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Verify the LLM-repair log (Loi_2016-48_llm_repair.md) against the corpus.
 
-Three checks per entry, per the owner-approved methodology (2026-09-28:
-language-model repair first, algorithm derivation afterwards):
+Two checks per entry, per the owner-approved methodology (2026-09-28:
+language-model repair first; the strict-algorithm derivation was ABANDONED
+by owner decision — طرح أي التخلي عنها):
 
 1. SOURCE  — every «ق» line must appear verbatim (whitespace-collapsed) in
    the stored document text, in order: the log quotes the real corpus.
@@ -10,10 +11,6 @@ language-model repair first, algorithm derivation afterwards):
    for diffs explicitly explained in the entry's «م» note (joins, splits,
    documented letter insertions/drops). The tool prints every diff; a diff
    with no matching note is a finding to fix.
-3. ALGORITHM — for each «ق» line, compare the v2 zone-reconstruction
-   (restructure._reconstruct_line_visual_order) with the «ب» text: how much
-   of the human/LM repair a strict rule already reproduces. This feeds the
-   final derive-the-algorithm step.
 
 Usage: python audits/llm_repair_check.py [report.md] [doc-name]
 Exit 0 = sources all verified (conservation diffs are printed, not fatal).
@@ -79,23 +76,6 @@ def parse_entries(md: str):
     return entries
 
 
-def canon(s: str) -> list:
-    """Presentation artifacts out: standalone tatweel dashes are separator
-    decoration, not content — both sides drop them before comparing."""
-    return [t for t in norm_ws(s).split() if t != "ـ"]
-
-
-def agreement(alg: str, lm: str) -> float:
-    """Positional agreement via token alignment (a single inserted token
-    must not zero the score)."""
-    from difflib import SequenceMatcher
-    return SequenceMatcher(None, canon(alg), canon(lm)).ratio()
-
-
-def is_exact(alg: str, lm: str) -> bool:
-    return canon(alg) == canon(lm)
-
-
 def main(argv):
     report_path = Path(argv[1]) if len(argv) > 1 else DEFAULT_REPORT
     doc_name = argv[2] if len(argv) > 2 else DEFAULT_DOC
@@ -108,8 +88,6 @@ def main(argv):
     print(f"[llm-check] report={report_path.name} entries={len(entries)}")
 
     src_fail = 0
-    total_ratio, n_cmp = 0.0, 0
-    exact_alg = 0
     for e in entries:
         # 1. source fidelity (in order, whitespace-collapsed)
         pos = 0
@@ -136,27 +114,8 @@ def main(argv):
             for w, n in sorted(removed.items()):
                 print(f"    - {'×' + str(n) if n > 1 else ''} {w}")
 
-        # 3. algorithm agreement (line-level zone reconstruction vs LM)
-        try:
-            import restructure as rst
-            alg = norm_ws(" ".join(
-                rst._reconstruct_line_visual_order(l) for l in e["q"]))
-            lm = norm_ws("\n".join(e["b"]))
-            if is_exact(alg, lm):
-                exact_alg += 1
-                ratio = 1.0
-            else:
-                ratio = agreement(alg, lm)
-            total_ratio += ratio
-            n_cmp += 1
-        except Exception as exc:  # noqa: BLE001
-            print(f"[llm-check] {e['id']}: algorithm compare failed: {exc}")
-
-    print(f"[llm-check] source fidelity: {'OK' if src_fail == 0 else str(src_fail) + ' ENTRIES FAILED'}")
-    if n_cmp:
-        print(f"[llm-check] algorithm-vs-LM (v2 zones baseline): "
-              f"exact {exact_alg}/{n_cmp} entries, "
-              f"mean agreement {total_ratio / n_cmp:.1%}")
+    print(f"[llm-check] source fidelity: "
+          f"{'OK' if src_fail == 0 else str(src_fail) + ' ENTRIES FAILED'}")
     return 1 if src_fail else 0
 
 

@@ -391,18 +391,12 @@ Channels that WORK (use in this order):
   line + word-inventory conservation vs documented fixes + algorithm-agreement stat).
   Batch 1 (pages 1-4, 32 entries) done and owner-approved ("عمل ممتاز");
   the E18 unresolved "اجل" was resolved by the owner (شراء اجل — deferred
-  purchase, the essence of Salam). The DERIVED ALGORITHM (owner: "فلنطرح
-  الخوارزمية إذن") is posed in the same file's derivation section, measured
-  by `raglab/audits/derive_algorithm.py`: admitted constants (v2 zones +
-  spaced-marker swap K7 + mid-line punctuation anchors K8) reproduce 5/32
-  entries exactly at 86.4% positional agreement; four candidate constants
-  were tried and REJECTED by ablation (split search, join pass, ال-variant,
-  fusion split). The ~13.6% residual is structurally classified (multi-run
-  line reordering, fragment scatter with redistribution, letter insertions,
-  unresolved strays) — language-model territory. Recommended for batches
-  2-7: the admitted algorithm as an automatic first pass, the LM repairing
-  the residual, every entry still logged and machine-checked. No baselines
-  until this track completes.
+  purchase, the essence of Salam). The strict-algorithm derivation was
+  ABANDONED by owner decision (2026-09-28, "طرح الخوارزمية أي التخلي
+  عنها") — derive_algorithm.py deleted; the track is language-model only.
+  Batches 2-7 continue with the same per-entry format and the same machine
+  guard (source fidelity + conservation). No baselines until this track
+  completes.
 - Loader: PDFs keep their physical rendered lines (normalize_text reflow=False)
   because the RTL zone reconstruction must un-reverse each rendered line
   separately; restructure re-forms paragraphs afterwards. DOCX/TXT reflow as
