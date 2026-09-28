@@ -282,8 +282,8 @@ Channels that WORK (use in this order):
   logical-order bigram scorer in `restructure.py`. **Never "repair" digits** and never
   re-derive facts from the raw digit soup; take authoring substrings from the repaired
   output.
-- **Loi AUDITED (step 1.2, 2026-09-28 — `raglab/audits/Loi_2016-48.md`, owner review
-  pending)**: identity clean (48-2016, 11 July 2016, JORT 58). 198 chapters in 10
+- **Loi AUDITED AND OWNER-APPROVED (step 1.2, 2026-09-28 — `raglab/audits/Loi_2016-48.md`;
+  the mandatory authoring rules in its section 13 are binding)**: identity clean (48-2016, 11 July 2016, JORT 58). 198 chapters in 10
   titles, content complete (no gaps); 6 chapter markers cosmetically garbled
   (1/39/99/133/144/195 — content present between neighbours). **Digits are
   RELIABLE in this document** (verified against the official French text — the
