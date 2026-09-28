@@ -3,7 +3,7 @@
 A "document" is a plain dict, always with the same keys:
 
     {
-        "name":      file name, e.g. "fiche_produit_banque_albaraka_fr.md",
+        "name":      file name, e.g. "Loi_2016-48.pdf",
         "path":      absolute path of the source file,
         "text":      normalized full text (whitespace reflowed, Arabic normalized),
         "language":  "fr" | "ar" | "en" | "unknown",
@@ -301,9 +301,8 @@ def load_document(path: Path, origin: str = "data/") -> dict:
 def load_all(data_dirs) -> list[dict]:
     """Load every supported file from one or more directories (sorted by name).
 
-    Accepts a single Path or a list of Paths (e.g. the fictional product
-    sheets AND a docs/ folder of real documents). Never skips a bad file
-    silently: every failure is printed.
+    Accepts a single Path or a list of Paths (e.g. a docs/ folder of real
+    documents). Never skips a bad file silently: every failure is printed.
     """
     if isinstance(data_dirs, (str, Path)):
         data_dirs = [data_dirs]

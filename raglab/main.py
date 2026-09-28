@@ -40,6 +40,16 @@ from artifacts import write_json
 # ---------------------------------------------------------------------------
 
 
+def default_data_dirs() -> list:
+    """The repo's real corpus: ../docs first, then raglab/data (may be empty).
+
+    Mirrors chat.data_dirs: one corpus definition everywhere. The historical
+    default (data/ alone) only worked while sample sheets lived there; the
+    corpus of record is the four documents in docs/.
+    """
+    return [cfg.PROJECT_DIR.parent / "docs", cfg.DATA_DIR]
+
+
 def banner(title: str):
     print("=" * 78)
     print(title)
@@ -74,10 +84,11 @@ def make_translator(quiet: bool = False):
 
 def cmd_inspect(args) -> int:
     banner("INSPECT — load and chunk only, NO embedding, NO API calls")
-    data_dirs = args.data_dir if args.data_dir else [cfg.DATA_DIR]
+    data_dirs = args.data_dir if args.data_dir else default_data_dirs()
     docs = load_all(data_dirs)
     if not docs:
-        print("[inspect] nothing to inspect; add files to", cfg.DATA_DIR)
+        print(f"[inspect] nothing to inspect; add files to "
+              f"{' or '.join(str(d) for d in data_dirs)}")
         return 1
 
     print(f"\n[inspect] parameters: chunk_size={cfg.CHUNK_SIZE_TOKENS} tokens | "
@@ -130,7 +141,7 @@ def cmd_inspect(args) -> int:
 
 def cmd_ingest(args) -> int:
     banner("INGEST — load, chunk, embed, store")
-    data_dirs = args.data_dir if args.data_dir else [cfg.DATA_DIR]
+    data_dirs = args.data_dir if args.data_dir else default_data_dirs()
     docs = load_all(data_dirs)
     chunks = chunk_all(docs, cfg)
     if not chunks:
@@ -284,7 +295,7 @@ def cmd_answer(args):
     if result is None:
         collection = get_collection(cfg)
         if not collection.count():
-            raise ValueError("Collection is empty; run python main.py ingest --reset --data-dir ../docs")
+            raise ValueError("Collection is empty; run python main.py ingest --reset")
         # Validate model/provider/free-price eligibility before billable embedding calls.
         generator = build_answer_generator(local)
         embedder = make_embedder(skip_sanity=True)

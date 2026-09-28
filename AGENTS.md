@@ -24,22 +24,18 @@ Current state of the work:
   2. context breadcrumbs above sub-headings/tables;
   3. recursive structural chunking over
      `["\n# ", "\n## ", "\n### ", "\n\n", "\n", " "]` at the usual 220/40 token budget.
-- **Benchmark sets**: `raglab/questions_50.json` — 50 questions (17 ar / 17 fr /
-  16 en), categories `verbatim` (12), `paraphrase` (13), `cross-lingual` (20),
-  `out-of-scope` (5, must have NO expected match). **Revised 2026-09-24**: the 20
-  former Banque Atlas cases now target the Al Baraka sheets (same ids/categories/
-  languages) — numbers must be re-baselined and are NOT comparable with pre-revision
-  runs. Plus `raglab/questions_v2.json` — 38 cases in the target-state symptom
-  categories: `colloquial` (7), `synonyms` (7), `implicit` (7), `compound` (7),
-  `ambiguous` (5, carries `ambiguity_note` for Phase 5), `out-of-scope` (5). Multi-
-  evidence cases use `expected_substrings` (list); hit@k for them = requirement-set
-  completion rank (`evaluate.requirement_completion_rank`); new metrics:
-  `requirements` (coverage@k / in-context) and `context.evidence_in_context`
-  (answer-path budget simulation) in compute_metrics output. Never copy from
+- **Benchmark set**: `raglab/questions_50.json` — currently **30 cases** (17 ar /
+  4 fr / 9 en) over the four `docs/` documents only: `verbatim` (6), `paraphrase`
+  (9), `cross-lingual` (10), `out-of-scope` (5, must have NO expected match).
+  Owner decision 2026-09-28: the corpus is `docs/` ONLY (both fictional/web bank
+  sheets — Atlas, then a web-compiled Al Baraka set — were deleted with their
+  chunk maps, their question cases, `questions_v2.json`, `answer_ab.py` and every
+  machinery addition from that round was reverted). The set is being rebuilt to 50
+  docs/-based cases STEP BY STEP with the owner verifying each batch; the five
+  target-state categories and the multi-evidence schema will be RE-INTRODUCED the
+  same way, each in its own reviewed step. All pre-2026-09-28 numbers are
+  historical (their corpora/cases no longer match). Never copy from
   `raglab/questions.json`, `questions_real.json`, or `benchmarks/retrieval_dev.json`.
-  `raglab/answer_ab.py` = the model-independence tool (one retrieval, N answer
-  models, agreement/Jaccard/gate-refusal metrics; offline-tested with fake
-  generators; live wiring into real-test.yml is Phase-2 remainder).
 - **BM25-only A/B harness**: `raglab/harness50.py` (no API calls; deterministic).
 - **Real-model A/B**: `.github/workflows/real-test.yml` (manual trigger, spends API
   calls, reads repo secrets) + `raglab/real_report.py` (table builder).
@@ -157,15 +153,27 @@ that deliverable. Key outcomes (all verified in code this session):
   (additive only, §2.7), pinned-pipeline policy (no number attribution to other models),
   sandbox network (live runs only via CI `real-test.yml`), hard-harness files untouchable,
   offline gate green before every push.
-- **Phase 2 in progress (2026-09-24, same day)** — `RAGLAB_ROADMAP.md` (Arabic) is the
-  execution contract (all phases, gates, owner decisions recorded). Landed: corpus swap
-  Atlas→Al Baraka (owner decision), the 5 new question categories + multi-requirement
-  schema + context metrics in evaluate.py, questions_v2.json (38), q50/legacy-set
-  migration, harness50 `--questions/--results` flags + multi-evidence support,
-  answer_ab.py, service 1.3.0 (questions_v2 in the /evaluate whitelist). Local BM25
-  baselines recorded in §7. Remaining for closure: live CI arm (vector vs rrf — decides
-  the hybrid default BY DATA, owner decision), answer_ab CI wiring, human review of the
-  two auto-drafted Al Baraka chunk maps.
+- **Phase 2 RE-PLANNED on the docs/ corpus (owner direction, 2026-09-28)** —
+  `RAGLAB_ROADMAP.md` (Arabic) remains the execution contract. The owner directed that
+  the working corpus is `docs/` ONLY; the web-compiled Al Baraka round (and everything
+  built on it) was fully reverted in one forward commit: sheets + chunk maps deleted,
+  `questions_v2.json`/`answer_ab.py`/migration tool deleted, all code files restored to
+  their pre-round state (evaluate 4 categories, harness50 without flags, service back to
+  1.2.5 with the original /evaluate whitelist), q50 trimmed to its 30 docs/-based cases
+  and the legacy set to 4. Three standing decisions recorded: (1) fictional/web corpora
+  stay OUT of the repository; (2) the Phase-2 machinery (5 categories, multi-evidence
+  schema, model-independence tool) is re-introduced ONLY as reviewed steps; (3) q50 is
+  rebuilt to 50 docs/-based cases batch by batch with the owner verifying each batch.
+  WORK PROTOCOL from now on: every step gets its own published schema
+  (objective/inputs/actions/outputs/automatic checks/how the owner tests it/transition
+  criterion/rollback) — no step runs inside another, no number is adopted unreviewed.
+  The step sequence: docs audit (per document) → question-set plan → batches →
+  baselines (BM25 local, then the live CI arm which decides the hybrid default BY
+  DATA). ONE necessary coherence fix shipped with the revert: `main.py inspect` and
+  `ingest` now default to the REAL corpus (../docs + raglab/data via
+  `main.default_data_dirs`, mirroring chat.data_dirs) instead of data/ alone — the
+  old default only exited 0 because the deleted sample sheets lived there, and CI
+  runs bare `python main.py inspect`. Verified: 4 documents, 325 chunks, exit 0. The pre-2026-09-28 round remains in git history for archaeology only.
 
 
 ---
@@ -178,10 +186,9 @@ that deliverable. Key outcomes (all verified in code this session):
    (`tests_offline.py`, `test_nvidia_pipeline.py`, `test_hard_harness.py`,
    `main.py inspect`, …) — never move or rename them.
 3. Question-set format follows `raglab/evaluate.py`
-   (`load_question_set`): categories `{verbatim, paraphrase, cross-lingual, out-of-scope,
-   colloquial, synonyms, implicit, compound, ambiguous}` (the five target-state ones added
-   2026-09-24); out-of-scope questions must have no expected match (including
-   `expected_substrings`).
+   (`load_question_set`): categories `{verbatim, paraphrase, cross-lingual, out-of-scope}`;
+   out-of-scope questions must have no expected match. (Extending this list is a
+   roadmap Phase-2 step and will update this constraint when re-introduced.)
 4. **Never commit `raglab/.env` or any API key value.** The keys exist as GitHub Actions
    repo secrets named `NVIDIA_API_KEY`, `XKIRO_API_KEY` (and `GOOGLE_API_KEY` for the
    LLM fallback) — added by the user 2026-09-07. Reference them by name in workflows;
@@ -276,27 +283,18 @@ Channels that WORK (use in this order):
   re-derive facts from the raw digit soup; take authoring substrings from the repaired
   output.
 - The Guide stores some decimals inverted — kept as-is (matches the source).
-- `raglab/data/` sheets are **Al Baraka Bank Tunisie** product sheets (owner decision
-  2026-09-24: delete the fictional Banque Atlas entirely): parallel FR/AR, built VERBATIM
-  from the bank's official public pages (albaraka.com.tn: finance islamique, leasing
-  auto, épargne Omra) + the official «Conditions tarifaires 2023» PDF, collected
-  2026-09-24, each with a sources+disclosure section. NOT official bank documents.
-  Known intentional asymmetry: the AR Omra page carries the «50% du coût total» cap the
-  FR page omits — cross-lingual questions exploit it. The AR tariff table labels are our
-  translation of the French-only official PDF. Questions quote its numbers (18/40/90/150
-  TND cards, 30% de l'épargne, 100% véhicule, 5 ans, packs 19,135/22,900/28 TND/mois …).
-  The old Atlas sheets + their chunk maps were `git rm`'d; migration script kept at
-  `raglab/tools/migrate_questions_albaraka.py`.
+- `raglab/data/` is EMPTY by owner decision (2026-09-28): both fictional/web bank
+  sheets (Banque Atlas, then a web-compiled Al Baraka set) were deleted with their
+  chunk maps — the corpus is the four REAL documents in `docs/` and nothing else.
+  `loader.load_all` tolerates the empty/missing dir (warning + continue), so a fresh
+  clone stays green.
 - Pipeline stats (restructure mode, LOCAL chars/4 estimator — CI's real cl100k is the
-  arbiter, expect drift): 367 chunks total: Circulaire 15, Guide 52, Loi 218, Madkhal 40,
-  albaraka ar 18, albaraka fr 24. `main.py inspect` exits 0. The FR sheet gained ### 4.1-4.5
-  tariff subheadings during the 2026-09-24 review pass (structural parity with AR — the
-  sheets must stay structurally parallel for the cross-lingual category). Manual chunk maps
-  for both sheets were then split per tariff table and re-tiled EXACTLY in normalized-text
-  coordinates (ar 16 / fr 18 chunks; `chunk_maps.py check` OK). Gotcha learned: chunk-map
-  offsets live in the NORMALIZED text domain (what load_all returns) — writing a map against
-  the raw file text trips the source fingerprint guard in `semantic_chunking.load_map`.
-  (Pre-2026-09-24 Atlas-era CI stats were 346: Guide 61, Loi 232, ar 10, fr 11.)
+  arbiter, expect drift): 325 chunks total: Circulaire 15, Guide 52, Loi 218, Madkhal
+  40. `main.py inspect` exits 0 on all four. (Historical: Atlas-era 346, Al Baraka-era
+  367/369 — both corpora deleted.)
+- General chunk-map gotcha (mechanism remains in repo): chunk-map offsets live in the
+  NORMALIZED text domain (what `load_all` returns) — writing a map against the raw
+  file text trips the source fingerprint guard in `semantic_chunking.load_map`.
 
 ## 7. Key results (update this section when numbers change)
 
@@ -430,19 +428,12 @@ Channels that WORK (use in this order):
   custom ID but the service never used it. Provider-only switches: same
   provider = no-op; different provider = first registered model, never a
   cross-provider carry-over. One token, no spaces → else 400 bad_model.
-- **BM25-only A/B on the Al Baraka corpus (2026-09-24, post-migration baselines)** —
-  the pre-migration Atlas-era numbers below are historical, sets changed:
-  - `questions_50.json` (45 evaluable; k=20; after the FR tariff-subheading fix):
-    size 42/62/69 → restructure **49/80/82** (hit@1/3/5). By language fr: 13/40/47 →
-    40/53/53 (pre-fix restructure was 47/80/80).
-  - `questions_v2.json` (33 evaluable; k=20; symptom categories): size 24/33/39 →
-    restructure **52/67/67**. colloquial 0→**57**, synonyms 29→**57**, implicit 14→**43**
-    (86 @3), compound 43→**57** (86 @3), ambiguous 40→40 (hit@1). OOS max top-1: 23.3 vs
-    26.4. The colloquial zero on the lexical arm is the vocabulary-gap symptom the
-    Phase-3 lexicon targets; implicit/compound expose the Phase-5 relations need.
-  - Regenerate: `harness50.py` and `harness50.py --questions questions_v2.json
-    --results harness50_v2` (new flags; default behavior unchanged).
-- **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of
+- **RETRACTED 2026-09-28**: the Al Baraka-era baselines (q50 49/80/82, questions_v2
+  52/67/67 etc.) were measured on a now-deleted corpus with now-deleted machinery —
+  do not cite them. The Atlas-era block below is likewise historical. The CURRENT
+  baseline is NONE until Phase 2 re-measures it on the docs/-only set (step 3.1 in
+  RAGLAB_ROADMAP.md); until then treat every hit@k number in this file as history.
+- **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of- **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of
   50; k=20; full table in `raglab/results/harness50/comparison.md`, regenerable via
   `harness50.py`):
   - overall hit@1/3/5: size-220/40 `40/69/80` → restructure `47/78/89`

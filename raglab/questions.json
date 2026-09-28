@@ -3,113 +3,11 @@
   "note": "A case is correct when the top-k results contain a chunk matching expected_substring (normalized, language-aware via expected_lang). Out-of-scope cases have no expected match.",
   "cases": [
     {
-      "id": "q01",
-      "question": "Quel est le tarif annuel de la carte VISA Classique chez Al Baraka ?",
-      "language": "fr",
-      "category": "verbatim",
-      "expected_substring": "40 TND",
-      "expected_lang": "fr"
-    },
-    {
-      "id": "q02",
-      "question": "Le Al Baraka Leasing Automobile est-il réservé aux professionnels ?",
-      "language": "fr",
-      "category": "verbatim",
-      "expected_substring": "usage professionnel",
-      "expected_lang": "fr"
-    },
-    {
-      "id": "q03",
-      "question": "كم يبلغ الرسم السنوي لبطاقة الادخار البركة؟",
-      "language": "ar",
-      "category": "verbatim",
-      "expected_substring": "18 دينار",
-      "expected_lang": "ar",
-      "expected_document": "fiche_produit_banque_albaraka_ar.md"
-    },
-    {
-      "id": "q04",
-      "question": "ما هي المدة الأدنية للاشتراك في ادخار العمرة لدى بنك البركة؟",
-      "language": "ar",
-      "category": "verbatim",
-      "expected_substring": "سنتين كحد أدنى",
-      "expected_lang": "ar",
-      "expected_document": "fiche_produit_banque_albaraka_ar.md"
-    },
-    {
-      "id": "q05",
-      "question": "Combien coûte la tenue de compte chaque trimestre pour un compte d’épargne chez Al Baraka ?",
-      "language": "fr",
-      "category": "paraphrase",
-      "expected_substring": "6 u"
-    },
-    {
-      "id": "q06",
-      "question": "How much do I pay every three months for my savings account at Al Baraka?",
-      "language": "en",
-      "category": "paraphrase",
-      "expected_substring": "6 u"
-    },
-    {
-      "id": "q07",
-      "question": "ما هي تكلفة الاشتراك الشهري في عرض CONFORT؟",
-      "language": "ar",
-      "category": "paraphrase",
-      "expected_substring": "19,135"
-    },
-    {
-      "id": "q08",
-      "question": "What is the repayment duration of the Omra financing?",
-      "language": "en",
-      "category": "cross-lingual",
-      "expected_substring": "une année",
-      "expected_lang": "fr"
-    },
-    {
-      "id": "q09",
-      "question": "Is the Omra financing granted as a share of the savings?",
-      "language": "en",
-      "category": "cross-lingual",
-      "expected_substring": "30% من قيمة الادخار",
-      "expected_lang": "ar"
-    },
-    {
-      "id": "q10",
-      "question": "Quel est le pourcentage maximal du coût total du pèlerinage que le financement Omra ne peut dépasser ?",
-      "language": "fr",
-      "category": "cross-lingual",
-      "expected_substring": "50% من الكلفة الجملية للعمرة",
-      "expected_lang": "ar"
-    },
-    {
       "id": "q11",
       "question": "ما هو المبلغ الأدنى لفتح دفتر التوفير أطلس؟",
       "language": "ar",
       "category": "cross-lingual",
       "expected_substring": "100",
-      "expected_lang": "fr"
-    },
-    {
-      "id": "q12",
-      "question": "Which Al Baraka card is the cheapest one?",
-      "language": "en",
-      "category": "cross-lingual",
-      "expected_substring": "18 TND",
-      "expected_lang": "fr"
-    },
-    {
-      "id": "q13",
-      "question": "Quelle formule de financement Al Baraka repose sur une association en capital avec le client ?",
-      "language": "fr",
-      "category": "paraphrase",
-      "expected_substring": "MOUCHARAKA"
-    },
-    {
-      "id": "q17",
-      "question": "Which product is called \"Compte Épargne Omra Al Baraka\"?",
-      "language": "en",
-      "category": "verbatim",
-      "expected_substring": "Compte Épargne Omra Al Baraka",
       "expected_lang": "fr"
     },
     {
@@ -130,5 +28,6 @@
       "language": "ar",
       "category": "out-of-scope"
     }
-  ]
+  ],
+  "_comment": "Legacy early set, trimmed 2026-09-28 to the docs/-corpus cases (the 13 fictional-bank cases were removed with their corpora)."
 }
