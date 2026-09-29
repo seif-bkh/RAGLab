@@ -69,22 +69,22 @@ for i, s in enumerate(steps):
         arrow(ax, (5.0, y - 1.0), (5.0, y - 1.55))
     y -= 1.75
 box(ax, (0.2, 0.35), 9.6, 1.0,
-    "Limites : aucune recherche translingue  |  aucune tracabilite source  |  "
+    "Limites : aucune recherche translingue  |  aucune tracabilite source\n"
     "reponse non reproductible  |  dependance totale a l'expert",
-    fc="#fadbd8", ec=ORANGE, fs=8)
+    fc="#fadbd8", ec=ORANGE, fs=7.5)
 save(fig, "workflow_before.png")
 
 # ---------------------------------------------------------------- 2. gantt
 fig, ax = plt.subplots(figsize=(9.5, 4.6))
 tasks = [
-    ("Cadrage & constitution du corpus (docs/ + data/)", 0, 1.2),
+    ("Cadrage & constitution du corpus bancaire", 0, 1.2),
     ("Ingestion : parsing, normalisation, chunking", 0.8, 3.2),
     ("Embeddings Nemotron + index ChromaDB", 2.0, 3.6),
     ("Generation citee + garde-fous (refus, PII)", 3.0, 4.4),
     ("Evaluation : harnais, juge retrieval, A/B chunking", 3.8, 5.4),
     ("Comparaison des modeles gratuits (xKiro, NVIDIA)", 4.6, 5.8),
-    ("Microservice FastAPI + Docker + CI GitHub", 5.2, 6.6),
-    ("Durcissement, docs, redaction", 6.0, 7.0),
+    ("Microservice FastAPI + Docker + CI", 5.2, 6.6),
+    ("Durcissement, documentation, redaction", 6.0, 7.0),
 ]
 colors = [NAVY, TEAL, TEAL, ORANGE, "#8e44ad", ORANGE, NAVY, GREY]
 for i, ((label, start, end), c) in enumerate(zip(tasks, colors)):
@@ -132,12 +132,12 @@ box(ax, (5.05, 4.4), 4.8, 1.7,
 arrow(ax, (4.0, 6.6), (4.0, 6.1))
 arrow(ax, (6.6, 6.6), (6.6, 6.1))
 box(ax, (0.15, 2.2), 9.7, 1.7,
-    "Corpus : 4 documents bancaires reels ar/fr (docs/) + fiches fictives (data/)\n"
+    "Corpus : 4 documents bancaires reels (loi, circulaire, guides)\n"
     "836 chunks (tokenizer cl100k_base, 220/40)  |  3 langues : ar / fr / en",
     fc="#f4f6f7", ec=GREY, fs=8)
 box(ax, (0.15, 0.3), 9.7, 1.4,
-    "CI GitHub Actions : 7 workflows (tests, images Docker, free-models, hard-harness, "
-    "retrieval-judge, real-test, catalogues)",
+    "Integration continue : 7 pipelines (tests, images Docker, modeles, harnais, "
+    "juge retrieval, test reel, catalogues)",
     fc="#f4f6f7", ec=GREY, fs=8)
 save(fig, "architecture_diagram.png")
 

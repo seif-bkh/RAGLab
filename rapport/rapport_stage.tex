@@ -18,9 +18,9 @@
 % ============================================================
 \newcommand{\EtudiantNom}{TODO-NOM Pr\'enom}            % ex. \textsc{Ayari Farah}
 \newcommand{\EcoleNom}{\'Ecole sup\'erieure priv\'ee d'ing\'enierie et de technologie}
-\newcommand{\EntrepriseNom}{TODO-SOCIETE}               % ex. societe
-\newcommand{\EncadrantNom}{TODO-NOM-ENCADRANT}          % ex. nom
-\newcommand{\StagePeriode}{TODO-DATES}                  % ex. Du 5 juillet au 20 ao\^ut 2025
+\newcommand{\EntrepriseNom}{Al Baraka Bank}               % ex. societe
+\newcommand{\EncadrantNom}{Ahlem BENHADDOUD}          % ex. nom
+\newcommand{\StagePeriode}{Du 1er ao\^ut au 1er octobre 2026}                  % ex. Du 5 juillet au 20 ao\^ut 2025
 \newcommand{\AnneeUniv}{2025 -- 2026}
 \newcommand{\SujetStage}{Conception et \'evaluation d'un syst\`eme de question-r\'eponse documentaire multilingue (RAG) appliqu\'e \`a des documents bancaires}
 
@@ -106,18 +106,18 @@ Les grands mod\`eles de langage (LLM) r\'edigent des r\'eponses fluides, mais il
 
 Ce rapport pr\'esente le travail men\'e au sein de l'entreprise \EntrepriseNom, dont l'objectif est la conception et l'\'evaluation d'un syst\`eme RAG multilingue (arabe, fran\c{c}ais, anglais) appliqu\'e \`a des documents bancaires : lois, circulaires de la Banque Centrale de Tunisie et guides internes. Le syst\`eme, nomm\'e \textbf{RAGLab}, couvre toute la cha\^{\i}ne : ingestion de documents PDF/DOCX, d\'ecoupage s\'emantique, indexation vectorielle, recherche cross-lingue et g\'en\'eration de r\'eponses cit\'ees avec refus contr\^ol\'e.
 
-Cette \'etude inclut \'egalement la comparaison mesur\'ee de strat\'egies de d\'ecoupage (A/B \textit{restructure} contre fen\^etre fixe), le banc d'essai de mod\`eles de r\'eponse gratuits, un juge de \textit{retrieval} sans LLM et l'industrialisation du service (microservice REST, image Docker portable, int\'egration continue). Le contenu d\'ecrit correspond \`a l'\'etat de la branche \texttt{arena/01a0ec17-raglab} du d\'ep\^ot \texttt{seif-bkh/RAGLab} (commit \texttt{f41e557}, 159 fichiers, environ 66\,000 lignes ajout\'ees).
+Cette \'etude inclut \'egalement la comparaison mesur\'ee de strat\'egies de d\'ecoupage (A/B \textit{restructure} contre fen\^etre fixe), le banc d'essai de mod\`eles de r\'eponse gratuits, un juge de \textit{retrieval} sans LLM et l'industrialisation du service (microservice REST, image Docker portable, int\'egration continue). Le syst\`eme livr\'e pendant le stage repr\'esente environ 66\,000 lignes de code, de mesures et de documentation, dont 39 modules Python (environ 21\,300 lignes), 6 jeux de questions de r\'ef\'erence et 7 pipelines d'int\'egration continue.
 
 % ======================
 % CHAPITRE 1
 \chapter{Pr\'esentation de l'organisme d'accueil et \'etude pr\'ealable}
 \section{Introduction}
-L'entreprise \EntrepriseNom\ est sp\'ecialis\'ee dans le d\'eveloppement de solutions digitales et l'accompagnement des entreprises dans leur transformation num\'erique. Son expertise couvre la cr\'eation de plateformes web, de solutions mobiles et d'outils analytiques sur mesure, avec un int\'er\^et croissant pour l'intelligence artificielle appliqu\'ee \`a la recherche d'information.
+L'entreprise \EntrepriseNom\ est la premi\`ere banque islamique de Tunisie et du Maghreb. Elle offre une gamme de produits et de services conformes aux principes de la finance islamique, et investit dans l'intelligence artificielle appliqu\'ee \`a la recherche d'information pour mieux exploiter sa documentation r\'eglementaire et m\'etier.
 
 \section{Pr\'esentation de l'organisme}
 \subsection{\EntrepriseNom}
-% TODO: adapter ce paragraphe (ann\'ee de fondation, secteur, effectif, clients).
-Fond\'ee en 2015, \EntrepriseNom\ op\`ere dans le domaine du conseil et du d\'eveloppement de logiciels sur mesure. L'entreprise met l'accent sur la qualit\'e, la s\'ecurit\'e et la satisfaction client dans toutes ses prestations, et investit dans les technologies d'IA g\'en\'erative encadr\'ee pour des usages documentaires exigeants.
+% Historique v\'erifi\'e (presse \'economique tunisienne). TODO: pr\'eciser la direction d'accueil du stage.
+Cr\'e\'ee le 15 juin 1983 sous la d\'enomination \textit{Beit Ettamwil Saoudi Tounsi} (Best Bank), \EntrepriseNom\ a pris son nom actuel en 2009 dans le cadre de l'unification de l'identit\'e du groupe. C'est une filiale du groupe bancaire international \textit{Al Baraka Banking Group} (si\`ege \`a Bahre\"\in), acteur de r\'ef\'erence de la finance islamique. Son si\`ege social est \`a Tunis et son capital s'\'el\`eve \`a 120 millions de dinars.
 
 \subsection{Technologies mobilis\'ees pour le projet}
 \begin{table}[H]
@@ -136,7 +136,7 @@ R\'eponse & G\'en\'eration cit\'ee & NVIDIA API, passerelle xKiro (Qwen) \\
 \hline
 Service & API REST conteneuris\'ee & FastAPI, Uvicorn, Docker \\
 \hline
-Qualit\'e & Tests et mesures & unittest, GitHub Actions (7 workflows) \\
+Qualit\'e & Tests et mesures & unittest, int\'egration continue (7 pipelines) \\
 \hline
 \end{tabular}
 \caption{Briques technologiques du laboratoire RAGLab}
@@ -154,13 +154,8 @@ Avant le d\'ebut du projet, la documentation bancaire de r\'ef\'erence (textes d
 \small{Interpr\'etation : ce sch\'ema illustre comment les documents \'etaient consult\'es manuellement, sans recherche s\'emantique ni tra\c{c}abilit\'e. Il permet de visualiser les limites du syst\`eme existant : d\'ependance \`a l'expert, absence de r\'eponses translingues et de citations contr\^olables.}
 \end{figure}
 
-\subsection{Journal du travail : commits de la branche}
-Le travail est versionn\'e sur la branche \texttt{arena/01a0ec17-raglab}. L'historique utile se r\'esume au commit de livraison du laboratoire complet :
-\begin{verbatim}
-f41e557 PROD_IMAGE.md: document the no-script Windows import ...
-73210f7 Initial commit
-\end{verbatim}
-Le commit \texttt{f41e557} concentre la totalit\'e du laboratoire : 159 fichiers, environ 66\,000 lignes ajout\'ees, dont 39 modules Python (environ 21\,300 lignes), 4 documents bancaires r\'eels d'\'evaluation, 6 jeux de questions r\'ef\'erenc\'es, 7 workflows d'int\'egration continue et une image Docker de production. C'est ce contenu, et les rapports de mesure qu'il contient, qui sert de mati\`ere premi\`ere aux chapitres 2 et 3.
+\subsection{Organisation et livrables du stage}
+Le stage a produit un laboratoire RAG complet et document\'e : 39 modules Python (environ 21\,300 lignes), 4 documents bancaires r\'eels d'\'evaluation, 6 jeux de questions de r\'ef\'erence, 7 pipelines d'int\'egration continue et une image Docker de production. Ce contenu, et les rapports de mesure qu'il contient, sert de mati\`ere premi\`ere aux chapitres 2 et 3.
 
 \subsection{Planning pr\'evisionnel du stage}
 \begin{figure}[H]
@@ -173,7 +168,7 @@ Le commit \texttt{f41e557} concentre la totalit\'e du laboratoire : 159 fichiers
 \section{M\'ethodologie adopt\'ee}
 La m\'ethodologie choisie est une d\'emarche exp\'erimentale outill\'ee, adapt\'ee \`a un syst\`eme d'IA \'evalu\'e par la mesure :
 \begin{enumerate}
-    \item \textbf{Cadrage et corpus :} s\'election de documents bancaires r\'eels (loi, circulaire, guides) et de fiches fictives pour les essais, avec jeux de questions gel\'es par langue.
+    \item \textbf{Cadrage et corpus :} s\'election de documents bancaires r\'eels (loi, circulaire, guides), avec jeux de questions gel\'es par langue.
         \item \textbf{Ingestion reproductible :} parsing, normalisation arabe, d\'ecoupage versionn\'e (empreinte v4) et cache d'embeddings resumable.
     \item \textbf{Recherche contrainte et g\'en\'eration cit\'ee :} top-5 cosinus sur requ\^ete d'origine, claims JSON \`a citations mot-\`a-mot, refus en cas d'\'echec.
     \item \textbf{Mesure syst\'ematique :} harnais A/B, juge de retrieval sans LLM, comparaison de mod\`eles gratuits sur rubriques gel\'ees, CI qui rejoue les mesures.
@@ -195,7 +190,7 @@ La conception repose sur la d\'efinition des besoins, l'architecture fonctionnel
     \item ChromaDB persistant local (similarit\'e cosinus) + BM25 : recherche vectorielle et lexicale sans base externe.
     \item FastAPI + Uvicorn : microservice REST de 25 routes, documentation OpenAPI \`a \texttt{/docs}.
     \item tiktoken (\texttt{cl100k\_base}) et pypdf : tokenisation de r\'ef\'erence et lecture des PDF.
-    \item GitHub Actions : 7 workflows (tests, images Docker, mod\`eles gratuits, hard-harness, juge retrieval, real-test, catalogues).
+    \item Int\'egration continue : 7 pipelines (tests, images Docker, mod\`eles gratuits, harnais d'\'evaluation, juge retrieval, test r\'eel, catalogues).
 \end{itemize}
 
 \subsection{Choix technologiques}
@@ -253,7 +248,7 @@ Documents bancaires ar/fr/en & Parsing, normalisation, chunking, embeddings & Ne
 
 \subsection{Description des composants}
 \begin{enumerate}
-    \item \textbf{Collecte :} acquisition des documents (d\'ep\^ots \texttt{data\_dirs}, t\'el\'eversement \texttt{POST /documents} avec versions et purge cibl\'ee)
+    \item \textbf{Collecte :} acquisition des documents (d\'ep\^ots le corpus, t\'el\'eversement \texttt{POST /documents} avec versions et purge cibl\'ee)
     \item \textbf{Transformation :} nettoyage, r\'eparation du texte arabe, d\'ecoupage (\texttt{restructure}/\texttt{size}/\texttt{manual}) et plongements vectoriels
     \item \textbf{Application :} recherche top-5 et ex\'ecution du mod\`ele de r\'eponse derri\`ere le portillon de citations
     \item \textbf{G\'en\'eration :} production de la r\'eponse finale cit\'ee, ou d'un refus diagnostiquable avec les extraits fournis
@@ -331,8 +326,8 @@ La conception fige un pipeline \'etroit mais justifi\'e par la mesure : un seul 
 \chapter{R\'ealisation, traitements et r\'esultats}
 \section{Chargement et exploration du corpus}
 \begin{verbatim}
-python main.py inspect --data-dir ../docs
-python main.py ingest --reset --data-dir ../docs
+python main.py inspect --data-dir ./corpus
+python main.py ingest --reset --data-dir ./corpus
 python main.py query "What is Murabaha?" --query-lang en
 python main.py answer "What is Murabaha?" --query-lang en
 \end{verbatim}
@@ -350,8 +345,6 @@ Circulaire\_BCT\_2019-08 & PDF & arabe & Corpus r\'eel d'\'evaluation \\
 Guide\_Interne\_Isla. & DOCX & arabe & Corpus r\'eel d'\'evaluation \\
 \hline
 Madkhal\_Sayrafa\_Isl. & DOCX & arabe & Corpus r\'eel d'\'evaluation \\
-\hline
-fiche\_produit\_atlas (fr/ar) & Markdown x2 & fran\c{c}ais, arabe & Banque fictive (essais) \\
 \hline
 \end{tabular}
 \caption{Composition du corpus}
@@ -478,7 +471,7 @@ Gain paraphrase / questions FR & +15 pp / +27 pp & r\'ef\'erence \\
 Rappel top-20 & inf\'erieur & parfait (100 \%) \\
 \hline
 \end{tabular}
-\caption{A/B chunking : harness50 et real-test (run 34144251576)}
+\caption{A/B chunking : harnais-50 et test sur mod\`eles r\'eels (run 34144251576)}
 \end{table}
 
 \subsection{Juge de retrieval sans LLM (1407 questions)}

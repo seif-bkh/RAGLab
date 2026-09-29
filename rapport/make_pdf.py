@@ -165,15 +165,15 @@ r.ln(10)
 r.set_font("sans", "", 14)
 r.multi_cell(0, 9, "R\u00e9alis\u00e9 au sein de", align="C", new_x="LMARGIN", new_y="NEXT")
 r.set_font("sans", "B", 16)
-r.cell(0, 10, "TODO-SOCIETE", align="C", new_x="LMARGIN", new_y="NEXT")
+r.cell(0, 10, "Al Baraka Bank", align="C", new_x="LMARGIN", new_y="NEXT")
 r.ln(12)
 r.set_font("sans", "B", 13)
-r.cell(0, 9, "TODO-DATES", align="C", new_x="LMARGIN", new_y="NEXT")
+r.cell(0, 9, "Du 1er ao\u00fbt au 1er octobre 2026", align="C", new_x="LMARGIN", new_y="NEXT")
 r.ln(4)
 r.set_font("sans", "", 13)
 r.cell(0, 9, "\u00c9labor\u00e9 par  TODO-NOM Pr\u00e9nom", align="C",
        new_x="LMARGIN", new_y="NEXT")
-r.cell(0, 9, "Encadr\u00e9 par  TODO-NOM-ENCADRANT", align="C",
+r.cell(0, 9, "Encadr\u00e9 par  Ahlem BENHADDOUD", align="C",
        new_x="LMARGIN", new_y="NEXT")
 r.ln(4)
 r.set_font("sans", "", 12)
@@ -195,10 +195,10 @@ toc = [
 for t in toc:
     r.cell(0, 8, t, new_x="LMARGIN", new_y="NEXT")
 r.ln(4)
-r.p("Note : les champs TODO-* de la page de garde sont des placeholders \u00e0 "
-    "remplir (voir les \\newcommand en t\u00eate de rapport_stage.tex). "
-    "Tous les chiffres du rapport sont issus du d\u00e9p\u00f4t seif-bkh/RAGLab, "
-    "branche arena/01a0ec17-raglab, commit f41e557.")
+r.p("Note : le champ TODO-NOM de la page de garde reste \u00e0 remplir (voir les "
+    "\\newcommand en t\u00eate de rapport_stage.tex). "
+    "Tous les chiffres du rapport sont issus des mesures du stage (harnais, "
+    "bancs d\u2019essai et runs CI de septembre 2026).")
 
 # ================= DEDICACES =================
 r.add_page()
@@ -219,7 +219,7 @@ r.h1(None, "Remerciements")
 r.p("Au terme de ce travail, je tiens \u00e0 remercier toutes les personnes qui "
     "ont contribu\u00e9 \u00e0 la r\u00e9alisation de ce projet.")
 r.bullets([
-    "Je remercie sinc\u00e8rement TODO-NOM-ENCADRANT, mon encadrant, pour son accompagnement, ses conseils pr\u00e9cieux et sa disponibilit\u00e9 tout au long du stage.",
+    "Je remercie sinc\u00e8rement Ahlem BENHADDOUD, mon encadrant, pour son accompagnement, ses conseils pr\u00e9cieux et sa disponibilit\u00e9 tout au long du stage.",
     "Mes parents pour leur soutien constant.",
     "Mes s\u0153urs et mon fr\u00e8re pour leur pr\u00e9sence rassurante et leurs encouragements.",
     "Mes amis proches, qui ont toujours \u00e9t\u00e9 l\u00e0 pour moi.",
@@ -241,7 +241,7 @@ r.p("Les grands mod\u00e8les de langage (LLM) r\u00e9digent des r\u00e9ponses fl
     "d\u2019un corpus approuv\u00e9, et chaque affirmation est rattach\u00e9e \u00e0 une "
     "citation v\u00e9rifiable.")
 r.p("Ce rapport pr\u00e9sente le travail men\u00e9 au sein de l\u2019entreprise "
-    "TODO-SOCIETE, dont l\u2019objectif est la conception et l\u2019\u00e9valuation d\u2019un "
+    "Al Baraka Bank, dont l\u2019objectif est la conception et l\u2019\u00e9valuation d\u2019un "
     "syst\u00e8me RAG multilingue (arabe, fran\u00e7ais, anglais) appliqu\u00e9 \u00e0 des "
     "documents bancaires : lois, circulaires de la Banque Centrale de Tunisie et "
     "guides internes. Le syst\u00e8me, nomm\u00e9 RAGLab, couvre toute la cha\u00eene : "
@@ -251,27 +251,26 @@ r.p("Ce rapport pr\u00e9sente le travail men\u00e9 au sein de l\u2019entreprise 
 r.p("Cette \u00e9tude inclut \u00e9galement la comparaison mesur\u00e9e de strat\u00e9gies de "
     "d\u00e9coupage, le banc d\u2019essai de mod\u00e8les de r\u00e9ponse gratuits, un juge de "
     "retrieval sans LLM et l\u2019industrialisation du service (microservice REST, "
-    "image Docker portable, int\u00e9gration continue). Le contenu d\u00e9crit correspond "
-    "\u00e0 l\u2019\u00e9tat de la branche arena/01a0ec17-raglab du d\u00e9p\u00f4t "
-    "seif-bkh/RAGLab (commit f41e557, 159 fichiers, environ 66 000 lignes ajout\u00e9es).")
+    "image Docker portable, int\u00e9gration continue). Le syst\u00e8me livr\u00e9 pendant le stage repr\u00e9sente "
+    "environ 66 000 lignes de code, de mesures et de documentation, dont 39 modules Python "
+    "(environ 21 300 lignes), 6 jeux de questions et 7 pipelines d\u2019int\u00e9gration continue).")
 
 # ================= CHAPITRE 1 =================
 r.add_page()
 r.h1("1", "Pr\u00e9sentation de l\u2019organisme d\u2019accueil et \u00e9tude pr\u00e9alable")
 r.h2("1.1  Introduction")
-r.p("L\u2019entreprise TODO-SOCIETE est sp\u00e9cialis\u00e9e dans le d\u00e9veloppement de "
-    "solutions digitales et l\u2019accompagnement des entreprises dans leur "
-    "transformation num\u00e9rique. Son expertise couvre la cr\u00e9ation de plateformes "
-    "web, de solutions mobiles et d\u2019outils analytiques sur mesure, avec un "
-    "int\u00e9r\u00eat croissant pour l\u2019intelligence artificielle appliqu\u00e9e \u00e0 la "
-    "recherche d\u2019information.")
+r.p("L\u2019entreprise Al Baraka Bank est la premi\u00e8re banque islamique de Tunisie et du Maghreb. "
+    "Elle offre une gamme de produits et de services conformes aux principes de la finance "
+    "islamique, et investit dans l\u2019intelligence artificielle appliqu\u00e9e \u00e0 la "
+    "recherche d\u2019information pour mieux exploiter sa documentation r\u00e9glementaire et m\u00e9tier.")
 r.h2("1.2  Pr\u00e9sentation de l\u2019organisme")
-r.h3("TODO-SOCIETE")
-r.p("Fond\u00e9e en 2015, TODO-SOCIETE op\u00e8re dans le domaine du conseil et du "
-    "d\u00e9veloppement de logiciels sur mesure. L\u2019entreprise met l\u2019accent sur la "
-    "qualit\u00e9, la s\u00e9curit\u00e9 et la satisfaction client dans toutes ses "
-    "prestations, et investit dans les technologies d\u2019IA g\u00e9n\u00e9rative encadr\u00e9e "
-    "pour des usages documentaires exigeants.")
+r.h3("Al Baraka Bank")
+r.p("Cr\u00e9\u00e9e le 15 juin 1983 sous la d\u00e9nomination Beit Ettamwil Saoudi Tounsi "
+    "(Best Bank), Al Baraka Bank a pris son nom actuel en 2009 dans le cadre de "
+    "l\u2019unification de l\u2019identit\u00e9 du groupe. C\u2019est une filiale du groupe "
+    "bancaire international Al Baraka Banking Group (si\u00e8ge \u00e0 Bahre\u00efn), "
+    "acteur de r\u00e9f\u00e9rence de la finance islamique. Son si\u00e8ge social est \u00e0 "
+    "Tunis et son capital s\u2019\u00e9l\u00e8ve \u00e0 120 millions de dinars.")
 r.h3("Technologies mobilis\u00e9es pour le projet")
 r.table(
     ["\u00c9tape", "Composant", "Technologies principales"],
@@ -280,7 +279,7 @@ r.table(
      ["Indexation", "Recherche vectorielle + lexicale", "ChromaDB (cosinus), BM25"],
      ["R\u00e9ponse", "G\u00e9n\u00e9ration cit\u00e9e", "API NVIDIA, passerelle xKiro (Qwen)"],
      ["Service", "API REST conteneuris\u00e9e", "FastAPI, Uvicorn, Docker"],
-     ["Qualit\u00e9", "Tests et mesures", "unittest, GitHub Actions (7 workflows)"]],
+     ["Qualit\u00e9", "Tests et mesures", "unittest, int\u00e9gration continue (7 pipelines)"]],
     caption="Table 1 \u2014 Briques technologiques du laboratoire RAGLab.")
 r.h2("1.3  \u00c9tude de l\u2019existant")
 r.h3("Description de l\u2019existant")
@@ -297,15 +296,12 @@ r.figure("workflow_before.png",
          "Interpr\u00e9tation : les documents \u00e9taient consult\u00e9s manuellement, sans "
          "recherche s\u00e9mantique ni tra\u00e7abilit\u00e9 \u2014 d\u00e9pendance \u00e0 l\u2019expert, "
          "absence de r\u00e9ponses translingues et de citations contr\u00f4lables.")
-r.h3("Journal du travail : commits de la branche")
-r.p("Le travail est versionn\u00e9 sur la branche arena/01a0ec17-raglab. Le commit "
-    "f41e557 concentre la totalit\u00e9 du laboratoire : 159 fichiers, environ "
-    "66 000 lignes ajout\u00e9es, dont 39 modules Python (environ 21 300 lignes), "
-    "4 documents bancaires r\u00e9els d\u2019\u00e9valuation, 6 jeux de questions "
-    "r\u00e9f\u00e9renc\u00e9s, 7 workflows d\u2019int\u00e9gration continue et une image Docker "
-    "de production.")
-r.code("f41e557 PROD_IMAGE.md: document the no-script Windows import ...\n"
-       "73210f7 Initial commit")
+r.h3("Organisation et livrables du stage")
+r.p("Le stage a produit un laboratoire RAG complet et document\u00e9 : 39 modules "
+    "Python (environ 21 300 lignes), 4 documents bancaires r\u00e9els d\u2019\u00e9valuation, "
+    "6 jeux de questions de r\u00e9f\u00e9rence, 7 pipelines d\u2019int\u00e9gration continue et "
+    "une image Docker de production. Ce contenu, et les rapports de mesure qu\u2019il "
+    "contient, sert de mati\u00e8re premi\u00e8re aux chapitres 2 et 3.")
 r.h3("Planning pr\u00e9visionnel du stage")
 r.figure("gantt_stage.png",
          "Figure 2 \u2014 Diagramme de Gantt du stage (7 semaines, S1 \u00e0 S7).",
@@ -314,7 +310,7 @@ r.figure("gantt_stage.png",
          "industrialisation, du cadrage \u00e0 la livraison du service conteneuris\u00e9.")
 r.h2("1.4  M\u00e9thodologie adopt\u00e9e")
 r.numbered([
-    "Cadrage et corpus : s\u00e9lection de documents bancaires r\u00e9els et de fiches fictives, avec jeux de questions gel\u00e9s par langue.",
+    "Cadrage et corpus : s\u00e9lection de documents bancaires r\u00e9els, avec jeux de questions gel\u00e9s par langue.",
     "Ingestion reproductible : parsing, normalisation arabe, d\u00e9coupage versionn\u00e9 (empreinte v4) et cache d\u2019embeddings resumable.",
     "Recherche contrainte et g\u00e9n\u00e9ration cit\u00e9e : top-5 cosinus sur requ\u00eate d\u2019origine, claims JSON \u00e0 citations mot-\u00e0-mot, refus en cas d\u2019\u00e9chec.",
     "Mesure syst\u00e9matique : harnais A/B, juge de retrieval sans LLM, comparaison de mod\u00e8les gratuits sur rubriques gel\u00e9es, CI qui rejoue les mesures.",
@@ -342,7 +338,7 @@ r.bullets([
     "ChromaDB persistant local (similarit\u00e9 cosinus) + BM25 : recherche vectorielle et lexicale sans base externe.",
     "FastAPI + Uvicorn : microservice REST de 25 routes, documentation OpenAPI \u00e0 /docs.",
     "tiktoken (cl100k_base) et pypdf : tokenisation de r\u00e9f\u00e9rence et lecture des PDF.",
-    "GitHub Actions : 7 workflows (tests, images Docker, mod\u00e8les gratuits, hard-harness, juge retrieval, real-test, catalogues).",
+    "Int\u00e9gration continue : 7 pipelines (tests, images Docker, mod\u00e8les gratuits, harnais d\u2019\u00e9valuation, juge retrieval, test r\u00e9el, catalogues).",
 ])
 r.h3("Choix technologiques")
 r.table(
@@ -371,7 +367,7 @@ r.bullets([
     "Reproductibilit\u00e9 : tokenizer, caches, empreintes et jeux gel\u00e9s garantissent des mesures rejouables en CI.",
     "S\u00e9curit\u00e9 : pas de r\u00e9ponse sur donn\u00e9es priv\u00e9es ou temps r\u00e9el (garde-fous locaux), masquage des cl\u00e9s, validation des vecteurs.",
     "Portabilit\u00e9 : image Docker multi-stage ex\u00e9cutable sans clone ni pip, y compris hors-ligne apr\u00e8s import.",
-    "Maintenabilit\u00e9 : un noyau partag\u00e9 par les trois frontaux, 133 contr\u00f4les hors-ligne, documentation de contrat (CONTRACT.md).",
+    "Maintenabilit\u00e9 : un noyau partag\u00e9 par les trois frontaux, 133 contr\u00f4les hors-ligne, documentation de contrat .",
 ])
 r.h2("2.4  Architecture fonctionnelle")
 r.p("L\u2019architecture se compose de quatre \u00e9l\u00e9ments principaux :")
@@ -384,7 +380,7 @@ r.table(
     caption="Table 3 \u2014 Les quatre blocs de l\u2019architecture.")
 r.h3("Description des composants")
 r.numbered([
-    "Collecte : acquisition des documents (d\u00e9p\u00f4ts data_dirs, t\u00e9l\u00e9versement POST /documents avec versions et purge cibl\u00e9e).",
+    "Collecte : acquisition des documents (d\u00e9p\u00f4ts le corpus, t\u00e9l\u00e9versement POST /documents avec versions et purge cibl\u00e9e).",
     "Transformation : nettoyage, r\u00e9paration du texte arabe, d\u00e9coupage (restructure/size/manual) et plongements vectoriels.",
     "Application : recherche top-5 et ex\u00e9cution du mod\u00e8le de r\u00e9ponse derri\u00e8re le portillon de citations.",
     "G\u00e9n\u00e9ration : production de la r\u00e9ponse finale cit\u00e9e, ou d\u2019un refus diagnostiquable avec les extraits fournis.",
@@ -436,8 +432,8 @@ r.p("La conception fige un pipeline \u00e9troit mais justifi\u00e9 par la mesure
 r.add_page()
 r.h1("3", "R\u00e9alisation, traitements et r\u00e9sultats")
 r.h2("3.1  Chargement et exploration du corpus")
-r.code("python main.py inspect --data-dir ../docs\n"
-       "python main.py ingest --reset --data-dir ../docs\n"
+r.code("python main.py inspect --data-dir ./corpus\n"
+       "python main.py ingest --reset --data-dir ./corpus\n"
        "python main.py query \"What is Murabaha?\" --query-lang en\n"
        "python main.py answer \"What is Murabaha?\" --query-lang en")
 r.table(
@@ -445,8 +441,7 @@ r.table(
     [["Loi_2016-48", "PDF (36 p. au total)", "arabe", "Corpus r\u00e9el d\u2019\u00e9valuation"],
      ["Circulaire_BCT_2019-08", "PDF", "arabe", "Corpus r\u00e9el d\u2019\u00e9valuation"],
      ["Guide_Interne_Operations_Bancaires_Islamiques", "DOCX", "arabe", "Corpus r\u00e9el d\u2019\u00e9valuation"],
-     ["Madkhal_Sayrafa_Islamiya", "DOCX", "arabe", "Corpus r\u00e9el d\u2019\u00e9valuation"],
-     ["fiche_produit_banque_atlas (fr/ar)", "Markdown x2", "fran\u00e7ais, arabe", "Banque fictive (essais)"]],
+     ["Madkhal_Sayrafa_Islamiya", "DOCX", "arabe", "Corpus r\u00e9el d\u2019\u00e9valuation"]],
     caption="Table 6 \u2014 Composition du corpus.")
 r.table(
     ["M\u00e9trique", "Valeur"],
@@ -508,7 +503,7 @@ r.table(
      ["hit@1 mod\u00e8les r\u00e9els", "73-76 %", "67 %"],
      ["Gain paraphrase / questions FR", "+15 pp / +27 pp", "r\u00e9f\u00e9rence"],
      ["Rappel top-20", "inf\u00e9rieur", "parfait (100 %)"]],
-    caption="Table 11 \u2014 A/B chunking : harness50 et real-test (run 34144251576).")
+    caption="Table 11 \u2014 A/B chunking : harnais-50 et test sur mod\u00e8les r\u00e9els (run 34144251576).")
 r.h3("Juge de retrieval sans LLM (1407 questions)")
 r.table(
     ["M\u00e9trique", "Lexical (BM25)", "Embeddings (NVIDIA)"],

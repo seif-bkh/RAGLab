@@ -1,9 +1,9 @@
 # Rapport de stage — RAGLab
 
-Rapport d'immersion en entreprise généré à partir du contenu de la branche
-`arena/01a0ec17-raglab` (commit `f41e557`), en suivant la structure du rapport
-précédent fourni (page de garde, dédicaces, remerciements, introduction,
-4 chapitres, conclusion/perspectives).
+Rapport d'immersion en entreprise (stage Al Baraka Bank, du 1er août au
+1er octobre 2026, encadré par Ahlem BENHADDOUD), en suivant la structure
+du rapport précédent fourni (page de garde, dédicaces, remerciements,
+introduction, 4 chapitres, conclusion/perspectives).
 
 ## Contenu
 
@@ -20,8 +20,8 @@ précédent fourni (page de garde, dédicaces, remerciements, introduction,
 Le PDF actuel contient des placeholders visibles. Dans `rapport_stage.tex`,
 renseignez le bloc `\newcommand` en tête de fichier :
 
-- `\EtudiantNom`, `\EcoleNom`, `\EntrepriseNom`
-- `\EncadrantNom`, `\StagePeriode`, `\AnneeUniv`
+- `\EtudiantNom` (reste `TODO-NOM`, à remplir), `\EcoleNom` (texte générique + logo, à ajuster)
+- `\EntrepriseNom` = Al Baraka Bank ✓, `\EncadrantNom` = Ahlem BENHADDOUD ✓, `\StagePeriode` ✓
 - Déposez `esprit.png` (logo école) à côté du `.tex` (sinon un cadre
   réservé s'affiche) — ou adaptez la page de garde.
 - Adaptez le §1.2 (année de fondation, secteur) à l'entreprise réelle.
@@ -50,7 +50,7 @@ python3 make_pdf.py       # rapport_stage.pdf (19 pages)
 
 | Nombre | Source dans le dépôt |
 |---|---|
-| 159 fichiers, ~66 000 lignes, 39 modules, ~21 300 lignes | `git show --stat HEAD` |
+| ~66 000 lignes, 39 modules, ~21 300 lignes | Livrables du stage (comptage local) |
 | Corpus 4 docs, 836 chunks, 36 p. PDF, `807785db…` | `raglab/README.md`, `raglab/NVIDIA_REPORT.md` |
 | A/B chunking 47 vs 40 %, verbatim 75 vs 42 % | `README.md` (harness50) |
 | Real-test 73–76 vs 67 %, +15 pp, +27 pp, run 34144251576 | `README.md`, `AGENTS.md` §7 |
