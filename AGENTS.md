@@ -279,9 +279,23 @@ Channels that WORK (use in this order):
   `Loi_2016-48.pdf` (gazette, REVERSED word order, reliable digits — see audit),
   `Madkhal_Sayrafa_Islamiya.docx` (clean).
 - PDF text comes out in **visual order with corrupted digits** → repaired only by the
-  logical-order bigram scorer in `restructure.py`. **Never "repair" digits** and never
-  re-derive facts from the raw digit soup; take authoring substrings from the repaired
-  output.
+  logical-order bigram scorer in `restructure.py`. **Never "repair" digits** in the
+  pipeline arms; never re-derive facts from the raw digit soup; take authoring
+  substrings from the repaired output. (2026-09-30: corrected CODECES for the three
+  non-Loi documents now exist as PENDING ADOPTION packages, built by the same
+  language-model repair methodology as the Loi — owner directive «قم بالإصلاح اللغوي
+  لباقي الملفات، واصل على نفس المنوال السابق، بدون استشارة»:
+  `audits/Circulaire_BCT_2019-08_llm_repair.md` (35 entries; all 28 corrupted digit
+  tokens fixed against the JORT-anchored audit table; identity «عدد 80» kept per the
+  standing owner decision), `audits/Guide_Interne_Operations_Bancaires_Islamiques_
+  llm_repair.md` (23 entries; all reversed hierarchical numbering corrected, context-
+  anchored: stored «2.4-الوكالة»→4.2 vs stored «4.2-السلم»→2.4), and
+  `audits/Madkhal_Sayrafa_Islamiya_llm_repair.md` (21 entries; «(000 59)»→«(59 000)»,
+  «5اهم»→«5-اهم»). Each log is machine-checked by `audits/llm_repair_check.py`
+  (fidelity/conservation/coverage, now generalized: free-form location field + bare
+  page-number skip class) and has its corrected codex `*_corrected.md`. ADOPTION into
+  `restructure.py`'s `_ADOPTED_CODEX` remains the owner's gate — until then the
+  stored-text rules below stay governing for question evidence.)
 - **Madkhal AUDITED (step 1.4, 2026-09-28 — `raglab/audits/Madkhal_Sayrafa_Islamiya.md`,
   owner review pending)**: internal TRAINING material (an introduction to Islamic
   banking for Al Baraka Tunisia staff) — one of the four ORIGINAL docs/ files, it
