@@ -33,9 +33,11 @@ way the rest of this lab is.
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from chunker import (CHUNK_FINGERPRINT_VERSION, Chunk, classify_section,
                      count_tokens)
+from loader import normalize_arabic, normalize_text
 
 # ---------------------------------------------------------------------------
 # Tunables for stage 1 (all printed in the report, none hidden)
@@ -184,6 +186,7 @@ class RestructureReport:
     rtl_lines_reconstructed: int = 0
     rtl_marker_prefixes: int = 0
     rtl_digit_islands: int = 0
+    codex_adopted: bool = False
     markers_extracted: int = 0
     headings_invented: int = 0
     tables_normalized: int = 0
@@ -200,7 +203,8 @@ class RestructureReport:
         print(f"[restructure]   pages_removed={self.pages_removed} "
               f"repeated_lines_dropped={self.repeated_lines_dropped} "
               f"gazette_headers_removed={self.gazette_headers_removed} "
-              f"long_lines_resplit={self.long_lines_resplit}")
+              f"long_lines_resplit={self.long_lines_resplit} "
+              f"codex_adopted={self.codex_adopted}")
         print(f"[restructure]   rtl: visual-order doc={self.rtl_doc_dominant} "
               f"rendered-lines reconstructed={self.rtl_lines_reconstructed} "
               f"(marker prefixes {self.rtl_marker_prefixes}, "
@@ -497,6 +501,70 @@ def _reflow_lines(lines: list[str], report: RestructureReport) -> list[str]:
 _RECONSTRUCT_TAIL_STOP = ("السبسي",)
 
 
+# --- Adopted corrected codex (owner decision 2026-09-30) --------------------
+# Loi 2016-48's stored extraction is visual-order corrupted. The algorithmic
+# zone reconstruction below is comparison material only (owner 2026-09-29: it
+# stays too rigid); the operative repair is the language-model track —
+# audits/Loi_2016-48_llm_repair.md (215 entries, 29 batches), machine-checked
+# by audits/llm_repair_check.py (verbatim source quotes, documented
+# conservation, full line coverage) — whose output codex
+# audits/Loi_2016-48_corrected.md the owner ADOPTED on 2026-09-30
+# («لا اعتراض، واصل»). With RTL repair enabled, the codex's law text replaces
+# the stored extraction for stage 1: the dominance gate below then sees a
+# logical-order document and the zone reconstruction stays a no-op. The source
+# PDF in docs/ is never modified; the audited codex file is the single source
+# of truth for the adopted text.
+_ADOPTED_CODEX = {
+    "Loi_2016-48.pdf": "audits/Loi_2016-48_corrected.md",
+}
+
+
+def _adopted_codex_text(name: str) -> str | None:
+    """Law text of the adopted corrected codex, loader-canonical, or None.
+
+    Form guarantees, so the adopted text behaves exactly like loader output:
+    - the codex's metadata header (everything above its single '---' rule)
+      is stripped;
+    - the law text runs through the loader's own PDF-path normalization
+      (normalize_text(reflow=False) + normalize_arabic) and a per-line strip
+      (tatweel removal can expose new edge spaces);
+    - block boundaries are restored around structural lines. The codex keeps
+      the stored extraction's line layout, which has no blank lines, so
+      paragraph reflow glues a chapter subtitle onto the next article's head
+      line; the marker then sits mid-sentence, reads as a cross-reference,
+      and the article loses its heading (31 of 198 article heads lost that
+      way in the stored arm, still 20 with the raw codex). Every
+      marker-initial line in this codex is a true heading (198 فصل + 33
+      عنوان/باب/قسم — scan-verified), and a marker at line start was
+      already a section start for _extract_markers, so restoring the
+      boundary promotes no cross-reference. The first line (the law's own
+      title) gets its own block for the same reason: it is a block in the
+      printed law, and _pick_title only sees lines.
+    """
+    rel = _ADOPTED_CODEX.get(name)
+    if not rel:
+        return None
+    path = Path(__file__).resolve().parent / rel
+    if not path.is_file():
+        print(f"[restructure] WARNING: adopted codex not found: {path} "
+              "(falling back to the stored extraction)")
+        return None
+    raw = path.read_text(encoding="utf-8")
+    if "\n---\n" not in raw:
+        print("[restructure] WARNING: adopted codex has no header rule: "
+              f"{path}")
+        return None
+    law = raw.split("\n---\n", 1)[1].lstrip("\n")
+    text = normalize_arabic(normalize_text(law, reflow=False))
+    out: list[str] = []
+    for i, line in enumerate(text.split("\n")):
+        s = line.strip()
+        if s and out and out[-1].strip() and (i == 1 or _MARKER_RE.match(s)):
+            out.append("")          # restore the block boundary
+        out.append(s)
+    return "\n".join(out)
+
+
 def _prepare_lines(text: str, report: RestructureReport,
                    reconstruct: bool = False) -> tuple[list[str], set[str]]:
     """Pre-pass over the raw normalized extraction, in dependency order:
@@ -674,6 +742,16 @@ def normalize_structure(doc: dict, repair_rtl: bool = True) -> tuple[str, Restru
     """
     report = RestructureReport(name=doc.get("name", "?"))
     text = doc.get("text", "")
+
+    # Owner-adopted corrected codex (2026-09-30): with RTL repair enabled and
+    # a vetted codex for this document, the codex's law text REPLACES the
+    # stored extraction for stage 1. The dominance gate below then measures a
+    # logical-order document and leaves every line unreversed.
+    if repair_rtl:
+        adopted = _adopted_codex_text(doc.get("name", ""))
+        if adopted is not None:
+            text = adopted
+            report.codex_adopted = True
 
     # Document-level gate for the RTL zone reconstruction: is THIS document
     # extracted in visual order? Sample every scorable rendered line and

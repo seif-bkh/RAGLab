@@ -336,8 +336,12 @@ Channels that WORK (use in this order):
   Full before/after diff (2334 lines) + 485 residual-fragment proposals for
   owner decision: `raglab/audits/Loi_2016-48_repair_diff.md` (adoption gated
   on that review). Known residual: the title and signature blocks are
-  quasi-logical zones that violate the model (listed in the diff). AUTHORING
-  RULE (post-repair): expected_substring must match the REPAIRED corpus form —
+  quasi-logical zones that violate the model (listed in the diff). **RESOLVED
+  2026-09-30: the algorithmic reconstruction is comparison material only — the
+  owner adopted the language-model repair instead** (see `_ADOPTED_CODEX` in
+  `restructure.py`; with the codex in place the dominance gate sees logical
+  order and the zone reconstruction no-ops). AUTHORING RULE (post-adoption):
+  expected_substring must match the ADOPTED corpus form —
   the 4 existing Loi questions were migrated and re-validated (30/30). Gazette
   page headers polluted 74/218 chunks — TREATED: whole line-initial span
   stripping removes 31/31 headers, with a corroboration guard so short body
@@ -377,9 +381,15 @@ Channels that WORK (use in this order):
   `loader.load_all` tolerates the empty/missing dir (warning + continue), so a fresh
   clone stays green.
 - Pipeline stats (restructure mode, LOCAL chars/4 estimator — CI's real cl100k is the
-  arbiter, expect drift): 330 chunks total: Circulaire 15, Guide 52, Loi 223, Madkhal
-  40 — the Loi change reflects the 2026-09-28 gazette/zone-reconstruction
-  treatments (owner decision; diff at `raglab/audits/Loi_2016-48_repair_diff.md`);
+  arbiter, expect drift): 340 chunks total: Circulaire 15, Guide 52, Loi 233, Madkhal
+  40 — the Loi change reflects the 2026-09-28 gazette treatment plus the 2026-09-30
+  ADOPTION of the corrected codex (owner: «لا اعتراض، واصل»; `raglab/audits/
+  Loi_2016-48_corrected.md` now supplies the law text in `restructure.py`'s
+  `_ADOPTED_CODEX` hook: 198/198 article heads, 33 chapter heads, every substantive
+  codex line verified present in the markdown; audit addendum §18 in
+  `raglab/audits/Loi_2016-48.md`); `RESTRUCTURE_RTL_REPAIR=0` reverts to the raw
+  stored arm. The zone-reconstruction diff at
+  `raglab/audits/Loi_2016-48_repair_diff.md` is comparison material only.
   Guide/Madkhal are untouched, Circulaire differs only in paragraph boundaries
   (PDF page breaks now paragraph breaks; 4 repeated page-number lines dropped).
   `main.py inspect` exits 0 on all four. (Historical: Atlas-era 346, Al
@@ -544,6 +554,12 @@ Channels that WORK (use in this order):
   do not cite them. The Atlas-era block below is likewise historical. The CURRENT
   baseline is NONE until Phase 2 re-measures it on the docs/-only set (step 3.1 in
   RAGLAB_ROADMAP.md); until then treat every hit@k number in this file as history.
+- **BM25-only A/B on the ADOPTED corpus (2026-09-30, INTERIM — the current 30-case
+  set, not the final 50; regenerable via `harness50.py`)**: overall hit@1/3/5
+  size-220/40 `44/76/80` → restructure (corrected-codex Loi) `64/96/100`;
+  validation OK — every expected_substring present in the restructure arm
+  (q10/q11/q12/q45 unchanged: convergent spans). Formal 3.1 baselines will be
+  measured on the rebuilt 50-case set.
 - **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of- **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of
   50; k=20; full table in `raglab/results/harness50/comparison.md`, regenerable via
   `harness50.py`):

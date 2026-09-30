@@ -1442,5 +1442,77 @@ class GazetteAndDominanceRepair(unittest.TestCase):
         self.assertIn("ايتعلق اتفاق على بالموافقة لقرض بتاريخ المبرم30 مارس", joined)
 
 
+class AdoptedCodexRepair(unittest.TestCase):
+    """The 2026-09-30 owner adoption of the corrected Loi 2016-48 codex.
+
+    With RTL repair enabled, `restructure.py` replaces the Loi's stored
+    (visual-order corrupted) text with the language-model-repaired codex
+    `audits/Loi_2016-48_corrected.md` (215 entries / 29 batches, machine
+    checked by `audits/llm_repair_check.py`). This class pins the adoption
+    contract: header stripped, loader-canonical form, block boundaries
+    restored around every marker-initial line, the real document adopting
+    the codex (198/198 article heads), and RESTRUCTURE_RTL_REPAIR=0 still
+    giving the raw stored arm.
+    """
+
+    def test_unknown_document_has_no_codex(self):
+        import restructure as rst
+        self.assertIsNone(rst._adopted_codex_text("Circulaire_BCT_2019-08.pdf"))
+        self.assertIsNone(rst._adopted_codex_text(""))
+
+    def test_codex_text_is_header_stripped_and_boundary_restored(self):
+        import restructure as rst
+        text = rst._adopted_codex_text("Loi_2016-48.pdf")
+        self.assertIsNotNone(text)
+        lines = text.split("\n")
+        # header gone: the law text starts at the law's own title line
+        self.assertTrue(lines[0].startswith("قانون عدد 48 لسنة 2016"),
+                        lines[0][:60])
+        self.assertNotIn("---", lines)
+        # first line is its own block (title pick needs it as a line)
+        self.assertEqual(lines[1], "")
+        # every marker-initial line starts a block; 231 true structural
+        # headings live in this codex (198 فصل + 33 عنوان/باب/قسم)
+        marker_lines = 0
+        for i, l in enumerate(lines):
+            s = l.strip()
+            if not s:
+                continue
+            if rst._MARKER_RE.match(s):
+                marker_lines += 1
+                self.assertTrue(
+                    i == 0 or not lines[i - 1].strip(),
+                    f"marker line not block-initial at {i}: {s[:40]}")
+        self.assertEqual(marker_lines, 231)
+
+    def test_real_loi_document_adopts_the_codex(self):
+        import restructure as rst
+        from loader import load_document
+        pdf = (Path(__file__).resolve().parent.parent / "docs"
+               / "Loi_2016-48.pdf")
+        if not pdf.is_file():
+            self.skipTest("docs/Loi_2016-48.pdf not present")
+        doc = load_document(pdf, origin="docs/")
+        md, report = rst.normalize_structure(doc, repair_rtl=True)
+        self.assertTrue(report.codex_adopted)
+        self.assertFalse(report.rtl_doc_dominant)   # logical order: no flip
+        self.assertTrue(report.doc_title.startswith("قانون عدد 48"))
+        self.assertEqual(len(re.findall(r"^### ", md, re.M)), 198)
+        self.assertEqual(len(re.findall(r"^## ", md, re.M)), 33)
+        # adoption must not lose content: first and last substantive lines
+        # of the codex law text survive into the markdown
+        adopted = rst._adopted_codex_text("Loi_2016-48.pdf")
+        flat = re.sub(r"\s+", " ", md)
+        first = re.sub(r"\s+", " ", adopted.split("\n")[0])
+        self.assertIn(first, flat)
+
+    def test_repair_disabled_keeps_the_stored_arm(self):
+        import restructure as rst
+        doc = {"name": "Loi_2016-48.pdf", "text": "نص مخزون خام"}
+        md, report = rst.normalize_structure(doc, repair_rtl=False)
+        self.assertFalse(report.codex_adopted)
+        self.assertIn("نص مخزون خام", md)
+
+
 if __name__ == '__main__':
     unittest.main()
