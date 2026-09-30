@@ -35,7 +35,9 @@ DOCS_DIR = HERE.parent.parent / "docs"
 DEFAULT_REPORT = HERE / "Loi_2016-48_llm_repair.md"
 DEFAULT_DOC = "Loi_2016-48.pdf"
 
-ENTRY_RE = re.compile(r"^### (E\d+\s*ب?)\s*\|\s*صفحة\s*([^|]+?)\s*\|\s*(.+)$")
+# The location field is free-form ("صفحة N" for the Loi PDF, "مقطع N" for
+# DOCX documents) — it is display metadata, not checked.
+ENTRY_RE = re.compile(r"^### (E\d+\s*ب?)\s*\|\s*([^|]+?)\s*\|\s*(.+)$")
 PUNCT = "،.؛:()«»–—؟!…\"'٪%-|\u0640"
 
 
@@ -132,6 +134,10 @@ def main(argv):
             return "blank"
         if re.fullmatch(r"\[page \d+\]", line.strip()):
             return "page-marker"
+        # bare printed page number on its own line (PDF furniture; the
+        # Circulaire carries it, the Loi embeds it in gazette headers)
+        if re.fullmatch(r"\d{1,3}", line.strip()):
+            return "page-number"
         if "الرائد" in line and "الرسمي" in line:
             return "gazette-header"
         return "UNACCOUNTED"
