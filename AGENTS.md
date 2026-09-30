@@ -281,21 +281,21 @@ Channels that WORK (use in this order):
 - PDF text comes out in **visual order with corrupted digits** → repaired only by the
   logical-order bigram scorer in `restructure.py`. **Never "repair" digits** in the
   pipeline arms; never re-derive facts from the raw digit soup; take authoring
-  substrings from the repaired output. (2026-09-30: corrected CODECES for the three
-  non-Loi documents now exist as PENDING ADOPTION packages, built by the same
-  language-model repair methodology as the Loi — owner directive «قم بالإصلاح اللغوي
-  لباقي الملفات، واصل على نفس المنوال السابق، بدون استشارة»:
-  `audits/Circulaire_BCT_2019-08_llm_repair.md` (35 entries; all 28 corrupted digit
-  tokens fixed against the JORT-anchored audit table; identity «عدد 80» kept per the
-  standing owner decision), `audits/Guide_Interne_Operations_Bancaires_Islamiques_
-  llm_repair.md` (23 entries; all reversed hierarchical numbering corrected, context-
-  anchored: stored «2.4-الوكالة»→4.2 vs stored «4.2-السلم»→2.4), and
-  `audits/Madkhal_Sayrafa_Islamiya_llm_repair.md` (21 entries; «(000 59)»→«(59 000)»,
+  substrings from the repaired output. (2026-09-30, FULLY RESOLVED: ALL FOUR documents
+  now run on their language-model-repaired corrected codices, owner-adopted — Loi
+  «لا اعتراض، واصل» then the three others «طيب واصل» after the packages were presented
+  at the adoption gate. Owner directive: «قم بالإصلاح اللغوي لباقي الملفات، واصل
+  على نفس المنوال السابق، بدون استشارة». `restructure.py`'s `_ADOPTED_CODEX` maps
+  all four docs to `audits/*_corrected.md` — Loi 215 entries / 29 batches;
+  Circulaire 35 (all 28 corrupted digit tokens fixed against the JORT-anchored audit
+  table; identity «عدد 80» kept per the standing owner decision); Guide 23 (all
+  reversed hierarchical numbering corrected, context-anchored: stored
+  «2.4-الوكالة»→4.2 vs stored «4.2-السلم»→2.4); Madkhal 21 («(000 59)»→«(59 000)»,
   «5اهم»→«5-اهم»). Each log is machine-checked by `audits/llm_repair_check.py`
-  (fidelity/conservation/coverage, now generalized: free-form location field + bare
-  page-number skip class) and has its corrected codex `*_corrected.md`. ADOPTION into
-  `restructure.py`'s `_ADOPTED_CODEX` remains the owner's gate — until then the
-  stored-text rules below stay governing for question evidence.)
+  (fidelity/conservation/coverage — generalized: free-form location field + bare
+  page-number skip class); 4 regression tests in `AdoptedCodexRepair` pin canaries
+  and heading counts. AUTHORING RULE now: expected_substring for ALL documents
+  matches the ADOPTED (corrected) corpus form; vetoes go through the repair logs.)
 - **Madkhal AUDITED (step 1.4, 2026-09-28 — `raglab/audits/Madkhal_Sayrafa_Islamiya.md`,
   owner review pending)**: internal TRAINING material (an introduction to Islamic
   banking for Al Baraka Tunisia staff) — one of the four ORIGINAL docs/ files, it
@@ -395,17 +395,16 @@ Channels that WORK (use in this order):
   `loader.load_all` tolerates the empty/missing dir (warning + continue), so a fresh
   clone stays green.
 - Pipeline stats (restructure mode, LOCAL chars/4 estimator — CI's real cl100k is the
-  arbiter, expect drift): 340 chunks total: Circulaire 15, Guide 52, Loi 233, Madkhal
-  40 — the Loi change reflects the 2026-09-28 gazette treatment plus the 2026-09-30
-  ADOPTION of the corrected codex (owner: «لا اعتراض، واصل»; `raglab/audits/
-  Loi_2016-48_corrected.md` now supplies the law text in `restructure.py`'s
-  `_ADOPTED_CODEX` hook: 198/198 article heads, 33 chapter heads, every substantive
-  codex line verified present in the markdown; audit addendum §18 in
-  `raglab/audits/Loi_2016-48.md`); `RESTRUCTURE_RTL_REPAIR=0` reverts to the raw
-  stored arm. The zone-reconstruction diff at
+  arbiter, expect drift): 339 chunks total: Circulaire 13, Guide 54, Loi 233, Madkhal
+  39 — ALL FOUR documents run on their owner-adopted corrected codices (2026-09-30)
+  via `restructure.py`'s `_ADOPTED_CODEX` hook (Loi: 198/198 article heads + 33
+  chapters; Circulaire: 20/20 article heads + 4 titles; Guide: 24 true-numbering
+  heads; Madkhal: section-5 heading now extracted; every substantive codex line
+  verified present in each markdown, 0 real loss). Adoption addenda: §18 (Loi), §12.1
+  (Circulaire), §13.1 (Guide), §11.1 (Madkhal) in their audits; the master chunk
+  locations live in `raglab/audits/MASTER_INDEX.md`. `RESTRUCTURE_RTL_REPAIR=0`
+  reverts to the raw stored arm. The zone-reconstruction diff at
   `raglab/audits/Loi_2016-48_repair_diff.md` is comparison material only.
-  Guide/Madkhal are untouched, Circulaire differs only in paragraph boundaries
-  (PDF page breaks now paragraph breaks; 4 repeated page-number lines dropped).
   `main.py inspect` exits 0 on all four. (Historical: Atlas-era 346, Al
   Baraka-era 367/369, pre-treatment docs/ 325, first-fix 326.)
 - ACTIVE TRACK (owner decision 2026-09-28, supersedes the v2 adoption gate):
@@ -568,12 +567,13 @@ Channels that WORK (use in this order):
   do not cite them. The Atlas-era block below is likewise historical. The CURRENT
   baseline is NONE until Phase 2 re-measures it on the docs/-only set (step 3.1 in
   RAGLAB_ROADMAP.md); until then treat every hit@k number in this file as history.
-- **BM25-only A/B on the ADOPTED corpus (2026-09-30, INTERIM — the current 30-case
-  set, not the final 50; regenerable via `harness50.py`)**: overall hit@1/3/5
-  size-220/40 `44/76/80` → restructure (corrected-codex Loi) `64/96/100`;
-  validation OK — every expected_substring present in the restructure arm
-  (q10/q11/q12/q45 unchanged: convergent spans). Formal 3.1 baselines will be
-  measured on the rebuilt 50-case set.
+- **BM25-only A/B on the FULLY-ADOPTED corpus (2026-09-30, INTERIM — the current
+  30-case set, not the final 50; regenerable via `harness50.py`)**: overall hit@1/3/5
+  size-220/40 `44/76/80` → restructure (all four corrected codices) `60/92/100`;
+  validation OK — every expected_substring present in the restructure arm. (With only
+  the Loi adopted it was 64/96/100; the delta is Circulaire re-chunking 15→13 on a
+  30-case set — chunk-boundary churn, not text quality; formal 3.1 baselines will be
+  measured on the rebuilt 50-case set.)
 - **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of- **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of
   50; k=20; full table in `raglab/results/harness50/comparison.md`, regenerable via
   `harness50.py`):

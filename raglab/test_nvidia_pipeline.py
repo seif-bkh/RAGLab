@@ -1443,21 +1443,22 @@ class GazetteAndDominanceRepair(unittest.TestCase):
 
 
 class AdoptedCodexRepair(unittest.TestCase):
-    """The 2026-09-30 owner adoption of the corrected Loi 2016-48 codex.
+    """The 2026-09-30 owner adoption of the corrected codices (all four docs).
 
-    With RTL repair enabled, `restructure.py` replaces the Loi's stored
-    (visual-order corrupted) text with the language-model-repaired codex
-    `audits/Loi_2016-48_corrected.md` (215 entries / 29 batches, machine
-    checked by `audits/llm_repair_check.py`). This class pins the adoption
-    contract: header stripped, loader-canonical form, block boundaries
-    restored around every marker-initial line, the real document adopting
-    the codex (198/198 article heads), and RESTRUCTURE_RTL_REPAIR=0 still
-    giving the raw stored arm.
+    With RTL repair enabled, `restructure.py` replaces a document's stored
+    text with its language-model-repaired codex in `audits/*_corrected.md`
+    (Loi: 215 entries / 29 batches; Circulaire: 35; Guide: 23; Madkhal: 21 —
+    each machine-checked by `audits/llm_repair_check.py`). This class pins
+    the adoption contract: header stripped, loader-canonical form (PDFs keep
+    rendered lines, DOCX reflow), block boundaries restored around
+    marker-initial lines, each real document adopting its codex with the
+    documented fixes visible in the markdown, and RESTRUCTURE_RTL_REPAIR=0
+    still giving the raw stored arm.
     """
 
     def test_unknown_document_has_no_codex(self):
         import restructure as rst
-        self.assertIsNone(rst._adopted_codex_text("Circulaire_BCT_2019-08.pdf"))
+        self.assertIsNone(rst._adopted_codex_text("Atlas_fiche.pdf"))
         self.assertIsNone(rst._adopted_codex_text(""))
 
     def test_codex_text_is_header_stripped_and_boundary_restored(self):
@@ -1485,26 +1486,35 @@ class AdoptedCodexRepair(unittest.TestCase):
                     f"marker line not block-initial at {i}: {s[:40]}")
         self.assertEqual(marker_lines, 231)
 
-    def test_real_loi_document_adopts_the_codex(self):
+    def test_real_documents_adopt_their_codices(self):
         import restructure as rst
         from loader import load_document
-        pdf = (Path(__file__).resolve().parent.parent / "docs"
-               / "Loi_2016-48.pdf")
-        if not pdf.is_file():
-            self.skipTest("docs/Loi_2016-48.pdf not present")
-        doc = load_document(pdf, origin="docs/")
-        md, report = rst.normalize_structure(doc, repair_rtl=True)
-        self.assertTrue(report.codex_adopted)
-        self.assertFalse(report.rtl_doc_dominant)   # logical order: no flip
-        self.assertTrue(report.doc_title.startswith("قانون عدد 48"))
-        self.assertEqual(len(re.findall(r"^### ", md, re.M)), 198)
-        self.assertEqual(len(re.findall(r"^## ", md, re.M)), 33)
-        # adoption must not lose content: first and last substantive lines
-        # of the codex law text survive into the markdown
-        adopted = rst._adopted_codex_text("Loi_2016-48.pdf")
-        flat = re.sub(r"\s+", " ", md)
-        first = re.sub(r"\s+", " ", adopted.split("\n")[0])
-        self.assertIn(first, flat)
+        docs_dir = Path(__file__).resolve().parent.parent / "docs"
+        # (name, canaries that prove the documented fixes landed, n_h2, n_h3)
+        expected = {
+            "Loi_2016-48.pdf": (
+                ["يتم الطعن بالاستئناف في الحكم الصادر"], 33, 198),
+            "Circulaire_BCT_2019-08.pdf": (
+                ["عشرة ايام عمل", "عدد 89 لسنة 1994",
+                 "تعتزم تسويقها"], 4, 20),
+            "Guide_Interne_Operations_Bancaires_Islamiques.docx": (
+                ["4.2- توظيف الودائع على اساس الوكالة بالاستثمار",
+                 "2.1- عملية التمويل بصيغة المرابحة"], 9, 15),
+            "Madkhal_Sayrafa_Islamiya.docx": (
+                ["(59 000)", "5- اهم منتجات الصيرفة الاسلامية"], 5, 12),
+        }
+        for name, (canaries, n_h2, n_h3) in expected.items():
+            pdf = docs_dir / name
+            if not pdf.is_file():
+                self.skipTest(f"docs/{name} not present")
+            doc = load_document(pdf, origin="docs/")
+            md, report = rst.normalize_structure(doc, repair_rtl=True)
+            self.assertTrue(report.codex_adopted, name)
+            self.assertFalse(report.rtl_doc_dominant, name)  # logical order
+            self.assertEqual(len(re.findall(r"^## ", md, re.M)), n_h2, name)
+            self.assertEqual(len(re.findall(r"^### ", md, re.M)), n_h3, name)
+            for probe in canaries:
+                self.assertIn(probe, md, f"{name}: {probe}")
 
     def test_repair_disabled_keeps_the_stored_arm(self):
         import restructure as rst

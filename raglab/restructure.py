@@ -501,21 +501,26 @@ def _reflow_lines(lines: list[str], report: RestructureReport) -> list[str]:
 _RECONSTRUCT_TAIL_STOP = ("السبسي",)
 
 
-# --- Adopted corrected codex (owner decision 2026-09-30) --------------------
-# Loi 2016-48's stored extraction is visual-order corrupted. The algorithmic
-# zone reconstruction below is comparison material only (owner 2026-09-29: it
-# stays too rigid); the operative repair is the language-model track —
-# audits/Loi_2016-48_llm_repair.md (215 entries, 29 batches), machine-checked
-# by audits/llm_repair_check.py (verbatim source quotes, documented
-# conservation, full line coverage) — whose output codex
-# audits/Loi_2016-48_corrected.md the owner ADOPTED on 2026-09-30
-# («لا اعتراض، واصل»). With RTL repair enabled, the codex's law text replaces
-# the stored extraction for stage 1: the dominance gate below then sees a
-# logical-order document and the zone reconstruction stays a no-op. The source
-# PDF in docs/ is never modified; the audited codex file is the single source
-# of truth for the adopted text.
+# --- Adopted corrected codices (owner decisions 2026-09-30) ----------------
+# The stored extractions carry documented corruption. The algorithmic zone
+# reconstruction below is comparison material only (owner 2026-09-29: it stays
+# too rigid); the operative repair is the language-model track — one repair
+# log per document in audits/ (Loi: 215 entries / 29 batches; Circulaire: 35;
+# Guide: 23; Madkhal: 21), each machine-checked by audits/llm_repair_check.py
+# (verbatim source quotes, documented conservation, full line coverage) —
+# whose output codex audits/*_corrected.md the owner ADOPTED on 2026-09-30
+# (Loi: «لا اعتراض، واصل»; the three others: «طيب واصل» after the packages
+# were presented at the adoption gate). With RTL repair enabled, a document's
+# codex law text replaces its stored extraction for stage 1: the dominance
+# gate below then sees a logical-order document and the zone reconstruction
+# stays a no-op. The source files in docs/ are never modified; the audited
+# codex files are the single source of truth for the adopted text.
 _ADOPTED_CODEX = {
     "Loi_2016-48.pdf": "audits/Loi_2016-48_corrected.md",
+    "Circulaire_BCT_2019-08.pdf": "audits/Circulaire_BCT_2019-08_corrected.md",
+    "Guide_Interne_Operations_Bancaires_Islamiques.docx":
+        "audits/Guide_Interne_Operations_Bancaires_Islamiques_corrected.md",
+    "Madkhal_Sayrafa_Islamiya.docx": "audits/Madkhal_Sayrafa_Islamiya_corrected.md",
 }
 
 
@@ -525,21 +530,26 @@ def _adopted_codex_text(name: str) -> str | None:
     Form guarantees, so the adopted text behaves exactly like loader output:
     - the codex's metadata header (everything above its single '---' rule)
       is stripped;
-    - the law text runs through the loader's own PDF-path normalization
-      (normalize_text(reflow=False) + normalize_arabic) and a per-line strip
-      (tatweel removal can expose new edge spaces);
-    - block boundaries are restored around structural lines. The codex keeps
-      the stored extraction's line layout, which has no blank lines, so
-      paragraph reflow glues a chapter subtitle onto the next article's head
-      line; the marker then sits mid-sentence, reads as a cross-reference,
-      and the article loses its heading (31 of 198 article heads lost that
-      way in the stored arm, still 20 with the raw codex). Every
-      marker-initial line in this codex is a true heading (198 فصل + 33
-      عنوان/باب/قسم — scan-verified), and a marker at line start was
-      already a section start for _extract_markers, so restoring the
-      boundary promotes no cross-reference. The first line (the law's own
-      title) gets its own block for the same reason: it is a block in the
-      printed law, and _pick_title only sees lines.
+    - the law text runs through the loader's own normalization for that file
+      type (normalize_text(reflow=False) for PDFs — physical rendered lines;
+      reflow=True for DOCX — paragraph reflow) plus normalize_arabic and a
+      per-line strip (tatweel removal can expose new edge spaces). The
+      Circulaire/Loi codices carry the PDF's line runs; the Guide/Madkhal
+      codices are line-for-line mirrors of the stored text INCLUDING its
+      blank-line block structure;
+    - block boundaries are restored around structural lines. The PDF codices
+      keep the stored extraction's line layout, which has no blank lines
+      inside articles, so paragraph reflow glues a chapter subtitle onto the
+      next article's head line; the marker then sits mid-sentence, reads as
+      a cross-reference, and the article loses its heading (31 of 198 article
+      heads lost that way in the stored Loi arm, still 20 with the raw
+      codex). Every marker-initial line in these codices is a true heading
+      (Loi: 198 فصل + 33 عنوان/باب/قسم; Circulaire: 20 فصل + 4 عنوان —
+      scan-verified), and a marker at line start was already a section start
+      for _extract_markers, so restoring the boundary promotes no
+      cross-reference. The first line (the document's own title block) gets
+      its own boundary for the same reason: it is a block in the printed
+      document, and _pick_title only sees lines.
     """
     rel = _ADOPTED_CODEX.get(name)
     if not rel:
@@ -555,7 +565,8 @@ def _adopted_codex_text(name: str) -> str | None:
               f"{path}")
         return None
     law = raw.split("\n---\n", 1)[1].lstrip("\n")
-    text = normalize_arabic(normalize_text(law, reflow=False))
+    reflow = not name.lower().endswith(".pdf")
+    text = normalize_arabic(normalize_text(law, reflow=reflow))
     out: list[str] = []
     for i, line in enumerate(text.split("\n")):
         s = line.strip()

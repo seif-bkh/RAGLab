@@ -155,10 +155,10 @@ flowchart LR
 
 #### Step 2 — Chunk (three strategies, `chunker.chunk_all` 590-614 dispatches on `CHUNKING_MODE`)
 - **`restructure` (default, `config.py:178`)** — `restructure.py`:
-  - Stage 1 `normalize_structure`: page/gazette header cleanup, repeated-header dropping (≥3 occurrences), section-marker extraction (`الفصل/العنوان/الباب/القسم`), visual-order Arabic repair (gated by `RESTRUCTURE_RTL_REPAIR`). **Owner-adopted corrected codex (2026-09-30)**: with RTL repair on, `_ADOPTED_CODEX` in `restructure.py` replaces the Loi 2016-48 stored text with `audits/Loi_2016-48_corrected.md` (language-model repair, 215 entries, machine-checked) — the dominance gate then sees logical order and the zone reconstruction no-ops; block boundaries are restored around marker-initial lines (198 فصل + 33 عنوان/باب/قسم, all true headings).
+  - Stage 1 `normalize_structure`: page/gazette header cleanup, repeated-header dropping (≥3 occurrences), section-marker extraction (`الفصل/العنوان/الباب/القسم`), visual-order Arabic repair (gated by `RESTRUCTURE_RTL_REPAIR`). **Owner-adopted corrected codices (2026-09-30, ALL FOUR documents)**: with RTL repair on, `_ADOPTED_CODEX` in `restructure.py` replaces each document's stored text with its `audits/*_corrected.md` (language-model repair — Loi 215 entries, Circulaire 35, Guide 23, Madkhal 21 — each machine-checked by `audits/llm_repair_check.py`) — the dominance gate then sees logical order and the zone reconstruction no-ops; block boundaries are restored around marker-initial lines (all true headings); PDFs keep rendered lines, DOCX reflow.
   - Stage 2 `enrich_context` (659): injects a breadcrumb line (`CTX_PREFIX + "h1 > h2 > h3"`) above every H2/H3 and standalone table.
   - Stage 3 `recursive_structural_chunk` (835): recursive split over `["\n# ", "\n## ", "\n### ", "\n\n", "\n", " "]` at `CHUNK_SIZE_TOKENS`/`CHUNK_OVERLAP_TOKENS` (README.md:13-18).
-  - Measured (ADOPTED corpus, 2026-09-30, interim 30-case set): restructure `64/96/100` hit@1/3/5 vs size `44/76/80` (BM25-only, `harness50.py`); legacy atlas-era 47% vs 40% is history (README.md:20-23).
+  - Measured (FULLY-ADOPTED corpus, 2026-09-30, interim 30-case set): restructure `60/92/100` hit@1/3/5 vs size `44/76/80` (BM25-only, `harness50.py`); legacy atlas-era 47% vs 40% is history (README.md:20-23).
 - **`size`** — `chunker.chunk_document` (353): headings → sections (`_split_sections` 170) → paragraphs/tables (`_paragraphs_and_tables` 309) → token packing with sentence-aware overlap (`_pack_paragraphs` 424); markdown table rows converted to full sentences (`convert_table_rows` 224); section classification content/front-matter/legal (`classify_section` 154).
 - **`manual`** — `semantic_chunking.py` + reviewed maps in `benchmarks/chunk_maps` (`config.CHUNK_MAP_DIR:185`); a document without a map is an **error**, not a fallback (chunker.py:594-599).
 - **Data structure (Observed):** `Chunk` dataclass (chunker.py:123-135): `index, text, heading, language, source, token_count, origin, section_type, notes`.
@@ -495,7 +495,7 @@ RAGLab's distinctive strengths to carry forward: the **citation gate (quote + nu
 | profiles.py | 668 | registries, lab-config builder, chat clients, collection naming |
 | store.py | 664 | Chroma IO, BM25, RRF/blend, purge, freshness guard |
 | embedder.py | 1076 | 8 provider embedders, retry/bisect, cache, sanity |
-| restructure.py | 1239 | default chunking strategy + adopted-codex hook |
+| restructure.py | 1285 | default chunking strategy + four adopted-codex hook |
 | chunker.py | 614 | size-mode chunker + Chunk model + fingerprint |
 | answer.py | 378 | prompt, gate, generator, refusals |
 | retrieval.py | 86 | shared retrieval orchestration |
