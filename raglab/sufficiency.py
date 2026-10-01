@@ -645,12 +645,12 @@ def live_store():
     Same contract as bm25_store; --live (CI) measures the sufficiency states
     on the live vector arm — read-only, no /answer call."""
     import config as cfg
-    from embedder import make_embedder
+    from embedder import build_embedder
     from evaluate import prepare_query_text
     from retrieval import retrieve
     from store import get_collection
 
-    embedder = make_embedder(skip_sanity=True)
+    embedder = build_embedder(cfg)
     collection = get_collection(cfg, reset=False)
     if not collection.count():
         raise SystemExit("live collection is empty — ingest first")
