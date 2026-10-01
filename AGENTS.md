@@ -68,7 +68,10 @@ Current state of the work:
   colloquial 0/0/0); `LEXICON_ENABLED=1` changes NOTHING (identical numbers —
   its BM25 lift does not transfer to the vector arm) → data says keep the
   lexicon default OFF (owner gate). No 50-set regression same-run
-  (71/80/87, verbatim 50/60/80, OOS 0.286).
+  (71/80/87, verbatim 50/60/80, OOS 0.286). **Owner gate round 4
+  (2026-10-01): lexicon stays OFF (final — its BM25 lift does not transfer),
+  PHASE 3 CLOSED** (colloquial gap t01/t02 registered as a Phase-5 LM-path
+  input; no algorithmic repair per the standing 2026-09-28 rejection).
 - **Phase-4 knowledge layer (plan stage)**: `raglab/audits/PHASE4_KNOWLEDGE.md`
   — the 8-item plans for building the knowledge layer on Loi 2016-48 (owner's
   2026-10-01 choice): units.py with functional types and stable ids, the
@@ -80,8 +83,9 @@ Current state of the work:
   — 198/198 articles, verbatim codex text (blank separator lines preserved),
   stable `loi-2016-48:artNNN` ids, العنوان>الباب>الفصل paths, governed
   TYPE_RULES (first match wins; distribution 7/28/3/56/104 + numeric flag on
-  66) awaiting the owner's item-6 veto review; read-only layer, no deploy
-  change. Guarded by `UnitsExtraction`.
+  66) **ADOPTED as-is (owner gate round 4, 2026-10-01) — item 1 COMPLETE**;
+  read-only layer, no deploy change. Guarded by `UnitsExtraction`. Item 2
+  (governance-axes registry) build STARTED under the same authorization.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
