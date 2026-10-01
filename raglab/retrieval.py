@@ -24,6 +24,16 @@ def retrieve(cfg, embedder, collection, text, *, language=None, translator=None,
     else:
         variants = [{"label": f"{language}(original)", "lang": language,
                      "translated": False, "text": text}]
+        if getattr(cfg, "LEXICON_ENABLED", False):
+            # Phase-3 intervention 2: deterministic governed expansion BEFORE
+            # embedding and BM25 (raglab/lexicon.py). Strictly separate from the
+            # retired translation path above: no model calls, no language
+            # routing — only the governed table. Every expanded form becomes an
+            # additional variant merged by the existing best_variant_merge.
+            import lexicon
+            for label, form in lexicon.expansion_pairs(text):
+                variants.append({"label": label, "lang": language,
+                                 "translated": False, "text": form})
     count = collection.count()
     if not count:
         return [], variants

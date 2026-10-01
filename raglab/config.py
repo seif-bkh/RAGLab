@@ -258,6 +258,12 @@ QUERY_TRANSLATION_BATCH_SIZE = 8
 # best = original + translated variants with the legacy normalized score merge.
 # translated = corpus-language query only; original = no translation.
 QUERY_VARIANT_STRATEGY = os.getenv("QUERY_VARIANT_STRATEGY", "original")
+
+# Phase-3 intervention 2: governed institutional lexicon (raglab/lexicon.py) as a
+# deterministic query expansion BEFORE embedding and BM25. OFF by default until
+# the owner reviews the seed table; an empty/off lexicon reproduces the current
+# behaviour exactly. Separate from the retired translation path by construction.
+LEXICON_ENABLED = os.getenv("LEXICON_ENABLED", "") == "1"
 RETRIEVAL_CANDIDATE_K = 20
 
 # Selected measured profile. Old .env values are rejected, not silently used.

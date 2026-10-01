@@ -25,6 +25,9 @@ from nvidia_api import (DEEPSEEK_MODEL, EMBED_MODEL, KIMI_MODEL, RIVA_MODEL,
                         NvidiaAPIError, NvidiaClient, chat_payload,
                         final_content, read_event_stream, retry_after_seconds)
 from nvidia_benchmark import make_config, selection_key
+
+DOCS_DIRS = [Path(__file__).resolve().parent.parent / "docs",
+             Path(__file__).resolve().parent / "data"]
 from pipeline_policy import ANSWER_MODEL as QWEN_MODEL
 from store import ensure_fresh_chunks, get_collection, store_chunks, chunk_fp
 from translate import QueryTranslator, translation_issues
@@ -1820,6 +1823,121 @@ class ModelIndependenceAB(unittest.TestCase):
         self.assertEqual(pair['status_agreement'], 1.0)
         self.assertEqual(pair['mean_source_jaccard'], 1.0)
         self.assertEqual(pair['substance_divergent_questions'], [])
+
+
+class LexiconExpansion(unittest.TestCase):
+    """Phase-3 intervention 2: the governed institutional lexicon — a
+    deterministic, non-generative query expansion before embedding and BM25,
+    strictly separate from the retired translation path."""
+
+    def test_identity_when_nothing_matches(self):
+        import lexicon
+        self.assertEqual(lexicon.expand_query('ما هي شروط فتح الحساب؟'),
+                         ['ما هي شروط فتح الحساب؟'])
+        self.assertEqual(lexicon.expansion_pairs('ordinary words here'), [])
+
+    def test_english_equivalent_and_abbreviation(self):
+        import lexicon
+        q = 'What is murabaha at the BCT?'
+        out = lexicon.expand_query(q)
+        self.assertEqual(out[0], q)
+        self.assertIn('What is المرابحة at the BCT?', out)
+        self.assertIn('What is murabaha at the البنك المركزي التونسي?', out)
+        self.assertIn('What is المرابحة at the البنك المركزي التونسي?', out)
+        labels = [label for label, _ in lexicon.expansion_pairs(q)]
+        self.assertIn('lexicon:murabaha', labels)
+        self.assertIn('lexicon:BCT', labels)
+        self.assertIn('lexicon:combined', labels)
+
+    def test_case_insensitive_and_no_substring_false_positives(self):
+        import lexicon
+        self.assertIn('المرابحة definition', lexicon.expand_query('MURABAHA definition'))
+        self.assertEqual(lexicon.expand_query('murabahax contracts'),
+                         ['murabahax contracts'])
+        self.assertEqual(lexicon.expand_query('تسليفات متعددة'),
+                         ['تسليفات متعددة'])
+
+    def test_french_equivalents(self):
+        import lexicon
+        q = "Qu'est-ce que la mourabaha et les dépôts ?"
+        out = lexicon.expand_query(q)
+        self.assertIn("Qu'est-ce que la المرابحة et les dépôts ?", out)
+        self.assertIn("Qu'est-ce que la mourabaha et les الودائع ?", out)
+        self.assertIn("Qu'est-ce que la المرابحة et les الودائع ?", out)
+
+    def test_arabic_colloquial_definite_and_indefinite(self):
+        import lexicon
+        self.assertIn('كيف نحصل على القرض؟',
+                      lexicon.expand_query('كيف نحصل على تسليف؟'))
+        self.assertIn('شروط القرض السكني',
+                      lexicon.expand_query('شروط التسليف السكني'))
+
+    def test_every_seed_target_exists_in_the_adopted_codex(self):
+        """Governance: the lexicon maps INTO the corpus vocabulary only."""
+        import lexicon
+        import restructure
+        from evaluate import normalize_for_match
+        from loader import load_all
+        docs = load_all(DOCS_DIRS)
+        codices = []
+        for d in docs:
+            t = restructure._adopted_codex_text(d['name'])
+            codices.append(t if t is not None else d['text'])
+        self.assertEqual(len(codices), 4)
+        for entry in lexicon.SEED_ENTRIES:
+            self.assertTrue(
+                any(normalize_for_match(entry['to']) in normalize_for_match(c)
+                    for c in codices),
+                f"seed target not in the adopted codex: {entry['from']} -> {entry['to']}")
+
+    def test_retrieval_wiring_off_by_default_and_on_when_enabled(self):
+        import lexicon
+        from retrieval import retrieve
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        cfg = make_config(CHROMA_DIR=Path(self.temp.name) / 'chroma',
+                          ANSWER_CACHE_PATH=Path(self.temp.name) / 'answers.json')
+        self.assertFalse(cfg.LEXICON_ENABLED)   # OFF by default
+
+        def chunk(index, source, language, text):
+            return SimpleNamespace(index=index, source=source, language=language,
+                                   text=text, heading='', origin='test/',
+                                   section_type='content', token_count=20)
+        chunks = [chunk(0, 'ar.md', 'ar', 'المرابحة صيغة تمويل بصيغة البيع'),
+                  chunk(0, 'en.md', 'en', 'murabaha is a financing form')]
+        vectors = [[1.0] + [0.0] * 2047, [0.0, 1.0] + [0.0] * 2046]
+        collection = get_collection(cfg, reset=True)
+        store_chunks(collection, list(zip(chunks, vectors)), cfg)
+
+        def embed(text):
+            # the governed Arabic anchor routes the expanded variant to the
+            # Arabic chunk; the original English text to the English chunk
+            return vectors[0] if 'المرابحة' in text else vectors[1]
+        fake_embedder = SimpleNamespace(embed_query=embed)
+
+        q = 'What is murabaha?'
+        hits, variants = retrieve(cfg, fake_embedder, collection, q,
+                                  language='en', mode='vector', top_k=2,
+                                  variant_strategy='original')
+        self.assertEqual([v['label'] for v in variants], ['en(original)'])
+        # only the original variant contributed: every hit carries its label
+        self.assertTrue(all(h['from_variant'] == 'en(original)' for h in hits))
+
+        cfg.LEXICON_ENABLED = True
+        hits2, variants2 = retrieve(cfg, fake_embedder, collection, q,
+                                    language='en', mode='vector', top_k=2,
+                                    variant_strategy='original')
+        labels = [v['label'] for v in variants2]
+        self.assertEqual(labels[0], 'en(original)')
+        self.assertIn('lexicon:murabaha', labels)
+        by_id = {h['id']: h for h in hits2}
+        self.assertIn('ar.md::chunk_0000', by_id)
+        self.assertIn('en.md::chunk_0000', by_id)
+        # the Arabic chunk was reached BY the governed variant
+        self.assertEqual(by_id['ar.md::chunk_0000']['from_variant'],
+                         'lexicon:murabaha')
+        self.assertIn('lexicon:murabaha',
+                      by_id['ar.md::chunk_0000']['variant_ranks'])
 
 
 class RealReportModes(unittest.TestCase):

@@ -40,6 +40,16 @@ Current state of the work:
   Never copy from `raglab/questions.json`, `questions_real.json`, or
   `benchmarks/retrieval_dev.json`.
 - **BM25-only A/B harness**: `raglab/harness50.py` (no API calls; deterministic).
+- **Governed institutional lexicon** (Phase-3 intervention 2, 2026-10-01):
+  `raglab/lexicon.py` — a managed seed table (16 entries: abbreviation,
+  en/fr equivalents, colloquial->formal; every target verified present in the
+  adopted corrected codex, enforced by a governance test) expanded
+  deterministically BEFORE embedding and BM25 via `retrieval.retrieve`, behind
+  `LEXICON_ENABLED` (default OFF until the owner reviews the table entry by
+  entry). Strictly separate from the retired translation path. Exact
+  whole-word surface forms; Arabic definite forms need their own rows. Plan +
+  record: `raglab/audits/PHASE3_INTERVENTIONS.md`. Measuring its effect awaits
+  the colloquial/synonyms authoring round (owner decision).
 - **Model-independence tool** (re-introduced 2026-10-01, step 2.4-ج):
   `raglab/answer_ab.py` — ONE retrieval per question fed identically to N answer
   models (`--model provider/model-id`, first is the reference); pairwise status
