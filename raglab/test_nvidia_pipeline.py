@@ -2626,6 +2626,28 @@ class RelationalExpansion(unittest.TestCase):
         self.assertIn('getattr(cfg, "RELATIONAL_EXPANSION_ENABLED", False)', src)
 
 
+    def test_extras_carry_mode_score_key_regression(self):
+        """Live-run regression (run 36868987998): extras without the active
+        mode's ranking key left score=None in the evaluate record and the
+        separation block crashed on max(None, float). Extras must carry the
+        mode key at 0.0 so downstream score math never sees None."""
+        import relational_expansion as rex
+        hits = [self._law_hit(rank=i, score=5.0 - i * 0.1) for i in range(1, 6)]
+        for key in ("similarity", "rrf_score", "blend_score"):
+            # live head hits carry the mode key (from query_vector / fusion)
+            live = [dict(h, **{key: h["score"]}) for h in hits]
+            out = rex.expand(self._cfg(), "كيف تُمنح التراخيص للبنوك؟",
+                             live, top_k=5, score_key=key)
+            extras = [h for h in out if h["metadata"].get("via_relation")]
+            self.assertTrue(extras)
+            # every hit has a non-None score under the active mode's key —
+            # the evaluate separation max() is safe on the full window
+            scores = [h.get(key) for h in out]
+            self.assertTrue(all(s is not None for s in scores))
+            self.assertTrue(all(h[key] == 0.0 for h in extras))  # tail rank
+            self.assertEqual(max(scores), max(5.0 - i * 0.1 for i in range(1, 6)))
+
+
 class UnitsExtraction(unittest.TestCase):
     """Phase-4 item 1: Loi 2016-48 knowledge units — article-level split from
     the adopted codex through the SHARED marker machinery (restructure.

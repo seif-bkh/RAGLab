@@ -67,7 +67,10 @@ def retrieve(cfg, embedder, collection, text, *, language=None, translator=None,
             # Phase-5 item 3: policy-gated units appended BESIDE the results
             # (env-gated, default OFF; extras only compete for the tail).
             import relational_expansion
-            out = relational_expansion.expand(cfg, text, out, top_k)
+            out = relational_expansion.expand(
+                cfg, text, out, top_k,
+                score_key={"vector": "similarity", "rrf": "rrf_score",
+                           "blend": "blend_score"}[mode])
         return out, variants
     hits = best_variant_merge(lists, score_key=score_key, labels=[v["label"] for v in variants],
                               tie_break=getattr(cfg, "FUSION_TIE_BREAK", "same_lang_margin"))
@@ -78,7 +81,8 @@ def retrieve(cfg, embedder, collection, text, *, language=None, translator=None,
     if getattr(cfg, "RELATIONAL_EXPANSION_ENABLED", False):
         # Phase-5 item 3: policy-gated units appended BESIDE the results.
         import relational_expansion
-        hits = relational_expansion.expand(cfg, text, hits[:top_k], top_k)
+        hits = relational_expansion.expand(
+            cfg, text, hits[:top_k], top_k, score_key=score_key)
     return hits, variants
 
 

@@ -78,7 +78,8 @@ def _source_unit_ids(hits: list[dict], law_units: list[dict]) -> set[str]:
     return ids
 
 
-def expand(cfg, query: str, hits: list[dict], top_k: int) -> list[dict]:
+def expand(cfg, query: str, hits: list[dict], top_k: int,
+           score_key: str | None = None) -> list[dict]:
     """Policy-gated unit hits BESIDE the retrieved results.
 
     The retrieved list keeps its order at the head of the window; extras
@@ -114,7 +115,10 @@ def expand(cfg, query: str, hits: list[dict], top_k: int) -> list[dict]:
             return
         seen.add(uid)
         u = by_id[uid]
-        extras.append({
+        # The extra carries the ACTIVE MODE's ranking key at 0.0 — it ranks
+        # after every retrieval hit (tail-slot semantics) and downstream
+        # score math (evaluate separation) never sees a None score.
+        extra = {
             "id": uid,
             "text": u["text"],
             "score": 0.0,                      # ranks after every retrieval hit
@@ -123,7 +127,10 @@ def expand(cfg, query: str, hits: list[dict], top_k: int) -> list[dict]:
                 "heading": u["heading"], "unit_id": uid,
                 "via_relation": via,           # the expansion's provenance
             },
-        })
+        }
+        if score_key:
+            extra[score_key] = 0.0
+        extras.append(extra)
 
     # depth 1: edges from the retrieved units (and to them, per policy)
     frontier = set(sources)
