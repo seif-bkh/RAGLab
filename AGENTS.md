@@ -579,9 +579,17 @@ Channels that WORK (use in this order):
   cross-provider carry-over. One token, no spaces → else 400 bad_model.
 - **RETRACTED 2026-09-28**: the Al Baraka-era baselines (q50 49/80/82, questions_v2
   52/67/67 etc.) were measured on a now-deleted corpus with now-deleted machinery —
-  do not cite them. The Atlas-era block below is likewise historical. The CURRENT
-  baseline is NONE until Phase 2 re-measures it on the docs/-only set (step 3.1 in
-  RAGLAB_ROADMAP.md); until then treat every hit@k number in this file as history.
+  do not cite them. The Atlas-era block below is likewise historical.
+- **FORMAL 3.1 BM25 baseline (2026-10-01, measured on the adopted 50-case set,
+  presented for adoption — record: `raglab/audits/PHASE2_BASELINES.md`; estimator
+  state pinned: tiktoken BPE unavailable in sandbox → fallback
+  max(words, chars/4), chunk_fp `tokestimator-char4-v1`)**: overall hit@1/3/5
+  size-220/40 `42/60/62` → restructure (adopted corrected codices) `62/82/87`
+  (45 answerable: 30 ar / 9 en / 6 fr; k=20). By language ar `43/57/60 → 67/87/93`,
+  en `44/89/89 → 67/100/100`, fr `33/33/33 → 33/33/33` (lexical ceiling — the
+  live vector arm in 3.2 decides the fr gap). OOS (5): max top-1 score 11.8 (base)
+  vs 11.4 (restructure). Until the owner adopts them, these numbers are measured
+  and reproducible but not yet fixed as targets.
 - **BM25-only A/B on the FULLY-ADOPTED corpus (2026-09-30, INTERIM — the current
   30-case set, not the final 50; regenerable via `harness50.py`)**: overall hit@1/3/5
   size-220/40 `44/76/80` → restructure (all four corrected codices) `60/92/100`;
@@ -589,7 +597,7 @@ Channels that WORK (use in this order):
   the Loi adopted it was 64/96/100; the delta is Circulaire re-chunking 15→13 on a
   30-case set — chunk-boundary churn, not text quality; formal 3.1 baselines will be
   measured on the rebuilt 50-case set.)
-- **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of- **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of
+- **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of
   50; k=20; full table in `raglab/results/harness50/comparison.md`, regenerable via
   `harness50.py`):
   - overall hit@1/3/5: size-220/40 `40/69/80` → restructure `47/78/89`

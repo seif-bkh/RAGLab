@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Offline BM25 harness: baseline size-chunking vs the restructure strategy.
 
-Runs the two chunking arms over the same 6-document corpus and scores
-questions_50.json (17 ar / 17 fr / 16 en, 5 out-of-scope) with the lab's own
-judge (evaluate.is_correct_hit + evaluate.compute_metrics).
+Runs the two chunking arms over the adopted docs/ corpus (4 real documents)
+and scores the adopted questions_50.json (45 answerable: 30 ar / 6 fr / 9 en,
+plus 5 out-of-scope) with the lab's own judge (evaluate.is_correct_hit +
+evaluate.compute_metrics). The baseline arm chunks the raw loader text with
+the size strategy; the restructure arm chunks the adopted corrected codex
+with the heading-aware strategy — the deployed pipeline under test.
 
 Why BM25-only: the pinned runtime expects NVIDIA embeddings that are not
 reachable from this sandbox (no network to huggingface.co / pytorch.org), so
@@ -175,6 +178,7 @@ def build_arm(name: str, mode: str, docs: list[dict]) -> dict:
         "overlap_tokens": OVERLAP_TOKENS,
         "retrieval": "bm25-only (store.keyword_search, k=%d)" % TOP_K,
         "chunk_fp": fp,
+        "chunk_count": len(chunks),
         "metrics": metrics,
         "questions": per_question,
     }
@@ -222,7 +226,7 @@ def validate_substrings(cases: list[dict], docs: list[dict],
                         for t in chunk_text_by_doc.get(doc, []))
             flag = "YES" if in_re else "**NO — fix the case**"
             lines.append(f"| {case['id']} | {sub[:48]} | "
-                         f"{'yes' if in_raw else 'no (baseline misses by design)'} | {flag} |")
+                         f"{'yes' if in_raw else 'no (raw loader text differs from the adopted codex)'} | {flag} |")
             if not in_re:
                 fatal.append(case["id"])
     report = "\n".join(lines) + "\n"
@@ -244,15 +248,25 @@ def pct(x):
     return "n/a" if x is None else f"{x * 100:.0f}%"
 
 
-def comparison_table(base: dict, restr: dict) -> str:
+def comparison_table(base: dict, restr: dict,
+                      docs: list[dict], cases: list[dict]) -> str:
     b, r = base["metrics"], restr["metrics"]
-    L = ["# harness50 — size-220/40 baseline vs restructure (BM25-only, k=20)",
+    n_oos = sum(1 for c in cases if c.get("category") == "out-of-scope")
+    answerable = [c for c in cases if c.get("category") != "out-of-scope"]
+    lang_counts = ", ".join(
+        f"{n} {lng}" for lng, n in sorted(
+            (l, sum(1 for c in answerable if c["language"] == l))
+            for l in {c["language"] for c in answerable}))
+    L = [f"# harness50 — size-220/40 baseline vs restructure (BM25-only, k=20)",
          "",
-         "Corpus: 6 documents (4 Arabic docs — 2 PDFs stored in visual word "
-         "order with corrupted digits — + 1 Arabic guide + 1 Arabic intro; "
-         "2 parallel fictional FR/AR product sheets). Retrieval: BM25 lexical "
-         "only, identical for both arms; the only variable is the chunking "
-         "strategy. Questions: 50 (17 ar / 17 fr / 16 en, 5 out-of-scope).",
+         f"Corpus: {len(docs)} real documents from docs/ (adopted arm: "
+         f"{restr['chunk_count']} chunks; size arm: {base['chunk_count']}). "
+         "Both arms share the same 220/40 token budget and the same BM25 "
+         "retriever; the variable under test is the chunking strategy — "
+         "size on the raw loader text (baseline) vs heading-aware on the "
+         "adopted corrected codex (restructure, the deployed pipeline). "
+         f"Questions: {len(cases)} ({len(answerable)} answerable: "
+         f"{lang_counts}; {n_oos} out-of-scope).",
          "",
          "## Overall (45 answerable)",
          "",
@@ -313,7 +327,7 @@ def main() -> int:
 
     fatal = validate_substrings(cases, docs, restr_chunks)
 
-    table = comparison_table(base, restr)
+    table = comparison_table(base, restr, docs, cases)
     (RESULTS / "comparison.md").write_text(table, encoding="utf-8")
     print("\n" + table)
     print(f"[harness50] wrote {RESULTS / 'comparison.md'}")
