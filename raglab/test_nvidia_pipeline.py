@@ -2533,6 +2533,121 @@ class EvidencePlanDerivation(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "")
 
 
+class DecompositionCheck(unittest.TestCase):
+    """Phase-5 item 6 (owner directive 2026-10-01): the intermediate
+    decomposition layer — EVERY question becomes micro-questions, each with
+    its intent, its ONE requirement (from the item-2 plan), and the Phase-4
+    answerable surfaces (live counts); influential ambiguity generates
+    advisory clarifications. Read-only layer; INTENT_RULES and
+    DERIVATION_RULES consumed as-is."""
+
+    Q50 = "ما هي عملية التمويل بالمرابحة على معنى منشور البنك المركزي التونسي؟"
+    Q_PENALTY = "ما العقوبة الجزائية لممارسة العمليات البنكية خلافا لأحكام القانون عدد 48 لسنة 2016؟"
+    Q_COMPOUND = ("ما قيمة غرامة التأخير اليومية عن عدم تقديم الوثائق المطلوبة، "
+                  "ومن يحدد مبلغها النهائية؟")
+    Q_COMPARE = ("قارن بين صيغتي المضاربة من حيث حرية البنك في استثمار أموال "
+                 "الحريف وعائد الحريف")
+
+    def test_subject_extraction_declared_rules(self):
+        import decompose as D
+        self.assertEqual(D.extract_subject(self.Q50), "عملية التمويل بالمرابحة")
+        # scope clause (خلافا لأحكام القانون...) stripped
+        subj = D.extract_subject(self.Q_PENALTY)
+        self.assertTrue(subj.startswith("العقوبة الجزائية"))
+        self.assertNotIn("القانون", subj)
+        # never empty — fallback keeps the text minus the question mark
+        self.assertTrue(D.extract_subject("كيف؟").strip())
+
+    def test_simple_question_one_micro_with_live_surfaces(self):
+        import decompose as D
+        d = D.decompose(self.Q50)
+        self.assertEqual(d["intent_type"], "تعريفي")
+        self.assertEqual(len(d["micro_questions"]), 1)
+        m = d["micro_questions"][0]
+        self.assertEqual(m["requirement"], "definition_or_purpose_unit")
+        self.assertIn("عملية التمويل بالمرابحة", m["text"])   # faithful subject
+        # the answerable surface carries the LIVE catalog count (28 definitions)
+        self.assertTrue(any("definition (28)" in s for s in m["answerable_from"]))
+
+    def test_penalty_question_two_micros_bijection(self):
+        import decompose as D
+        d = D.decompose(self.Q_PENALTY)
+        reqs = [m["requirement"] for m in d["micro_questions"]]
+        self.assertEqual(reqs, ["penalty_unit", "with_governing_rule"])
+        self.assertTrue(all(m["answerable_from"] for m in d["micro_questions"]))
+        self.assertTrue(any("penalty (7)" in s for m in d["micro_questions"]
+                            for s in m["answerable_from"]))
+
+    def test_compound_decomposition_per_sub_question(self):
+        import decompose as D
+        d = D.decompose(self.Q_COMPOUND)
+        self.assertGreaterEqual(len(d["micro_questions"]), 4)
+        subs = {m["sub_question_index"] for m in d["micro_questions"]}
+        self.assertIn(1, subs)
+        self.assertIn(2, subs)
+        # the numeric sub-question asks for the structured-numbers surface
+        numeric = [m for m in d["micro_questions"]
+                   if m["requirement"] == "numeric_evidence"]
+        self.assertTrue(numeric)
+        self.assertTrue(any("53" in s for s in numeric[0]["answerable_from"]))
+
+    def test_comparison_decomposes_by_aspect(self):
+        import decompose as D
+        d = D.decompose(self.Q_COMPARE)
+        aspect_micros = [m for m in d["micro_questions"] if m.get("aspect")]
+        self.assertEqual(len(aspect_micros), 2)
+        self.assertEqual({m["aspect"] for m in aspect_micros},
+                         {"حرية البنك في استثمار أموال الحريف", "عائد الحريف"})
+        self.assertTrue(all(m["requirement"] == "both_sides_evidence"
+                            for m in aspect_micros))
+        self.assertTrue(all("صيغتي المضاربة" in m["text"] for m in aspect_micros))
+
+    def test_ambiguity_generates_advisory_clarification(self):
+        import decompose as D
+        d = D.decompose(self.Q_COMPARE)
+        self.assertIn("المضاربة", d["ambiguous_concepts"])
+        self.assertTrue(d["clarifications"])
+        self.assertIn("المضاربة", d["clarifications"][0])
+        # advisory: the decomposition still proceeds
+        self.assertTrue(d["micro_questions"])
+
+    def test_oos_question_still_decomposes(self):
+        # understanding does not need evidence: an OOS question decomposes,
+        # its requirements carry the answerable surfaces, and the EVIDENCE
+        # layer (sufficiency) is what reports absence
+        import decompose as D
+        d = D.decompose("ما هو سعر سهم شركة تسلا اليوم في بورصة نيويورك؟")
+        self.assertTrue(d["micro_questions"])
+        self.assertTrue(all(m["answerable_from"] for m in d["micro_questions"]))
+
+    def test_determinism_same_input_same_output(self):
+        import decompose as D
+        a = D.decompose(self.Q_COMPOUND)
+        b = D.decompose(self.Q_COMPOUND)
+        self.assertEqual(a, b)
+
+    def test_measure_contract_on_adopted_sets(self):
+        import decompose as D
+        for name in ("questions_50.json", "questions_targets.json"):
+            cases = json.loads((Path(__file__).parent / name)
+                               .read_text(encoding="utf-8"))["cases"]
+            m = D.measure(cases)
+            self.assertEqual(m["decomposed"], m["n"], name)
+            self.assertEqual(m["bijection_violations"], 0, name)
+            self.assertEqual(m["empty_surface_micros"], 0, name)
+            self.assertEqual(m["ambiguous_without_clarification"], 0, name)
+
+    def test_inert_layer_no_deployed_execution(self):
+        import subprocess
+        for f in ["service.py", "main.py", "retrieval.py", "store.py",
+                  "answer.py", "answer_ab.py", "chat.py"]:
+            out = subprocess.run(
+                ["grep", "-nE", "import decompose|decompose\.", f],
+                capture_output=True, text=True)
+            self.assertEqual(out.returncode, 1,
+                             f"{f} executes decompose in the deployed path")
+
+
 class SufficiencyCheck(unittest.TestCase):
     """Phase-5 item 4: deterministic sufficiency & conflict — coverage of the
     item-2 evidence plan against the RETRIEVED pool (requirement by

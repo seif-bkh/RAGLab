@@ -183,6 +183,22 @@ Current state of the work:
   field-free by design. Inert-layer guard updated (one gated reference in
   service.py, none elsewhere). Tests: SufficiencyFieldsTest (4) + the
   OFF regression in ServiceTest — suites 197 + 52 OK.
+- **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
+  `raglab/decompose.py` (read-only): the intermediate decomposition layer.
+  EVERY question → reformulated micro-questions, each with its partial
+  intent, its ONE requirement (item-2 plan, consumed as-is), and the
+  Phase-4 ANSWERABLE SURFACES with live counts (definition 28 / penalty 7 /
+  procedure 56 / delegation 3 units, 53 structured number records +
+  GET /numbers, 77 internal-reference edges). Compound → per sub-question;
+  «من حيث» comparisons → one micro per compared aspect; influential
+  ambiguity → advisory clarification naming the concept and its shared
+  documents. DECLARED review data: MICRO_TEMPLATES, ANSWERABLE_SURFACES,
+  subject-extraction patterns (INTENT_RULES/DERIVATION_RULES consumed
+  unmodified). Measured: 50/50 + 10/10 decomposed (55 + 17 micros), ZERO
+  contract violations (no unasked requirement, no surface-less micro, no
+  ambiguity without clarification). CLI: `python decompose.py [--question ...]`.
+  Guarded by `DecompositionCheck` (10) — suite 207 OK. Wiring it into the
+  deployed path (e.g. per-micro retrieval) is a separate owner gate.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
