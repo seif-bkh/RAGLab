@@ -1,5 +1,5 @@
 {
-  "_comment": "50-case evaluation set for the restructure chunking harness (harness50.py). Mix of ar/fr/en (17/17/16), 5 out-of-scope. expected_substring values are verbatim spans of the source documents (checked by the validation step of harness50.py). | Revised 2026-09-24: the 20 Banque Atlas cases now target the Al Baraka Bank Tunisie sheets (fiche_produit_banque_albaraka_{ar,fr}.md); ids/categories/languages unchanged, numbers must be re-baselined. | Trimmed 2026-09-28 to the 30 docs/-corpus cases: the 20 fictional-bank cases (Atlas, then a web-compiled Al Baraka set) were removed with their corpora by owner decision — 20 new docs/-based cases will be authored step-by-step to bring the set back to 50. Pre-2026-09-28 numbers no longer match this set.",
+  "_comment": "50-case evaluation set for the restructure chunking harness (harness50.py). Mix of ar/fr/en (17/17/16), 5 out-of-scope. expected_substring values are verbatim spans of the source documents (checked by the validation step of harness50.py). | Revised 2026-09-24: the 20 Banque Atlas cases now target the Al Baraka Bank Tunisie sheets (fiche_produit_banque_albaraka_{ar,fr}.md); ids/categories/languages unchanged, numbers must be re-baselined. | Trimmed 2026-09-28 to the 30 docs/-corpus cases: the 20 fictional-bank cases (Atlas, then a web-compiled Al Baraka set) were removed with their corpora by owner decision — 20 new docs/-based cases will be authored step-by-step to bring the set back to 50. Pre-2026-09-28 numbers no longer match this set. | Rebuilt to 50 cases 2026-09-30 (owner: «أنجز» approving the 2.1 matrix; batches أ-د authored on the ADOPTED corrected codices, each machine-verified: every expected_substring present in its expected document's adopted-arm chunks and distinctive corpus-wide; batch هـ re-verified the 5 out-of-scope cases). Mix: ar 32 / fr 8 / en 10; categories verbatim 10 / paraphrase 20 / cross-lingual 15 / out-of-scope 5; per-doc Loi 12 / Circulaire 10 / Guide 11 / Madkhal 12.",
   "cases": [
     {
       "id": "q01",
@@ -297,6 +297,42 @@
       "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
       "expected_lang": "ar",
       "expected_substring": "تيسير البركة"
+    },
+    {
+      "id": "q34",
+      "question": "كم بلغ عدد المودعين في تجربة بنوك الادخار المحلية بمنطقة ميت غمر خلال ثلاث سنوات؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "تسعة وخمسون الف (59 000) مودع"
+    },
+    {
+      "id": "q35",
+      "question": "كيف ينظر الإسلام إلى النقد حسب المادة التدريبية؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "النقد في الاسلام ليس سلعة تباع وتشترى، وانما هو اداة للتبادل"
+    },
+    {
+      "id": "q36",
+      "question": "ما هي مصادر الشريعة الاسلامية التي تستند إليها المالية الاسلامية؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "مصادر الشريعة الاسلامية هي الادلة التي تستند اليها وتقوم عليها"
+    },
+    {
+      "id": "q37",
+      "question": "Which global stock market indexes track Islamic finance according to the training material?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "Dow Jones Islamic Market Indexes"
     },
     {
       "id": "q38",

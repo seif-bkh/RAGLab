@@ -24,18 +24,21 @@ Current state of the work:
   2. context breadcrumbs above sub-headings/tables;
   3. recursive structural chunking over
      `["\n# ", "\n## ", "\n### ", "\n\n", "\n", " "]` at the usual 220/40 token budget.
-- **Benchmark set**: `raglab/questions_50.json` — currently **30 cases** (17 ar /
-  4 fr / 9 en) over the four `docs/` documents only: `verbatim` (6), `paraphrase`
-  (9), `cross-lingual` (10), `out-of-scope` (5, must have NO expected match).
-  Owner decision 2026-09-28: the corpus is `docs/` ONLY (both fictional/web bank
-  sheets — Atlas, then a web-compiled Al Baraka set — were deleted with their
-  chunk maps, their question cases, `questions_v2.json`, `answer_ab.py` and every
-  machinery addition from that round was reverted). The set is being rebuilt to 50
-  docs/-based cases STEP BY STEP with the owner verifying each batch; the five
-  target-state categories and the multi-evidence schema will be RE-INTRODUCED the
-  same way, each in its own reviewed step. All pre-2026-09-28 numbers are
-  historical (their corpora/cases no longer match). Never copy from
-  `raglab/questions.json`, `questions_real.json`, or `benchmarks/retrieval_dev.json`.
+- **Benchmark set**: `raglab/questions_50.json` — **50 cases** (2026-09-30, complete:
+  owner approved the 2.1 matrix with «أنجز» and batches أ–د were authored the same
+  session; ids q01–q50 with no gaps) over the four `docs/` documents only:
+  `verbatim` (10), `paraphrase` (20), `cross-lingual` (15 = fr 6 + en 9),
+  `out-of-scope` (5, must have NO expected match). Languages: 32 ar / 8 fr / 10 en;
+  per document Loi 12 / Circulaire 10 / Guide 11 / Madkhal 12. Every
+  expected_substring is a verbatim span of the ADOPTED corrected codices
+  (post-2026-09-30 adoption), machine-verified present in its expected document's
+  adopted-arm chunks AND distinctive corpus-wide (shared concepts like murabaha
+  carry document-distinctive evidence); the design + execution record lives in
+  `raglab/audits/QUESTIONS_MATRIX.md`. The five target-state categories and the
+  multi-evidence schema will be RE-INTRODUCED as individually reviewed steps (2.4).
+  All pre-2026-09-28 numbers are historical (their corpora/cases no longer match).
+  Never copy from `raglab/questions.json`, `questions_real.json`, or
+  `benchmarks/retrieval_dev.json`.
 - **BM25-only A/B harness**: `raglab/harness50.py` (no API calls; deterministic).
 - **Real-model A/B**: `.github/workflows/real-test.yml` (manual trigger, spends API
   calls, reads repo secrets) + `raglab/real_report.py` (table builder).
