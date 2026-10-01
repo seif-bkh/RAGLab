@@ -62,6 +62,13 @@ Current state of the work:
   arm (a real-test.yml target-set step, pending owner authorization).
   Integrity guarded by `TargetSetIntegrity`; record:
   `raglab/audits/PHASE3_INTERVENTIONS.md`.
+- **Phase-4 knowledge layer (plan stage)**: `raglab/audits/PHASE4_KNOWLEDGE.md`
+  — the 8-item plans for building the knowledge layer on Loi 2016-48 (owner's
+  2026-10-01 choice): units.py with functional types and stable ids, the
+  governance-axes registry, the two minimal relations tables (grounding +
+  cross-references), the structured-numbers path as a NEW additive endpoint
+  (first input: the Circulaire corrections table, option ج 2026-09-28), and
+  unit-line test indexing. No build yet — the plans are the contract.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
