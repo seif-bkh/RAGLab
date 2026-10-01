@@ -69,7 +69,13 @@ Current state of the work:
   governance-axes registry, the two minimal relations tables (grounding +
   cross-references), the structured-numbers path as a NEW additive endpoint
   (first input: the Circulaire corrections table, option ج 2026-09-28), and
-  unit-line test indexing. No build yet — the plans are the contract.
+  unit-line test indexing. **Item 1 BUILT (2026-10-01, execution record in the
+  plan)**: `raglab/units.py` + declared data `raglab/units_loi_2016_48.json`
+  — 198/198 articles, verbatim codex text (blank separator lines preserved),
+  stable `loi-2016-48:artNNN` ids, العنوان>الباب>الفصل paths, governed
+  TYPE_RULES (first match wins; distribution 7/28/3/56/104 + numeric flag on
+  66) awaiting the owner's item-6 veto review; read-only layer, no deploy
+  change. Guarded by `UnitsExtraction`.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;

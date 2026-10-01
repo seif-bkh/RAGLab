@@ -1670,6 +1670,40 @@ class Phase2Machinery(unittest.TestCase):
         self.assertEqual(out3["context"]["n"], 1)
         self.assertEqual(out3["context"]["evidence_in_context"], 1.0)
 
+    def test_print_report_handles_sets_without_out_of_scope(self):
+        """Regression (live run 36838058003): a question set with ZERO
+        out-of-scope cases (the Phase-3 target set) crashed print_report on
+        None max_top1_score. The report must print an explicit absence."""
+        import io
+        import evaluate as ev
+
+        def row(**extra):
+            base = {"id": "t1", "question": "س", "category": "colloquial",
+                    "language": "ar", "evaluable": True,
+                    "hit_at_1": True, "hit_at_3": True, "hit_at_5": True,
+                    "is_out_of_scope": False,
+                    "hits": [{"id": "c1", "score": 0.5, "text": "نص"}],
+                    "correct_rank": 1, "correct_score": 0.5, "correct_id": "c1"}
+            base.update(extra)
+            return base
+
+        rows = [row(), row(id="t2", hit_at_1=False, hit_at_3=True,
+                           correct_rank=2, correct_score=0.4)]
+        run = {
+            "generated_at": "2026-10-01T00:00:00+00:00",
+            "config": {"provider": "fake", "embedding_model": "fake",
+                       "chunk_size_tokens": 640, "chunk_overlap_tokens": 40,
+                       "split_on_headings_first": True, "retrieval_top_k": 20,
+                       "hybrid": False, "retrieval_mode": "vector"},
+            "questions": rows,
+            "metrics": ev.compute_metrics(rows),
+        }
+        self.assertEqual(run["metrics"]["out_of_scope"]["n"], 0)
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            ev.print_report(run)          # must not raise
+        self.assertIn("no out-of-scope questions", buf.getvalue())
+
 
 class ModelIndependenceAB(unittest.TestCase):
     """answer_ab.run_comparison (step 2.4-ج): fixed retrieval, swapped answer
@@ -2045,6 +2079,77 @@ class RerankerDeterministic(unittest.TestCase):
                             variant_strategy='original')
         self.assertEqual(hits3[0]['id'], 'ar.md::chunk_0000')
         self.assertIn('rerank', hits3[0])
+
+
+class UnitsExtraction(unittest.TestCase):
+    """Phase-4 item 1: Loi 2016-48 knowledge units — article-level split from
+    the adopted codex through the SHARED marker machinery (restructure.
+    _extract_markers), verbatim bodies (paragraph breaks preserved), stable
+    article-based ids, governed functional types."""
+
+    @staticmethod
+    def _units():
+        import restructure, units
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        return units.extract_law_units(codex), codex
+
+    def test_full_coverage_and_verbatim(self):
+        import units
+        uls, codex = self._units()
+        cov = units.coverage_report(uls, codex)
+        self.assertEqual(cov["n_units"], 198)
+        self.assertEqual(cov["first_article"], 1)
+        self.assertEqual(cov["last_article"], 198)
+        self.assertEqual(cov["missing_numbers"], [])
+        self.assertEqual(cov["duplicate_ids"], 0)
+        self.assertEqual(cov["empty_bodies"], 0)
+        self.assertEqual(cov["empty_descriptions"], 0)
+        self.assertTrue(cov["all_text_verbatim_in_codex"])
+
+    def test_stable_ids_and_determinism(self):
+        uls, _ = self._units()
+        again, _ = self._units()
+        self.assertEqual(uls, again)
+        self.assertEqual([u["unit_id"] for u in uls],
+                         [f"loi-2016-48:art{i:03d}" for i in range(1, 199)])
+
+    def test_ordinal_first_article_and_heading_paths(self):
+        uls, _ = self._units()
+        first = uls[0]
+        self.assertEqual(first["heading"], "الفصل الاول")
+        self.assertIn("الفصل الاول", first["path"])
+        self.assertIn(">", first["path"])          # العنوان > الباب > الفصل
+        art183 = next(u for u in uls if u["unit_id"].endswith("art183"))
+        self.assertEqual(art183["path"],
+                         "العنوان التاسع > الباب الثاني > الفصل183")
+
+    def test_governed_types_on_known_articles(self):
+        uls, _ = self._units()
+        by_id = {u["unit_id"]: u for u in uls}
+        self.assertEqual(by_id["loi-2016-48:art183"]["type"], "penalty")
+        self.assertTrue(by_id["loi-2016-48:art183"]["numeric"])
+        self.assertEqual(by_id["loi-2016-48:art010"]["type"], "definition")
+        # the type table's declared order is the governance: first match wins
+        import units
+        self.assertEqual(units._classify("يعاقب بالسجن...")[0], "penalty")
+        self.assertEqual(units._classify("تعتبر خدمات دفع على معنى")[0], "definition")
+        self.assertEqual(units._classify("نص عام لا قواعد له")[0], "general")
+
+    def test_description_is_the_body_head(self):
+        import re
+        uls, _ = self._units()
+        for u in uls[::37]:               # deterministic sample
+            flat = re.sub(r"\s+", " ", u["text"]).strip()
+            self.assertTrue(flat.startswith(u["description"][:40]))
+            self.assertLessEqual(len(u["description"]), 181)
+
+    def test_emitted_data_file_matches_extraction(self):
+        import json as _json
+        from pathlib import Path as _Path
+        uls, _ = self._units()
+        data = _json.loads((_Path(__file__).resolve().parent
+                            / "units_loi_2016_48.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["units"], uls)
 
 
 class TargetSetIntegrity(unittest.TestCase):

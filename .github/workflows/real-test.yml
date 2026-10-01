@@ -154,7 +154,7 @@ jobs:
         working-directory: raglab
         run: |
           python3 - <<'EOF'
-          import json, os
+          import json
           parts = []
           for label, path in (("deployed", "results/harness50/targets_default.json"),
                               ("lexicon", "results/harness50/targets_lexicon.json")):
@@ -169,10 +169,10 @@ jobs:
               parts.append(f"{label} n={o['n']} overall="
                            f"{(o['hit@1'] or 0)*100:.0f}/{(o['hit@3'] or 0)*100:.0f}/{(o['hit@5'] or 0)*100:.0f} "
                            f"[{cats}]")
-          if parts:
-              print("ANNO| targets-set | " + " | ".join(parts))
-          else:
-              print("ANNO| targets-set | no run JSONs found")
+          msg = " | ".join(parts) if parts else "no run JSONs found"
+          print("ANNO| targets-set | " + msg)          # log-readable form
+          enc = msg.replace("%", "%25").replace(":", "%3A")
+          print(f"::warning::targets-set | {enc}")     # annotation channel
           EOF
 
       # continue-on-error: the retrieval A/B is the deliverable; an answer-smoke failure is

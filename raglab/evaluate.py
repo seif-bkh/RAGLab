@@ -589,23 +589,34 @@ def print_report(run: dict):
     s = m["separation"]
     print("\n--- SEPARATION (mean ranking score) ---")
     print("  (ranking score = cosine similarity in vector mode, RRF in hybrid mode)")
+    # Degenerate sets (no retrieved correct chunk, or no incorrect chunk at all
+    # — e.g. single-hit synthetic rows) leave these None; report, don't crash.
     print(f"  correct chunk            : {s['mean_correct_score']:.4f} "
-          f"(n={s['n_correct_retrieved']})")
+          f"(n={s['n_correct_retrieved']})"
+          if s["mean_correct_score"] is not None
+          else "  correct chunk            : not computable (no correct chunk retrieved)")
     print(f"  best incorrect chunk     : {s['mean_best_incorrect_score']:.4f} "
-          f"(n={s['n_with_best_incorrect']})")
+          f"(n={s['n_with_best_incorrect']})"
+          if s["mean_best_incorrect_score"] is not None
+          else "  best incorrect chunk     : not computable (no incorrect chunk)")
     print(f"  gap (correct - incorrect): {s['gap_mean_correct_minus_best_incorrect']:.4f}"
           if s["gap_mean_correct_minus_best_incorrect"] is not None
           else "  gap: not computable (no correct chunk was ever retrieved)")
 
     os_ = m["out_of_scope"]
     print("\n--- OUT-OF-SCOPE (no expected match; what a refusal threshold must beat) ---")
-    print(f"  n={os_['n']}   max top-1 score={os_['max_top1_score']:.4f}   "
-          f"mean top-1 score={os_['mean_top1_score']:.4f}")
-    for item in os_["per_question"]:
-        score = item["max_score"]
-        print(f"  {item['id']:<6} max={score:.4f}  "
-              f"top chunk: {item['top_chunk_id']} | "
-              f"{item['top_chunk_text'][:90]}...")
+    if os_["n"] == 0:
+        # Sets with no out-of-scope questions (e.g. the Phase-3 target set) are
+        # legitimate: report the absence instead of crashing on None scores.
+        print("  n=0   (no out-of-scope questions in this set)")
+    else:
+        print(f"  n={os_['n']}   max top-1 score={os_['max_top1_score']:.4f}   "
+              f"mean top-1 score={os_['mean_top1_score']:.4f}")
+        for item in os_["per_question"]:
+            score = item["max_score"]
+            print(f"  {item['id']:<6} max={score:.4f}  "
+                  f"top chunk: {item['top_chunk_id']} | "
+                  f"{item['top_chunk_text'][:90]}...")
 
     print("\n" + "=" * 78)
     print("INTERPRETATION")
