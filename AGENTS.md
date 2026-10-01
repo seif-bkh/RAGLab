@@ -594,8 +594,8 @@ Channels that WORK (use in this order):
   (45 answerable: 30 ar / 9 en / 6 fr; k=20). By language ar `43/57/60 → 67/87/93`,
   en `44/89/89 → 67/100/100`, fr `33/33/33 → 33/33/33` (lexical ceiling — the
   live vector arm in 3.2 decides the fr gap). OOS (5): max top-1 score 11.8 (base)
-  vs 11.4 (restructure). Until the owner adopts them, these numbers are measured
-  and reproducible but not yet fixed as targets.
+  vs 11.4 (restructure). ADOPTED 2026-10-01 (owner gate) together with the 3.2
+  live numbers as the official Phase 3-7 reference baselines.
 - **FORMAL 3.2 live run (2026-10-01, tag `real-test-3.2-20261001`, run
   36818475024, commit `e9694dd`; record: `raglab/audits/PHASE2_BASELINES.md`)**:
   NVIDIA nemotron embeddings, adopted 50-case set, k=20. Chunking A/B (vector
@@ -605,10 +605,13 @@ Channels that WORK (use in this order):
   fr: vector `50/67/67` > rrf `33/33/50` ~= blend `33/33/67` — on this set the
   pure vector arm leads and BM25 fusion hurts fr. Complementarity noted: the
   live vector misses (q01-q03) are BM25 hits and vice versa (q18/q28/q29/q33) —
-  input for the Phase-3 deterministic reranker. The hybrid-default DECISION is
-  the owner's gate. Answer smoke: nvidia attempt rejected by the citation gate
-  (quote not in cited source), google fallback answered validated (known,
-  documented behavior).
+  input for the Phase-3 deterministic reranker. DECIDED 2026-10-01 (owner gate):
+  vector stays the structural default (the roadmap's data rule — rrf did not
+  beat it without regression); rrf/blend remain explicit options and the
+  decision is reopenable on new data. Answer smoke: nvidia attempt rejected by
+  the citation gate (quote not in cited source), google fallback answered
+  validated (known, documented behavior). ADOPTED 2026-10-01 with the 3.1
+  numbers as the official reference baselines.
 - **BM25-only A/B on the FULLY-ADOPTED corpus (2026-09-30, INTERIM — the current
   30-case set, not the final 50; regenerable via `harness50.py`)**: overall hit@1/3/5
   size-220/40 `44/76/80` → restructure (all four corrected codices) `60/92/100`;
