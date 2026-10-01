@@ -84,8 +84,13 @@ Current state of the work:
   stable `loi-2016-48:artNNN` ids, العنوان>الباب>الفصل paths, governed
   TYPE_RULES (first match wins; distribution 7/28/3/56/104 + numeric flag on
   66) **ADOPTED as-is (owner gate round 4, 2026-10-01) — item 1 COMPLETE**;
-  read-only layer, no deploy change. Guarded by `UnitsExtraction`. Item 2
-  (governance-axes registry) build STARTED under the same authorization.
+  read-only layer, no deploy change. Guarded by `UnitsExtraction`. **Item 2
+  BUILT**: `raglab/governance.py` — declared 6-axis registry (law fully
+  registered: قانون / سلطة تشريعية عليا / JORT 58-2016 / نافذ / العموم /
+  البنوك والمؤسسات المالية; the other three docs explicitly DEFERRED);
+  axes ride on chunk metadata at ingest via `store.store_chunks` (additive —
+  no retrieval/eval change). Guarded by `GovernanceRegistry` (fingerprint
+  checks: registry+deferred == corpus, no phantoms, no empty axes).
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;

@@ -2081,6 +2081,78 @@ class RerankerDeterministic(unittest.TestCase):
         self.assertIn('rerank', hits3[0])
 
 
+class GovernanceRegistry(unittest.TestCase):
+    """Phase-4 item 2: the governance-axes registry — declared axes riding on
+    chunk metadata at ingest; law fully registered, the other three corpus
+    documents explicitly DEFERRED (minimal axes are a later reviewed
+    extension); fingerprint checks keep registry and corpus in sync."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        self.cfg = make_config(NVIDIA_MIN_INTERVAL=0, NVIDIA_CHAT_STREAM=False,
+                              QUERY_TRANSLATION_PROMPT='basic-v1',
+                              NVIDIA_EMBEDDING_CACHE_PATH=self.path / 'embeddings.json',
+                              EMBEDDING_CACHE_PATH=self.path / 'embeddings.json',
+                              QUERY_TRANSLATION_CACHE_PATH=self.path / 'translations.json',
+                              ANSWER_CACHE_PATH=self.path / 'answers.json',
+                              CHROMA_DIR=self.path / 'chroma')
+
+    @staticmethod
+    def _corpus_docs():
+        import harness50
+        from loader import load_all
+        return [d["name"] for d in load_all(harness50.DOCS_DIRS)]
+
+    def test_registry_covers_corpus_exactly(self):
+        import governance
+        docs = self._corpus_docs()
+        self.assertEqual(len(docs), 4)             # the corpus contract
+        self.assertTrue(governance.registry_ok(docs), governance.registry_report(docs))
+        report = governance.registry_report(docs)
+        self.assertEqual(report["registered"], ["Loi_2016-48.pdf"])
+        self.assertEqual(len(report["deferred"]), 3)
+
+    def test_axes_for_law_full_others_empty(self):
+        import governance
+        law = governance.axes_for("Loi_2016-48.pdf")
+        self.assertEqual(set(law), set(governance.AXES))
+        self.assertEqual(law["gov_type"], "قانون")
+        self.assertEqual(law["gov_status"], "نافذ")
+        for deferred in governance.DEFERRED_DOCUMENTS:
+            self.assertEqual(governance.axes_for(deferred), {})
+
+    def test_fingerprint_checks_flag_phantom_and_undeclared(self):
+        import governance
+        # a registry entry for a document not in the corpus → phantom
+        report = governance.registry_report(["Only_Doc.pdf"])
+        self.assertEqual(report["phantom_entries"], ["Loi_2016-48.pdf"])
+        self.assertEqual(report["unregistered_undeclared"], ["Only_Doc.pdf"])
+        self.assertFalse(governance.registry_ok(["Only_Doc.pdf"]))
+        # the real corpus passes
+        self.assertTrue(governance.registry_ok(self._corpus_docs()))
+
+    def test_axes_ride_on_chunk_metadata_at_ingest(self):
+        import governance
+        def chunk(index, source, text):
+            return SimpleNamespace(index=index, source=source, language="ar", text=text,
+                                   heading="", origin="test/", section_type="content",
+                                   token_count=20)
+        chunks = [chunk(0, "Loi_2016-48.pdf", "الفصل الاول ..."),
+                  chunk(0, "Guide_Interne_Operations_Bancaires_Islamiques.docx", "دليل")]
+        vectors = [[1.0] + [0.0] * 2047, [0.0, 1.0] + [0.0] * 2046]
+        collection = get_collection(self.cfg, reset=True)
+        self.assertEqual(store_chunks(collection, list(zip(chunks, vectors)), self.cfg), 2)
+        got = collection.get(include=["metadatas"])["metadatas"]
+        law_meta = next(m for m in got if m["document"] == "Loi_2016-48.pdf")
+        guide_meta = next(m for m in got if m["document"].startswith("Guide"))
+        for axis in governance.AXES:
+            self.assertIn(axis, law_meta)          # all six axes on the law
+            self.assertEqual(law_meta[axis], governance.axes_for("Loi_2016-48.pdf")[axis])
+            self.assertNotIn(axis, guide_meta)     # deferred doc stays clean
+
+
 class UnitsExtraction(unittest.TestCase):
     """Phase-4 item 1: Loi 2016-48 knowledge units — article-level split from
     the adopted codex through the SHARED marker machinery (restructure.

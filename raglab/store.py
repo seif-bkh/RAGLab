@@ -20,6 +20,7 @@ import chromadb
 
 from chunker import chunk_fingerprint
 from embedder import _vector_issue, embedding_fingerprint
+import governance
 
 # ---------------------------------------------------------------------------
 # Collection handling
@@ -215,7 +216,10 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
             ids.append(f"{chunk.source}::chunk_{chunk.index:04d}")
             embeddings.append(embedding)
             documents.append(chunk.text)
-            metadatas.append({
+            # Phase-4 item 2: declared governance axes ride on every chunk of
+            # a registered document ({} for deferred/unregistered docs).
+            meta = governance.axes_for(chunk.source)
+            meta.update({
                 "document": chunk.source,
                 "language": chunk.language,
                 "heading": chunk.heading,
@@ -229,6 +233,7 @@ def store_chunks(collection, chunks_with_embeddings: list, cfg) -> int:
                 "token_count": chunk.token_count,
                 "chunk_fp": chunk_fp(cfg),
             })
+            metadatas.append(meta)
 
         if ids:
             collection.add(ids=ids, embeddings=embeddings,
