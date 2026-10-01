@@ -224,6 +224,31 @@ Current state of the work:
 - **Phase-7 decision brief** written: raglab/audits/PHASE7_DECISION_BRIEF.md
   (identity/roles options, disclosure policy, reference precedence
   confirmation, activation gates table, change-cycle question).
+- **The seven experiments EXECUTED (owner directive «أنجزها كلها»,
+  2026-10-01; records in raglab/audits/PHASE7_EXPERIMENTS.md):**
+  1. gates live-arm measurement in CI (commitment outcomes + disagreement
+     ids in the sufficiency annotation);
+  2. precedence flip proven (winner flips official<->raw; mixed questions
+     unaffected — conflict needs both values anchored);
+  3. `raglab/micro_retrieval.py` — per-micro retrieval & RRF fusion behind
+     PER_MICRO_RETRIEVAL_ENABLED (default OFF; single-micro short-circuits
+     to plain); local BM25: neutral on hit@k (+1 paraphrase@1) with rank
+     dilution on multi-requirement cases (t06 9->13, t08 8->14); live A/B
+     step added (micro_50/micro_targets vs same-run baselines); guarded by
+     `MicroRetrievalTest` (6);
+  4. `raglab/change_cycle.py` — the document change cycle as declared
+     tooling (registration gates, chunk preview, impact plan, blockers;
+     never mutates docs/ or registries); guarded by `ChangeCycleTest` (3);
+  5. threshold tuning data now produced by CI (disagreement ids); any
+     change must keep the deterministic zero-error gate green;
+  6. `AdversarialGateTest` (6): cross-source forged quote, invented quote,
+     computed number, unknown citation, inline marker, question injection —
+     all refused by the deterministic gate; semantic identity claims
+     documented as a known (out-of-scope) limit;
+  7. `raglab/demo_service.py` — a live no-keys demo service (deterministic
+     embedder + quote-bot through the REAL citation gate, real docs corpus,
+     rrf, all phase-5/6 gates ON) for the owner to try interactively.
+  Suites: 224 (pipeline) + 64 (service) OK; offline gate EXIT=0.
 - **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
   `raglab/decompose.py` (read-only): the intermediate decomposition layer.
   EVERY question → reformulated micro-questions, each with its partial

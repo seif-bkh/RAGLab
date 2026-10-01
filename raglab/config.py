@@ -290,6 +290,11 @@ SUFFICIENCY_FIELDS_ENABLED = os.getenv("SUFFICIENCY_FIELDS_ENABLED", "0") == "1"
 # micro-questions and the response is tagged partial.
 ANSWER_SUFFICIENCY_COMMITMENT = os.getenv("ANSWER_SUFFICIENCY_COMMITMENT", "0") == "1"
 
+# Experiment 3 (2026-10-01): per-micro retrieval & fusion — retrieval runs
+# per decomposed micro-question and RRF-fuses the pools. Default OFF;
+# measured deterministic-first, then live same-run, before any activation.
+PER_MICRO_RETRIEVAL_ENABLED = os.getenv("PER_MICRO_RETRIEVAL_ENABLED", "0") == "1"
+
 # Phase-6 item 3: the request audit trail (always on — it is operational
 # bookkeeping, never changes a response). Entries live under RESULTS_DIR.
 AUDIT_LOG_MAX_ENTRIES = int(os.getenv("AUDIT_LOG_MAX_ENTRIES", "500"))

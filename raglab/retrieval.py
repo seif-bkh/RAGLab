@@ -6,7 +6,17 @@ from translate import detect_language
 
 def retrieve(cfg, embedder, collection, text, *, language=None, translator=None,
              mode="vector", top_k=5, candidate_k=None, lang_filter=None,
-             variant_strategy=None, blend_lambda=None):
+             variant_strategy=None, blend_lambda=None, _in_micro=False):
+    if (getattr(cfg, "PER_MICRO_RETRIEVAL_ENABLED", False) and not _in_micro
+            and top_k > 1):
+        # Experiment 3: search per decomposed micro-question, then fuse.
+        # The guard keeps the inner per-micro calls on the plain path.
+        import micro_retrieval
+        return micro_retrieval.retrieve_micro(
+            cfg, embedder, collection, text, top_k=top_k, language=language,
+            translator=translator, mode=mode, candidate_k=candidate_k,
+            lang_filter=lang_filter, variant_strategy=variant_strategy,
+            blend_lambda=blend_lambda)
     if top_k <= 0:
         raise ValueError("top_k must be positive")
     if mode not in {"vector", "rrf", "blend"}:

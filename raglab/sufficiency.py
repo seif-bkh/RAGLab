@@ -570,6 +570,8 @@ def measure(cases: list[dict], search_fn, k: int = 20,
             "id": case["id"], "category": case["category"],
             "intent": res["intent_type"], "state": state,
             "expected": expected, "effective": effective,
+            "n_covered": sum(1 for x in res["requirements"] if x["covered"]),
+            "n_requirements": len(res["requirements"]),
             "one_shot_gold": one_shot, "final_gold": final,
             "guided_rounds": res["guided_rounds"],
             "missing": res["missing"],
@@ -696,6 +698,7 @@ def main() -> int:
                 report[name]["states"].get(r["state"], 0) + 1
         report[name]["per_case_compact"] = [
             {"id": r["id"], "state": r["state"], "expected": r["expected"],
+             "n_covered": r["n_covered"], "n_requirements": r["n_requirements"],
              "guided_rounds": len(r["guided_rounds"]), "rescued": r["rescued"]}
             for r in m["per_case"]]
     print(json.dumps(report, ensure_ascii=False, indent=1))

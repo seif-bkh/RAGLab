@@ -218,6 +218,52 @@ jobs:
           set -o pipefail
           export CHUNKING_MODE=restructure
           python sufficiency.py --live 2>&1 | tee /tmp/raglab_ci/sufficiency_live.log
+      - name: Per-micro retrieval (Experiment 3) — deployed vs per-micro fusion
+        working-directory: raglab
+        run: |
+          set -o pipefail
+          export CHUNKING_MODE=restructure
+          export PER_MICRO_RETRIEVAL_ENABLED=1
+          python main.py evaluate --skip-sanity-check --no-translation \
+            --top-k 20 --questions questions_50.json 2>&1 | tee /tmp/raglab_ci/micro_50.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/harness50/micro_50.json
+          python main.py evaluate --skip-sanity-check --no-translation \
+            --top-k 20 --questions questions_targets.json 2>&1 | tee /tmp/raglab_ci/micro_targets.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/harness50/micro_targets.json
+
+      - name: Post the per-micro numbers as an annotation
+        if: always()
+        working-directory: raglab
+        run: |
+          python3 - <<'EOF'
+          import json
+          def overall(path):
+              try:
+                  return json.load(open(path, encoding="utf-8"))["metrics"]["overall"]
+              except Exception:
+                  return None
+          def fmt(o):
+              if not o:
+                  return "n/a"
+              return (f"{(o['hit@1'] or 0)*100:.0f}/{(o['hit@3'] or 0)*100:.0f}/"
+                      f"{(o['hit@5'] or 0)*100:.0f}")
+          parts = []
+          b50 = overall("results/harness50/real_eval_restructure.json")
+          m50 = overall("results/harness50/micro_50.json")
+          if b50 and m50:
+              parts.append(f"50set base {fmt(b50)} vs micro {fmt(m50)}")
+          bt = overall("results/harness50/targets_default.json")
+          mt = overall("results/harness50/micro_targets.json")
+          if bt and mt:
+              parts.append(f"targets base {fmt(bt)} vs micro {fmt(mt)}")
+          msg = " | ".join(parts) if parts else "no per-micro run JSONs found"
+          print("ANNO| per-micro | " + msg)
+          enc = msg.replace("%", "%25").replace(":", "%3A").replace("|", "%7C")
+          print(f"::warning::per-micro | {enc}")
+          EOF
+
       - name: Post the sufficiency distribution as an annotation
         if: always()
         working-directory: raglab
@@ -240,10 +286,19 @@ jobs:
           parts = []
           for name, m in report.items():
               states = " ".join(f"{k}={v}" for k, v in m.get("states", {}).items())
+              per = m.get("per_case_compact") or []
+              dis = [r["id"] for r in per
+                     if (r["state"] == "كافٍ" and r["expected"] == "غير كافٍ")
+                     or (r["state"] == "غير كافٍ" and r["expected"] == "كافٍ")]
+              refused_before = [r["id"] for r in per
+                                if r["state"] == "غير كافٍ" and r["n_covered"] == 0]
+              partial = [r["id"] for r in per
+                         if r["state"] == "غير كافٍ" and r["n_covered"] > 0]
               parts.append(f"{name}: {states} | FS={m.get('false_sufficient')} "
                            f"FR={m.get('false_refusal')} esc={m.get('escalated')} "
-                           f"agree={m.get('agreement')}")
-          msg = " | ".join(parts)
+                           f"agree={m.get('agreement')} | disagree={','.join(dis) or '-'} "
+                           f"| commitment: refused-before-model={len(refused_before)} "
+                           f"({','.join(refused_before) or '-'}) partial={len(partial)}")
           print("ANNO| sufficiency-live | " + msg)
           enc = msg.replace("%", "%25").replace(":", "%3A").replace("|", "%7C")
           print(f"::warning::sufficiency-live | {enc}")
@@ -386,6 +441,8 @@ jobs:
             raglab/results/harness50/expansion_50.json
             raglab/results/harness50/expansion_targets.json
             raglab/results/harness50/sufficiency_live.json
+            raglab/results/harness50/micro_50.json
+            raglab/results/harness50/micro_targets.json
             raglab/results/harness50/real_answer_murabaha.json
           if-no-files-found: ignore
           retention-days: 30

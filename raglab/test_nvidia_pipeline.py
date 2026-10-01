@@ -2535,6 +2535,136 @@ class EvidencePlanDerivation(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "")
 
 
+class ChangeCycleTest(unittest.TestCase):
+    """Experiment 4: the document change cycle as declared tooling —
+    deterministic preparation, owner gates that STOP, no mutation of docs/
+    or the registries."""
+
+    def test_deferred_document_reports_owner_gates(self):
+        import change_cycle
+        from pathlib import Path
+        docs = Path(__file__).resolve().parent.parent / "docs"
+        report = change_cycle.cycle_report(docs / "Madkhal_Sayrafa_Islamiya.docx")
+        self.assertEqual(report["governance"]["status"], "deferred")
+        self.assertIn("OWNER GATE", report["governance"]["note"])
+        self.assertFalse(report["ready_to_publish"])
+        self.assertIn("governance axes not registered", report["blockers"][1]
+                      if len(report["blockers"]) > 1 else report["blockers"][0])
+        # the deterministic part is still derived
+        self.assertEqual(report["chunk_preview"]["chunks_after_addition"], 339)
+        self.assertEqual(len(report["impact_plan"]), 5)
+
+    def test_registered_document_ready(self):
+        import change_cycle
+        from pathlib import Path
+        docs = Path(__file__).resolve().parent.parent / "docs"
+        report = change_cycle.cycle_report(docs / "Loi_2016-48.pdf")
+        self.assertEqual(report["governance"]["status"], "registered")
+        self.assertTrue(report["ready_to_publish"])
+        self.assertEqual(report["blockers"], [])
+
+    def test_unknown_document_blocks(self):
+        import change_cycle
+        from pathlib import Path
+        docs = Path(__file__).resolve().parent.parent / "docs"
+        report = change_cycle.cycle_report(docs / "Nonexistent.pdf")
+        self.assertFalse(report["exists"])
+        self.assertFalse(report["ready_to_publish"])
+        self.assertTrue(any("not in the corpus" in b for b in report["blockers"]))
+
+
+class MicroRetrievalTest(unittest.TestCase):
+    """Experiment 3: per-micro retrieval & fusion behind
+    PER_MICRO_RETRIEVAL_ENABLED (default OFF). Fusion is reciprocal-rank
+    over the per-micro pools, deduplicated, deterministic, with per-micro
+    provenance (micro_ranks) attached additively."""
+
+    @staticmethod
+    def _pool(prefix, ids):
+        return [{"id": f"{prefix}{i}", "rank": r, "text": f"text {i}",
+                 "metadata": {"document": "Loi_2016-48.pdf"}}
+                for r, i in enumerate(ids, start=1)]
+
+    def test_fusion_rrf_order_and_dedup(self):
+        import micro_retrieval as M
+        a = self._pool("x", ["p1", "p2", "p3"])      # ranks 1,2,3
+        b = self._pool("x", ["p2", "p4", "p1"])      # ranks 1,2,3
+        fused = M.fuse_micro_pools([a, b], k=10)
+        # p1: 1/61 + 1/63 ; p2: 1/62 + 1/61 ; p3: 1/63 ; p4: 1/62
+        self.assertEqual([h["id"] for h in fused][:2], ["xp2", "xp1"])
+        self.assertEqual(len(fused), 4)               # deduplicated
+        self.assertEqual([h["rank"] for h in fused], [1, 2, 3, 4])
+        # deterministic: same pools, same output
+        self.assertEqual(fused, M.fuse_micro_pools([a, b], k=10))
+
+    def test_fusion_respects_k(self):
+        import micro_retrieval as M
+        pools = [self._pool("x", [f"p{i}" for i in range(1, 8)])]
+        self.assertEqual(len(M.fuse_micro_pools(pools, k=3)), 3)
+
+    def test_micro_questions_capped_and_ordered(self):
+        import micro_retrieval as M
+        q = ("ما قيمة غرامة التأخير اليومية عن عدم تقديم الوثائق المطلوبة، "
+             "ومن يحدد مبلغها النهائية؟")
+        micros = M.micro_questions(q)
+        self.assertGreaterEqual(len(micros), 3)       # main + 2 sub-plans
+        self.assertLessEqual(len(micros), M.MICROS_MAX)
+        # main micros first
+        self.assertTrue(all(m["source_kind"] == "main"
+                            for m in micros[:1]))
+        # every micro carries its intent + requirement + answerable surfaces
+        for m in micros:
+            self.assertTrue(m["intent_type"])
+            self.assertTrue(m["requirement"])
+            self.assertTrue(m["answerable_from"])
+
+    def test_gate_wiring_delegates_per_micro(self):
+        import micro_retrieval as M
+        from types import SimpleNamespace
+        calls = {"n": 0}
+
+        def fake_retrieve(cfg, embedder, collection, text, **kw):
+            calls["n"] += 1
+            ids = ["a1", "a2"] if "العقوبة" in text else ["b1", "b2"]
+            return self._pool("", ids), [{"label": "ar(original)", "lang": "ar",
+                                          "translated": False, "text": text}]
+
+        cfg = SimpleNamespace(PER_MICRO_RETRIEVAL_ENABLED=True)
+        q = "ما العقوبة على مخالفة أحكام القانون، وما قيمة الغرامة بالدينار؟"
+        micros = M.micro_questions(q)
+        with patch("retrieval.retrieve", side_effect=fake_retrieve):
+            hits, variants = M.retrieve_micro(cfg, None, None, q, top_k=5)
+        # one retrieve call per micro
+        self.assertEqual(calls["n"], len(micros))
+        # fused: hits from BOTH micro pools present, with provenance
+        ids = {h["id"] for h in hits}
+        self.assertTrue({"a1", "b1"} <= ids)
+        prov = [h for h in hits if h.get("metadata", {}).get("micro_ranks")]
+        self.assertTrue(prov)
+        # the main question's variants are the outer contract
+        self.assertEqual(variants[0]["lang"], "ar")
+
+    def test_single_micro_short_circuits_to_plain(self):
+        import micro_retrieval as M
+        from types import SimpleNamespace
+        calls = {"n": 0}
+
+        def fake_retrieve(cfg, embedder, collection, text, **kw):
+            calls["n"] += 1
+            return self._pool("", ["s1"]), []
+
+        cfg = SimpleNamespace(PER_MICRO_RETRIEVAL_ENABLED=True)
+        with patch("retrieval.retrieve", side_effect=fake_retrieve):
+            hits, _ = M.retrieve_micro(cfg, None, None,
+                                       "ما هي عملية المرابحة؟", top_k=5)
+        self.assertEqual(calls["n"], 1)               # plain path, no fusion
+        self.assertEqual(hits[0]["id"], "s1")
+
+    def test_gate_default_off(self):
+        import config
+        self.assertFalse(config.PER_MICRO_RETRIEVAL_ENABLED)
+
+
 class CitationGateExpansion(unittest.TestCase):
     """Phase-6 item 1: stable unit ids on sources + the deterministic
     expansion of the citation gate — a cited source must be actually
