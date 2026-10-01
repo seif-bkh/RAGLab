@@ -50,8 +50,9 @@ Current state of the work:
   authoring-round measurement. Strictly separate from the retired translation
   path. Exact whole-word surface forms; Arabic definite forms need their own
   rows. Plan + record: `raglab/audits/PHASE3_INTERVENTIONS.md`.
-- **Target-category set** (Phase-3 authoring round, 2026-10-01, PRESENTED FOR
-  ADOPTION): `raglab/questions_targets.json` — 10 Arabic cases, 2 per target
+- **Target-category set** (Phase-3 authoring round, 2026-10-01, ADOPTED by
+  the owner together with the live-measurement authorization):
+  `raglab/questions_targets.json` — 10 Arabic cases, 2 per target
   category (colloquial/synonyms/implicit/compound/ambiguous; ambiguous cases
   carry declared influential-ambiguity notes; implicit/compound carry 2
   requirements each). Every evidence substring verified present in the

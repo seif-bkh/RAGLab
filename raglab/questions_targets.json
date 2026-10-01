@@ -1,5 +1,5 @@
 {
- "_comment": "Target-state category set (Phase-3 authoring round, 2026-10-01, owner-authorized): 10 cases, 2 per target category (colloquial / synonyms / implicit / compound / ambiguous). The adopted 50-case set stays frozen as the regression baseline; this set measures the lexicon and reranker on the categories they were built for. All evidence verified verbatim against the adopted corrected codex (stored form). Ambiguous cases carry a declared influential-ambiguity note per the 2.4-أ rule. PRESENTED FOR ADOPTION — not yet adopted.",
+ "_comment": "Target-state category set (Phase-3 authoring round, 2026-10-01, owner-authorized): 10 cases, 2 per target category (colloquial / synonyms / implicit / compound / ambiguous). The adopted 50-case set stays frozen as the regression baseline; this set measures the lexicon and reranker on the categories they were built for. All evidence verified verbatim against the adopted corrected codex (stored form). Ambiguous cases carry a declared influential-ambiguity note per the 2.4-أ rule. ADOPTED 2026-10-01 (owner gate) together with the live measurement authorization.",
  "cases": [
   {
    "id": "t01",
