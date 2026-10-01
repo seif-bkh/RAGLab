@@ -137,6 +137,60 @@
       "expected_substring": "1166 مليار دولار امريكي سنة 2012"
     },
     {
+      "id": "q16",
+      "question": "ما هي عملية المرابحة على معنى القانون عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "يعلن فيها عن راس المال ونسبة الربح"
+    },
+    {
+      "id": "q17",
+      "question": "من يتولى مهمة الرقابة على البنوك والمؤسسات المالية حسب القانون عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "يتولى البنك المركزي التونسي مهمة الرقابة على البنوك والمؤسسات المالية"
+    },
+    {
+      "id": "q18",
+      "question": "ما العقوبة الجزائية لممارسة العمليات البنكية خلافا لأحكام القانون عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "يعاقب بالسجن من ثلاثة اشهر الى ثلاثة اعوام"
+    },
+    {
+      "id": "q19",
+      "question": "كيف يعالج القانون عدد 48 لسنة 2016 مسألة تضارب المصالح داخل البنوك والمؤسسات المالية؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "سياسة تهدف الى احكام التصرف في تضارب المصالح"
+    },
+    {
+      "id": "q20",
+      "question": "ما هو الإطار الذي أقامه القانون عدد 48 لسنة 2016 لمراقبة مطابقة معايير الصيرفة الاسلامية داخل البنوك؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "مدقق عمليات الصيرفة الاسلامية"
+    },
+    {
+      "id": "q21",
+      "question": "ما هو الصندوق الذي أحدثه القانون عدد 48 لسنة 2016 لضمان ودائع المودعين لدى البنوك؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "صندوق ضمان الودائع البنكية"
+    },
+    {
       "id": "q26",
       "question": "En quelle année et dans quelle ville la Banque Islamique de Développement a-t-elle été fondée ?",
       "language": "fr",
@@ -153,6 +207,24 @@
       "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
       "expected_lang": "ar",
       "expected_substring": "Nasser Social Bank"
+    },
+    {
+      "id": "q28",
+      "question": "Quelle structure la loi n° 48-2016 charge-t-elle du traitement des difficultés des banques ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "لجنة الانقاذ"
+    },
+    {
+      "id": "q29",
+      "question": "Que doivent constituer les banques et établissements financiers pour étudier leurs questions communes selon la loi n° 48-2016 ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "جمعية مهنية"
     },
     {
       "id": "q38",
