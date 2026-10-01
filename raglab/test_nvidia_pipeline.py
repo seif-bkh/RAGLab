@@ -2370,6 +2370,89 @@ class UnitIndexMeasure(unittest.TestCase):
         self.assertEqual(base["hit@5"], 1.0)
 
 
+class IntentClassification(unittest.TestCase):
+    """Phase-5 item 1: deterministic-first intent — declared INTENT_RULES (first
+    match wins, every decision explained), the DECLARED default path for the
+    unclassifiable, personal framing, explicit-document scope only, compound
+    splitting, and influential-ambiguity detection (MASTER_INDEX §6 shared
+    concepts) resolved by scope. The layer is INERT: nothing in the deployed
+    retrieval path imports it."""
+
+    def test_known_types_from_the_adopted_sets(self):
+        import intent
+        cases = {
+            "ما العقوبتان الجزائيتان المقررتان في القانون؟": "عقوبي",
+            "قارن بين صيغتي المضاربة من حيث حرية البنك في استثمار أموال الحريف.": "مقارن",
+            "ما الصيغة التي يشارك فيها العميل بخبرته وإدارته فقط؟": "تعريفي",
+            "ما الحد الأقصى لرأس مال البنك المقيم؟": "رقمي",
+            "على أي أساس يمنح البنك تسليفا للحريف دون فوائد؟": "إجرائي",
+        }
+        for q, expected in cases.items():
+            r = intent.classify(q)
+            self.assertEqual(r["intent_type"], expected, q)
+            self.assertTrue(r["fired_rules"], q)          # explained decisions
+
+    def test_unclassifiable_gets_the_declared_default_path(self):
+        import intent
+        r = intent.classify("اشتريت سيارة أمس وذهبت إلى السوق")
+        self.assertEqual(r["intent_type"], "غير مصنف")
+        self.assertTrue(r["default_path"])
+        self.assertFalse(r["fired_rules"])
+
+    def test_personal_framing(self):
+        import intent
+        r = intent.classify("هل يمكنني فتح حساب مرابحة لدى البنك؟")
+        self.assertTrue(r["personal"])
+        self.assertFalse(intent.classify("ما هي المرابحة؟")["personal"])
+
+    def test_scope_only_from_explicit_document_naming(self):
+        import intent
+        self.assertEqual(intent.classify("ماذا يقول الدليل عن المرابحة؟")["scope"],
+                         "Guide_Interne_Operations_Bancaires_Islamiques.docx")
+        self.assertEqual(intent.classify("ماذا يقول قانون عدد 48؟")["scope"],
+                         "Loi_2016-48.pdf")
+        self.assertIsNone(intent.classify("ما هي المرابحة؟")["scope"])  # never assumed
+
+    def test_influential_ambiguity_and_scope_resolution(self):
+        import intent
+        r = intent.classify("ما هي المضاربة؟")
+        self.assertEqual(r["ambiguous_concepts"], ["المضاربة"])
+        r2 = intent.classify("ما هي المضاربة حسب المنشور؟")
+        self.assertEqual(r2["scope"], "Circulaire_BCT_2019-08.pdf")
+        self.assertEqual(r2["ambiguous_concepts"], [])    # scope resolves it
+        self.assertIn(("scope-resolves-ambiguity",
+                       "Circulaire_BCT_2019-08.pdf"), r2["fired_rules"])
+
+    def test_compound_splitting(self):
+        import intent
+        q = ("في المضاربة المقيدة: من يتحمل مخاطر الاستثمار، وعلى ماذا يرتبط "
+             "عائد الودائع الاستثمارية؟")
+        r = intent.classify(q)
+        self.assertIsNotNone(r["sub_questions"])
+        self.assertEqual(len(r["sub_questions"]), 2)
+        self.assertIsNone(intent.classify("ما هي المرابحة؟")["sub_questions"])
+
+    def test_unclassified_ratio_zero_on_both_adopted_sets(self):
+        """The measured contract (plan item 1.7's threshold): 0% unclassified."""
+        import json as _json
+        import intent
+        for name in ("questions_50.json", "questions_targets.json"):
+            cases = _json.loads((Path(__file__).resolve().parent / name)
+                                .read_text(encoding="utf-8"))["cases"]
+            report = intent.unclassified_ratio(cases)
+            self.assertEqual(report["unclassified"], 0, name)
+            self.assertEqual(report["n"], 50 if "50" in name else 10)
+
+    def test_layer_is_inert_in_the_deployed_path(self):
+        """Nothing in the deployed retrieval/answer path imports intent."""
+        import subprocess
+        out = subprocess.run(
+            ["grep", "-l", "import intent", "retrieval.py", "store.py",
+             "evaluate.py", "answer_ab.py", "service.py", "main.py"],
+            capture_output=True, text=True, cwd=Path(__file__).resolve().parent)
+        self.assertEqual(out.stdout.strip(), "")
+
+
 class UnitsExtraction(unittest.TestCase):
     """Phase-4 item 1: Loi 2016-48 knowledge units — article-level split from
     the adopted codex through the SHARED marker machinery (restructure.

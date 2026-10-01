@@ -120,6 +120,17 @@ Current state of the work:
   index 100/100/100 vs same-run baseline 67/92/92 — GATE PASS** (every law
   question, cross-lingual included, finds its article at rank 1 on the
   description surface).
+- **Phase-5 understanding layer (plan ADOPTED, item 1 BUILT)**:
+  `raglab/audits/PHASE5_UNDERSTANDING.md` is the adopted contract (owner
+  round 8); `raglab/intent.py` — deterministic-first intent: declared
+  INTENT_RULES (ordered, first-match-wins, Arabic + Latin patterns for
+  cross-lingual), explained decisions (fired_rules), personal framing,
+  explicit-document scope only, compound splitting, influential-ambiguity
+  detection (MASTER_INDEX §6 shared concepts) resolved by explicit scope;
+  unclassified = declared default path. Measured: 0% unclassified on BOTH
+  adopted sets (iterative honest derivation from 50%/60%). INERT layer —
+  nothing in the deployed path imports it (regression-guarded); wiring is
+  item 3 behind a measured env gate. Guarded by `IntentClassification`.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
