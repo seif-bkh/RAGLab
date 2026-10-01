@@ -26,7 +26,17 @@ from artifacts import write_json
 from store import (best_variant_merge, blend_hybrid, collection_languages,
                    keyword_search, query_vector, rrf_merge)
 
-VALID_CATEGORIES = {"verbatim", "paraphrase", "cross-lingual", "out-of-scope"}
+# Core categories (the original benchmark contract) plus the target-state
+# transition categories (RAGLAB_GAP_ANALYSIS.md §10 / RAGLAB_ROADMAP.md Phase 2
+# step 2.4-أ, owner direction 2026-10-01 «طيب واصل المرحلة الثانية»):
+#   colloquial — Tunisian dialect vs the corpus's formal wording
+#   synonyms   — institutional vocabulary gap (المرادفات)
+#   implicit   — the request is not named verbatim; needs multiple evidence
+#   compound   — explicit multi-requirement question
+#   ambiguous  — materially underspecified; clarification expected, evidence
+#                region still defined (must carry an ambiguity_note)
+VALID_CATEGORIES = {"verbatim", "paraphrase", "cross-lingual", "out-of-scope",
+                    "colloquial", "synonyms", "implicit", "compound", "ambiguous"}
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +63,11 @@ def load_question_set(path: Path) -> list[dict]:
         if case.get("category") not in VALID_CATEGORIES:
             problems.append(f"invalid category {case.get('category')!r}")
         out_of_scope = case.get("category") == "out-of-scope"
+        # Materially ambiguous questions must DECLARE what the ambiguity is
+        # (the target-state contract: غموض مؤثر مصرَّح) — an undeclared
+        # ambiguity cannot be graded.
+        if case.get("category") == "ambiguous" and not (case.get("ambiguity_note") or "").strip():
+            problems.append("ambiguous case must carry a non-empty ambiguity_note")
         has_expected = (
             case.get("expected_chunk_index") is not None
             or bool(case.get("expected_substring"))

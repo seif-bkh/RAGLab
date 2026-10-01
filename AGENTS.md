@@ -189,9 +189,14 @@ that deliverable. Key outcomes (all verified in code this session):
    (`tests_offline.py`, `test_nvidia_pipeline.py`, `test_hard_harness.py`,
    `main.py inspect`, …) — never move or rename them.
 3. Question-set format follows `raglab/evaluate.py`
-   (`load_question_set`): categories `{verbatim, paraphrase, cross-lingual, out-of-scope}`;
-   out-of-scope questions must have no expected match. (Extending this list is a
-   roadmap Phase-2 step and will update this constraint when re-introduced.)
+   (`load_question_set`): categories `{verbatim, paraphrase, cross-lingual, out-of-scope}`
+   plus the five target-state categories re-introduced 2026-10-01 (step 2.4-أ,
+   owner «طيب واصل المرحلة الثانية»): `{colloquial, synonyms, implicit, compound,
+   ambiguous}` — `ambiguous` cases must carry a non-empty `ambiguity_note`;
+   out-of-scope questions must have no expected match. Multi-evidence cases
+   (step 2.4-ب) may carry `expected_substrings` (non-empty list of non-empty
+   strings) scored by requirement completion. Plans + execution records:
+   `raglab/audits/PHASE2_MACHINERY.md`.
 4. **Never commit `raglab/.env` or any API key value.** The keys exist as GitHub Actions
    repo secrets named `NVIDIA_API_KEY`, `XKIRO_API_KEY` (and `GOOGLE_API_KEY` for the
    LLM fallback) — added by the user 2026-09-07. Reference them by name in workflows;

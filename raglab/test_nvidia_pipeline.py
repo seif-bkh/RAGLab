@@ -1524,5 +1524,55 @@ class AdoptedCodexRepair(unittest.TestCase):
         self.assertIn("نص مخزون خام", md)
 
 
+class Phase2Machinery(unittest.TestCase):
+    """Step 2.4 machinery re-introductions (owner: «طيب واصل المرحلة الثانية»,
+    2026-10-01) — each sub-step individually reviewed, per the 2026-09-28
+    decision that the Phase-2 machinery comes back one declared step at a time.
+
+    2.4-أ: the five target-state categories join VALID_CATEGORIES (the four
+    core categories unchanged); ambiguous cases must DECLARE their material
+    ambiguity (ambiguity_note) — an undeclared ambiguity cannot be graded.
+    """
+
+    def _write_set(self, tmpdir, cases):
+        import json as _json
+        p = Path(tmpdir) / "q.json"
+        p.write_text(_json.dumps({"cases": cases}, ensure_ascii=False), encoding="utf-8")
+        return p
+
+    def test_five_target_categories_are_valid(self):
+        import evaluate as ev
+        for cat in ("colloquial", "synonyms", "implicit", "compound", "ambiguous"):
+            self.assertIn(cat, ev.VALID_CATEGORIES)
+        for cat in ("verbatim", "paraphrase", "cross-lingual", "out-of-scope"):
+            self.assertIn(cat, ev.VALID_CATEGORIES)
+        self.assertNotIn("target-state", ev.VALID_CATEGORIES)
+
+    def test_ambiguous_case_requires_declared_ambiguity(self):
+        import evaluate as ev
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            ok = self._write_set(tmp, [dict(
+                id="a1", question="كم تكلفة البطاقة؟", language="ar",
+                category="ambiguous", expected_document="Loi_2016-48.pdf",
+                expected_lang="ar", expected_substring="البطاقات",
+                ambiguity_note="الغموض المؤثر: أي بطاقة؛ الإجابة الجيدة تطلب التحديد")])
+            with patch("builtins.print"):  # silence the loader's info line
+                ev.load_question_set(ok)   # no exception, no warning needed
+            bare = self._write_set(tmp, [dict(
+                id="a2", question="كم تكلفة البطاقة؟", language="ar",
+                category="ambiguous", expected_document="Loi_2016-48.pdf",
+                expected_lang="ar", expected_substring="البطاقات")])
+            with patch("builtins.print") as pr:
+                ev.load_question_set(bare)
+            self.assertIn("ambiguity_note", "\n".join(str(a) for a in pr.call_args_list))
+
+    def test_current_50_case_set_still_loads_clean(self):
+        import evaluate as ev
+        with patch("builtins.print"):
+            cases = ev.load_question_set(Path(__file__).parent / "questions_50.json")
+        self.assertEqual(len(cases), 50)
+
+
 if __name__ == '__main__':
     unittest.main()
