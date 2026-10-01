@@ -2453,6 +2453,86 @@ class IntentClassification(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "")
 
 
+class EvidencePlanDerivation(unittest.TestCase):
+    """Phase-5 item 2: evidence plans derived from intent WITHOUT assuming the
+    answer — declared DERIVATION_RULES (veto requirement by requirement),
+    compound requests get one sub-plan per sub-question, and on both adopted
+    sets every typed-evidence case is consistent with its derived plan (100%)."""
+
+    def test_derivation_deterministic_and_explained(self):
+        import evidence_plan as ep
+        p1 = ep.derive_plan("ما هي المرابحة؟")
+        p2 = ep.derive_plan("ما هي المرابحة؟")
+        self.assertEqual(p1, p2)
+        self.assertEqual(p1["intent_type"], "تعريفي")
+        self.assertEqual([r["req"] for r in p1["requirements"]],
+                         ["definition_or_purpose_unit"])
+        # عقوبي derives TWO requirements: the penalty unit AND its governing rule
+        pen = ep.derive_plan("ما العقوبة على ممارسة النشاط البنكي دون ترخيص؟")
+        self.assertEqual([r["req"] for r in pen["requirements"]],
+                         ["penalty_unit", "with_governing_rule"])
+        # unclassified → the declared wide requirement (no type assumption)
+        wide = ep.derive_plan("اشتريت سيارة أمس وذهبت إلى السوق")
+        self.assertEqual([r["req"] for r in wide["requirements"]], ["wide_evidence"])
+
+    def test_compound_gets_sub_plans(self):
+        import evidence_plan as ep
+        q = ("في المضاربة المقيدة: من يتحمل مخاطر الاستثمار، وعلى ماذا يرتبط "
+             "عائد الودائع الاستثمارية؟")
+        plan = ep.derive_plan(q)
+        self.assertEqual(len(plan["sub_plans"]), 2)
+        self.assertTrue(all(sp["requirements"] for sp in plan["sub_plans"]))
+
+    def test_requirement_satisfaction_kinds(self):
+        import evidence_plan as ep
+        case = {"question": "ما هي المرابحة؟", "expected_substring": "x"}
+        definition = {"type": "definition", "text": "تعتبر تمويلا بالمرابحة",
+                      "unit_id": "u1", "numeric": False}
+        self.assertTrue(ep.requirement_satisfied(
+            {"req": "definition_or_purpose_unit"}, case, [definition], set()))
+        # entity/purpose questions accept institutional provisions
+        entity_case = {"question": "ما هو الصندوق الذي أحدثه القانون؟"}
+        general = {"type": "general", "text": "تتكون لجنة الانقاذ من",
+                   "unit_id": "u2", "numeric": False}
+        self.assertTrue(ep.requirement_satisfied(
+            {"req": "definition_or_purpose_unit"}, entity_case, [general], set()))
+        penalty = {"type": "penalty", "text": "يعاقب طبقا للفصل24",
+                   "unit_id": "u3", "numeric": True}
+        self.assertTrue(ep.requirement_satisfied(
+            {"req": "penalty_unit"}, case, [penalty], set()))
+        self.assertTrue(ep.requirement_satisfied(
+            {"req": "with_governing_rule"}, case, [penalty], set()))
+        self.assertTrue(ep.requirement_satisfied(
+            {"req": "numeric_evidence"}, case, [penalty], set()))
+        self.assertIsNone(ep.requirement_satisfied(   # untyped → never guessed
+            {"req": "penalty_unit"}, case, [], set()))
+
+    def test_coverage_contract_on_both_adopted_sets(self):
+        """The plan's measurable contract: 100% typed-evidence consistency."""
+        import json as _json
+        import evidence_plan as ep
+        import restructure, units, legal_numbers
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        law_units = units.extract_law_units(codex)
+        numeric_ids = {r["unit_id"] for r in
+                       legal_numbers.extract_legal_numbers(law_units)}
+        for name, n_typed in (("questions_50.json", 16), ("questions_targets.json", 2)):
+            cases = _json.loads((Path(__file__).resolve().parent / name)
+                                .read_text(encoding="utf-8"))["cases"]
+            m = ep.measure_coverage(cases, law_units, numeric_ids)
+            self.assertEqual(m["derived_plans"], m["n"], name)
+            self.assertEqual(m["typed_evidence_cases"], n_typed, name)
+            self.assertEqual(m["consistency_ratio"], 1.0, name)
+
+    def test_layer_is_inert_in_the_deployed_path(self):
+        import subprocess
+        out = subprocess.run(
+            ["grep", "-l", "import evidence_plan", "retrieval.py", "store.py",
+             "evaluate.py", "answer_ab.py", "service.py", "main.py", "intent.py"],
+            capture_output=True, text=True, cwd=Path(__file__).resolve().parent)
+        self.assertEqual(out.stdout.strip(), "")
+
+
 class UnitsExtraction(unittest.TestCase):
     """Phase-4 item 1: Loi 2016-48 knowledge units — article-level split from
     the adopted codex through the SHARED marker machinery (restructure.

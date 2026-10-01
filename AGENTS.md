@@ -131,6 +131,15 @@ Current state of the work:
   adopted sets (iterative honest derivation from 50%/60%). INERT layer —
   nothing in the deployed path imports it (regression-guarded); wiring is
   item 3 behind a measured env gate. Guarded by `IntentClassification`.
+  **Item 2 BUILT**: `raglab/evidence_plan.py` — declared DERIVATION_RULES
+  deriving evidence REQUIREMENTS from intent (what must be present, never
+  the answer; عقوبي needs the penalty unit AND its governing rule; the
+  unclassified get the wide no-assumption requirement; compound gets
+  sub-plans). Honest iterative derivation: strict-definition first pass 75%
+  → entity/purpose refinement → 100% consistency on both sets (16/16 +
+  2/2 typed-evidence cases; untyped evidence reported, never guessed).
+  Read-only layer, regression-guarded inert. Guarded by
+  `EvidencePlanDerivation`.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
