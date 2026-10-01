@@ -50,6 +50,18 @@ Current state of the work:
   authoring-round measurement. Strictly separate from the retired translation
   path. Exact whole-word surface forms; Arabic definite forms need their own
   rows. Plan + record: `raglab/audits/PHASE3_INTERVENTIONS.md`.
+- **Target-category set** (Phase-3 authoring round, 2026-10-01, PRESENTED FOR
+  ADOPTION): `raglab/questions_targets.json` — 10 Arabic cases, 2 per target
+  category (colloquial/synonyms/implicit/compound/ambiguous; ambiguous cases
+  carry declared influential-ambiguity notes; implicit/compound carry 2
+  requirements each). Every evidence substring verified present in the
+  restructure arm (fatal=0). The adopted 50-case set stays frozen as the
+  regression baseline. Deterministic pre-measurement (BM25 arm): lexicon lifts
+  t01 3->1 with zero regressions; the set is deliberately BM25-hard
+  (synonyms/colloquial lexical gaps) — the decisive measurement is the live
+  arm (a real-test.yml target-set step, pending owner authorization).
+  Integrity guarded by `TargetSetIntegrity`; record:
+  `raglab/audits/PHASE3_INTERVENTIONS.md`.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;

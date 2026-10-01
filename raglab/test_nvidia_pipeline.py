@@ -2047,6 +2047,36 @@ class RerankerDeterministic(unittest.TestCase):
         self.assertIn('rerank', hits3[0])
 
 
+class TargetSetIntegrity(unittest.TestCase):
+    """Phase-3 authoring round: the target-category set (questions_targets.json)
+    stays schema-valid, balanced (2 per target category) and evidence-anchored
+    to the four adopted documents. PRESENTED-FOR-ADOPTION state is part of the
+    file's _comment; adoption flips it in this test's expectations."""
+
+    def test_target_set_loads_balanced_and_anchored(self):
+        import evaluate
+        cases = evaluate.load_question_set(
+            Path(__file__).resolve().parent / "questions_targets.json")
+        self.assertEqual(len(cases), 10)
+        cats = {}
+        for c in cases:
+            cats[c["category"]] = cats.get(c["category"], 0) + 1
+            self.assertIn(c["expected_document"], (
+                "Circulaire_BCT_2019-08.pdf",
+                "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+                "Loi_2016-48.pdf", "Madkhal_Sayrafa_Islamiya.docx"))
+            self.assertEqual(c["language"], "ar")
+            if c["category"] == "ambiguous":
+                self.assertTrue((c.get("ambiguity_note") or "").strip())
+            if c["category"] in ("implicit", "compound"):
+                self.assertEqual(len(c["expected_substrings"]), 2)
+        self.assertEqual(cats, {"colloquial": 2, "synonyms": 2, "implicit": 2,
+                                "compound": 2, "ambiguous": 2})
+        # ids are unique and namespaced away from the adopted 50-set
+        self.assertEqual(len({c["id"] for c in cases}), 10)
+        self.assertTrue(all(c["id"].startswith("t") for c in cases))
+
+
 class RealReportModes(unittest.TestCase):
     """Phase 2 step 3.2: real_report.py builds the retrieval-mode comparison
     (vector vs rrf vs blend on the restructure arm) and carries it into the

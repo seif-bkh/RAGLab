@@ -1,0 +1,109 @@
+{
+ "_comment": "Target-state category set (Phase-3 authoring round, 2026-10-01, owner-authorized): 10 cases, 2 per target category (colloquial / synonyms / implicit / compound / ambiguous). The adopted 50-case set stays frozen as the regression baseline; this set measures the lexicon and reranker on the categories they were built for. All evidence verified verbatim against the adopted corrected codex (stored form). Ambiguous cases carry a declared influential-ambiguity note per the 2.4-أ rule. PRESENTED FOR ADOPTION — not yet adopted.",
+ "cases": [
+  {
+   "id": "t01",
+   "question": "ما الفرق بين صاحب حساب التسليف الحسن وصاحب الحساب الاستثماري؟",
+   "language": "ar",
+   "category": "colloquial",
+   "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+   "expected_lang": "ar",
+   "expected_substring": "صاحب حساب جار على اساس"
+  },
+  {
+   "id": "t02",
+   "question": "على أي أساس يمنح البنك تسليفا للحريف دون فوائد؟",
+   "language": "ar",
+   "category": "colloquial",
+   "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+   "expected_lang": "ar",
+   "expected_substring": "امكانية تجاوز السقف على اساس القرض الحسن"
+  },
+  {
+   "id": "t03",
+   "question": "ما الصيغة التي يشارك فيها العميل بخبرته وإدارته فقط دون أن يدفع رأس مال؟",
+   "language": "ar",
+   "category": "synonyms",
+   "expected_document": "Circulaire_BCT_2019-08.pdf",
+   "expected_lang": "ar",
+   "expected_substring": "وتقتصر مساهمة الحريف فيه على الخبرة والتسيير"
+  },
+  {
+   "id": "t04",
+   "question": "ما صيغة التمويل التي يقوم فيها البنك بتمويل تصنيع شيء وفق مواصفات محددة لفائدة حريفه؟",
+   "language": "ar",
+   "category": "synonyms",
+   "expected_document": "Circulaire_BCT_2019-08.pdf",
+   "expected_lang": "ar",
+   "expected_substring": "تمويل صنع منقول او عقار بمواصفات معينة لفائدة حريفه بصفته مستصنعا"
+  },
+  {
+   "id": "t05",
+   "question": "قارن بين صيغتي المضاربة من حيث حرية البنك في استثمار أموال الحريف.",
+   "language": "ar",
+   "category": "implicit",
+   "expected_document": "Circulaire_BCT_2019-08.pdf",
+   "expected_lang": "ar",
+   "expected_substrings": [
+    "المضاربة المقيدة وهي تكليف الحريف البنك باستثمار امواله في اصول محددة",
+    "المضاربة المطلقة وهي ترك الحرية للبنك لاستثمار اموال الحريف دون قيد او شرط"
+   ]
+  },
+  {
+   "id": "t06",
+   "question": "ما العقوبتان الجزائيتان المقررتان في القانون لممارسة النشاط البنكي دون ترخيص وللاستعمال المحدث للبس لدى الغير؟",
+   "language": "ar",
+   "category": "implicit",
+   "expected_document": "Loi_2016-48.pdf",
+   "expected_lang": "ar",
+   "expected_substrings": [
+    "يعاقب بالسجن من ثلاثة اشهر الى ثلاثة اعوام وبخطية من مائة الف دينار الى مليون دينار",
+    "يعاقب بالسجن من شهر الى ثلاثة اشهر او بخطية مالية تتراوح من عشرة الف دينار الى خمسين الف دينار"
+   ]
+  },
+  {
+   "id": "t07",
+   "question": "في المضاربة المقيدة: من يتحمل مخاطر الاستثمار، وعلى ماذا يرتبط عائد الودائع الاستثمارية؟",
+   "language": "ar",
+   "category": "compound",
+   "expected_document": "Circulaire_BCT_2019-08.pdf",
+   "expected_lang": "ar",
+   "expected_substrings": [
+    "وفي هذه الحالة تكون مخاطر الاستثمار محمولة على الحريف",
+    "يكون عائد الودائع الاستثمارية مرتبطا بنتائج الاستثمار"
+   ]
+  },
+  {
+   "id": "t08",
+   "question": "ما قيمة غرامة التأخير اليومية عن عدم تقديم الوثائق المطلوبة، ومن يحدد مبلغها النهائي؟",
+   "language": "ar",
+   "category": "compound",
+   "expected_document": "Loi_2016-48.pdf",
+   "expected_lang": "ar",
+   "expected_substrings": [
+    "بغرامة مالية تقدر بمائتي دينار عن كل يوم تاخير",
+    "ويحدد محافظ البنك المركزي التونسي المبلغ النهائي للغرامة المالية"
+   ]
+  },
+  {
+   "id": "t09",
+   "question": "من يتحمل الخسائر؟",
+   "language": "ar",
+   "category": "ambiguous",
+   "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+   "expected_lang": "ar",
+   "expected_substring": "يتحمل المضارب بالعمل جميع الخسائر الناتجة عن ذلك",
+   "ambiguity_note": "غموض مؤثر مصرح: تحمل الخسائر يتحدد بصيغة التمويل وسبب الخسارة — في المضاربة يتحملها رب المال إلا عند التعدي أو التقصير فيتحملها المضارب بالعمل (المدخل)، وفي المشاركة تتوزع بحسب الحصص، وللبنك ترتيبات امتصاص الخسائر المتراكمة برأس المال (القانون). الجواب يختلف مصدرا ومضمونا بحسب القراءة؛ التقييم مثبت على المدخل لأنه أعرض عرض لقاعدة المضارب بالعمل."
+  },
+  {
+   "id": "t10",
+   "question": "ما شروط التمويل بالمشاركة؟",
+   "language": "ar",
+   "category": "ambiguous",
+   "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+   "expected_lang": "ar",
+   "expected_substring": "يعتبر تمويلا بصيغة المشاركة كل عملية يتولى بموجبها البنك مشاركة حريف لمدة مضبوطة وبنسبة محددة",
+   "ambiguity_note": "غموض مؤثر مصرح: لفظ الشروط يحتمل الضوابط الشرعية التشغيلية (الدليل 3.1.2) أو الاطار التنظيمي (المنشور الفصل 10) أو أحكام الممارسة القانونية (القانون) — الجواب يختلف مصدرا ومضمونا. التقييم مثبت على الدليل (تعريفه يتضمن شروط المدة والنسبة والمشروع)."
+  }
+ ]
+}
