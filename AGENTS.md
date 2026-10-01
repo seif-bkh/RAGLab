@@ -212,6 +212,18 @@ Current state of the work:
   Suites: 215 (pipeline) + 58 (service) OK; offline gate EXIT=0. Phase 7
   remains pending owner decisions (identity provider, disclosure policy,
   reference precedence).
+- **1.3.0 LIVE (run 36934799191, tag real-test-phase6-20261001): zero
+  regression everywhere** (50set 71/80/87, targets 50/70/70, units-index
+  100/100/100 PASS, answer smoke validated). NEW: sufficiency measured on
+  the LIVE vector arm (`sufficiency.py --live`): 50set كافٍ37/غير كافٍ10/
+  غير محسوم3, FS=3 FR=4 agree=0.86; targets 8/2, FS=1 FR=1 agree=0.80 —
+  honest reading recorded in PHASE6_DELIVERY.md (lexical anchoring's
+  precision bound on the vector arm; fields-for-display = reasonable
+  activation candidate, commitment stays OFF pending the owner's review of
+  the 9 disagreement cases in the preserved sufficiency_live.json).
+- **Phase-7 decision brief** written: raglab/audits/PHASE7_DECISION_BRIEF.md
+  (identity/roles options, disclosure policy, reference precedence
+  confirmation, activation gates table, change-cycle question).
 - **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
   `raglab/decompose.py` (read-only): the intermediate decomposition layer.
   EVERY question → reformulated micro-questions, each with its partial
