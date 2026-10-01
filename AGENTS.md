@@ -40,6 +40,13 @@ Current state of the work:
   Never copy from `raglab/questions.json`, `questions_real.json`, or
   `benchmarks/retrieval_dev.json`.
 - **BM25-only A/B harness**: `raglab/harness50.py` (no API calls; deterministic).
+- **Model-independence tool** (re-introduced 2026-10-01, step 2.4-ج):
+  `raglab/answer_ab.py` — ONE retrieval per question fed identically to N answer
+  models (`--model provider/model-id`, first is the reference); pairwise status
+  agreement + source-Jaccard, substance-divergent question lists, per-model
+  refusal/gate counts; offline-testable with injected factories. Running it
+  (step 3.3) spends answer-model calls and happens via CI exclusively. Plans:
+  `raglab/audits/PHASE2_MACHINERY.md`.
 - **Real-model A/B**: `.github/workflows/real-test.yml` (manual trigger, spends API
   calls, reads repo secrets) + `raglab/real_report.py` (table builder).
 - **CI**: `.github/workflows/ci.yml` — API-free, runs on every push, must stay green.

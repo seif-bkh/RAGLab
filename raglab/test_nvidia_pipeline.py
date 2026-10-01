@@ -1635,6 +1635,129 @@ class Phase2Machinery(unittest.TestCase):
         sources = ev.answer_context_sources(hits, cfg)
         self.assertLess(len(sources), len(hits))   # the budget drops sources
 
+    def test_compute_metrics_requirements_and_context_blocks(self):
+        import evaluate as ev
+
+        def row(**extra):
+            base = {"id": "q1", "question": "س", "category": "verbatim",
+                    "language": "ar", "evaluable": True,
+                    "hit_at_1": True, "hit_at_3": True, "hit_at_5": True,
+                    "is_out_of_scope": False,
+                    "hits": [{"id": "c1", "score": 0.5, "text": "نص"}],
+                    "correct_rank": 1, "correct_score": 0.5, "correct_id": "c1"}
+            base.update(extra)
+            return base
+
+        # legacy rows (no multi/context fields): both blocks stay None
+        out = ev.compute_metrics([row()])
+        self.assertIsNone(out["requirements"])
+        self.assertIsNone(out["context"])
+        # multi rows populate the requirements block; context stays None
+        multi = row(category="implicit", correct_rank=2,
+                    requirements_found=2, requirements_total=2,
+                    requirements_missing=[],
+                    requirements_all_in_context=True)
+        out2 = ev.compute_metrics([multi])
+        self.assertEqual(out2["requirements"]["n"], 1)
+        self.assertEqual(out2["requirements"]["all_requirements_top_k"], 1.0)
+        self.assertEqual(out2["requirements"]["all_requirements_in_context"], 1.0)
+        self.assertIsNone(out2["context"])
+        # a single-requirement row with evidence_in_context populates context
+        out3 = ev.compute_metrics([row(evidence_in_context=True)])
+        self.assertEqual(out3["context"]["n"], 1)
+        self.assertEqual(out3["context"]["evidence_in_context"], 1.0)
+
+
+class ModelIndependenceAB(unittest.TestCase):
+    """answer_ab.run_comparison (step 2.4-ج): fixed retrieval, swapped answer
+    models — one retrieval per question, identical hits to every arm, the
+    citation gate judging each arm."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        self.cfg = make_config(CHROMA_DIR=self.path / 'chroma',
+                               ANSWER_CACHE_PATH=self.path / 'answers.json')
+
+    def _collection(self):
+        def chunk(index, source, language, text):
+            return SimpleNamespace(index=index, source=source, language=language,
+                                   text=text, heading='', origin='test/',
+                                   section_type='content', token_count=20)
+        chunks = [chunk(0, 'ar.md', 'ar', 'تاسس بنك البركة في 1983.'),
+                  chunk(0, 'fr.md', 'fr', 'La banque Baraka a été fondée en 1983.')]
+        vectors = [[1.0] + [0.0] * 2047, [0.0, 1.0] + [0.0] * 2046]
+        collection = get_collection(self.cfg, reset=True)
+        store_chunks(collection, list(zip(chunks, vectors)), self.cfg)
+        return collection, vectors
+
+    def test_jaccard_edge_cases(self):
+        from answer_ab import _jaccard
+        self.assertIsNone(_jaccard([], []))
+        self.assertEqual(_jaccard(['a'], ['a']), 1.0)
+        self.assertEqual(_jaccard(['a'], ['b']), 0.0)
+        self.assertAlmostEqual(_jaccard(['a', 'b'], ['b', 'c']), 1 / 3)
+
+    def test_same_hits_all_arms_and_divergence_detection(self):
+        from answer_ab import run_comparison
+        collection, vectors = self._collection()
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+
+        class FakeGen:
+            def __init__(self, status, reason='insufficient_evidence'):
+                self.status, self.reason = status, reason
+                self.seen = []
+
+            def answer(self, question, hits, language, use_cache=True):
+                self.seen.append([h['id'] for h in hits])
+                if self.status == 'answered':
+                    return {'status': 'answered', 'reason': None, 'model': 'fake',
+                            'claims': [{'text': 'x'}],
+                            'sources': [{'chunk_id': hits[0]['id']}],
+                            'validation_ok': True}
+                return {'status': self.status, 'reason': self.reason, 'model': 'fake',
+                        'claims': [], 'sources': [], 'validation_ok': True}
+
+        a, b = FakeGen('answered'), FakeGen('refused')
+        cases = [{'id': 'q1', 'question': 'بنك البركة', 'language': 'ar',
+                  'category': 'verbatim'}]
+        report = run_comparison(self.cfg, fake_embedder, collection, cases,
+                                [('ref', a), ('alt', b)], top_k=2, mode='vector')
+        # both arms received the IDENTICAL hit ids (model independence)
+        self.assertEqual(a.seen, b.seen)
+        self.assertTrue(a.seen and a.seen[0])
+        # divergence detected: statuses differ -> substance-divergent question
+        pair = report['pairwise']['ref vs alt']
+        self.assertEqual(pair['status_agreement'], 0.0)
+        self.assertIn('q1', pair['substance_divergent_questions'])
+        self.assertEqual(report['per_model']['ref']['answered'], 1)
+        self.assertEqual(report['per_model']['alt']['refused'], 1)
+
+    def test_agreement_when_arms_match(self):
+        from answer_ab import run_comparison
+        collection, vectors = self._collection()
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+
+        class AgreeingGen:
+            def answer(self, question, hits, language, use_cache=True):
+                return {'status': 'answered', 'reason': None, 'model': 'fake',
+                        'claims': [{'text': 'a'}, {'text': 'b'}],
+                        'sources': [{'chunk_id': h['id']} for h in hits[:1]],
+                        'validation_ok': True}
+
+        cases = [{'id': 'q1', 'question': 'بنك البركة', 'language': 'ar',
+                  'category': 'verbatim'},
+                 {'id': 'q2', 'question': 'البركة 1983', 'language': 'ar',
+                  'category': 'verbatim'}]
+        report = run_comparison(self.cfg, fake_embedder, collection, cases,
+                                [('ref', AgreeingGen()), ('alt', AgreeingGen())],
+                                top_k=2, mode='vector')
+        pair = report['pairwise']['ref vs alt']
+        self.assertEqual(pair['status_agreement'], 1.0)
+        self.assertEqual(pair['mean_source_jaccard'], 1.0)
+        self.assertEqual(pair['substance_divergent_questions'], [])
+
 
 if __name__ == '__main__':
     unittest.main()
