@@ -299,6 +299,7 @@ jobs:
                            f"agree={m.get('agreement')} | disagree={','.join(dis) or '-'} "
                            f"| commitment: refused-before-model={len(refused_before)} "
                            f"({','.join(refused_before) or '-'}) partial={len(partial)}")
+          msg = " | ".join(parts)
           print("ANNO| sufficiency-live | " + msg)
           enc = msg.replace("%", "%25").replace(":", "%3A").replace("|", "%7C")
           print(f"::warning::sufficiency-live | {enc}")
