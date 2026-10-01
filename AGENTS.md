@@ -249,6 +249,18 @@ Current state of the work:
      embedder + quote-bot through the REAL citation gate, real docs corpus,
      rrf, all phase-5/6 gates ON) for the owner to try interactively.
   Suites: 224 (pipeline) + 64 (service) OK; offline gate EXIT=0.
+  LIVE results (run 36939129036, zero regression everywhere; records in
+  PHASE7_EXPERIMENTS.md): per-micro fusion on the live vector arm
+  50set 71/80/87 -> 69/78/87 (targets identical) — dilutes, gate stays
+  OFF, the phase-5 close-gate chase ends 'tried, measured, rejected';
+  commitment live: refused-before-model 11/50 + 2/10 targets, zero
+  partial; disagreement sets identified (FS=q01,q02,q03;
+  FR=q28,q29,q33,q42; targets t01,t03) — thresholds NOT touched without
+  the owner (FR cases are retrieval misses, FS cases are the mixed
+  Circulaire/law definition pattern).
+  Known ops note: gh artifact/log downloads (Azure blob) EOF'd for hours
+  after this run — check-run annotations API carries the headline
+  numbers when that happens.
 - **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
   `raglab/decompose.py` (read-only): the intermediate decomposition layer.
   EVERY question → reformulated micro-questions, each with its partial
