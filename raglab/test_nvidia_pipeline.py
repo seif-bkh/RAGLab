@@ -2217,6 +2217,80 @@ class RelationsExtraction(unittest.TestCase):
         self.assertEqual(data["grounding"], __import__("relations").GROUNDING_EDGES)
 
 
+class LegalNumbersExtraction(unittest.TestCase):
+    """Phase-4 item 4: the structured legal-numbers path — deterministic
+    extraction from the item-1 units via the governed NUM_WORDS vocabulary
+    (percentages, monetary limits, financial penalties, deadlines), every
+    record anchored to its unit with a verbatim raw span; plus the Circulaire
+    corrections table (option ج) whose official values are anchored verbatim
+    in the adopted Circulaire codex."""
+
+    @staticmethod
+    def _records():
+        import restructure, units, legal_numbers
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        law_units = units.extract_law_units(codex)
+        return law_units, legal_numbers.extract_legal_numbers(law_units)
+
+    def test_parse_number_phrase_governed_vocabulary(self):
+        import legal_numbers as ln
+        self.assertEqual(ln.parse_number_phrase("خمسة وعشرين مليون"), 25_000_000)
+        self.assertEqual(ln.parse_number_phrase("مائة الف"), 100_000)
+        self.assertEqual(ln.parse_number_phrase("عشرة ملايين"), 10_000_000)
+        self.assertEqual(ln.parse_number_phrase("مليوني"), 2_000_000)
+        self.assertEqual(ln.parse_number_phrase("مائتي"), 200)
+        self.assertEqual(ln.parse_number_phrase("خمسة عشرة"), 15)
+        self.assertIsNone(ln.parse_number_phrase("راس مال"))     # never guesses
+        self.assertIsNone(ln.parse_number_phrase("ثلاثة اعوام"))  # duration ≠ number
+
+    def test_validation_clean_with_exact_counts(self):
+        import restructure, units, legal_numbers as ln
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        law_units = units.extract_law_units(codex)
+        report = ln.validate_numbers(law_units)
+        self.assertEqual(report["violations"], [])
+        self.assertEqual(report["records"], 53)
+        self.assertEqual(report["by_kind"],
+                         {"نسبة": 14, "أجل": 28, "حد مالي": 5, "عقوبة مالية": 6})
+
+    def test_deterministic_and_verbatim_anchors(self):
+        law_units, first = self._records()
+        _, second = self._records()
+        self.assertEqual(first, second)
+        by_id = {u["unit_id"]: u for u in law_units}
+        for r in first:
+            self.assertIn(r["raw"], by_id[r["unit_id"]]["text"])   # verbatim anchor
+
+    def test_known_values(self):
+        _, records = self._records()
+        by_key = {(r["unit_id"], r["raw"]): r for r in records}
+        self.assertEqual(by_key[("loi-2016-48:art032", "خمسين مليون دينار")]["value"],
+                         50_000_000)
+        self.assertEqual(by_key[("loi-2016-48:art183", "مائة الف دينار")]["kind"],
+                         "عقوبة مالية")
+        self.assertEqual(by_key[("loi-2016-48:art183", "مائة الف دينار")]["value"],
+                         100_000)
+        self.assertEqual(by_key[("loi-2016-48:art181", "مائتي دينار")]["value"], 200)
+        word_pct = [r for r in records if r["raw"].endswith("في المائة")]
+        self.assertEqual(len(word_pct), 1)
+        self.assertEqual(word_pct[0]["value"], 5)
+
+    def test_corrections_table_anchored_in_adopted_codex(self):
+        import legal_numbers as ln
+        self.assertEqual(len(ln.CIRCULAIRE_CORRECTIONS), 15)
+        self.assertEqual(ln.validate_corrections(), [])
+        sections = {e["section"] for e in ln.CIRCULAIRE_CORRECTIONS}
+        self.assertEqual(sections, {"الترويسة", "الإحالات التشريعية", "ترقيم الفصول 14–20"})
+
+    def test_emitted_file_matches_extraction(self):
+        import json as _json
+        from pathlib import Path as _Path
+        law_units, records = self._records()
+        data = _json.loads((_Path(__file__).resolve().parent
+                            / "legal_numbers_loi_2016_48.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["law_numbers"], records)
+
+
 class UnitsExtraction(unittest.TestCase):
     """Phase-4 item 1: Loi 2016-48 knowledge units — article-level split from
     the adopted codex through the SHARED marker machinery (restructure.

@@ -99,6 +99,17 @@ Current state of the work:
   ONLY the literal «من هذا القانون» form counts, so other-law references
   never become edges). validate_relations enforces verbatim evidence +
   existing targets; no graph store. Guarded by `RelationsExtraction`.
+  **Item 4 BUILT**: `raglab/legal_numbers.py` + declared data
+  `legal_numbers_loi_2016_48.json` — 53 deterministic records (14 نسبة /
+  28 أجل / 5 حد مالي / 6 عقوبة مالية) from the governed NUM_WORDS
+  vocabulary (scale words multiply; duals carry their value; unknown tokens
+  reject, never guess), every raw span verbatim in its unit; the option-ج
+  Circulaire corrections table (15 rows) with every official value anchored
+  verbatim in the adopted codex. NEW ADDITIVE ENDPOINT GET /numbers (the
+  first sanctioned addition under the §2.7 freeze: read-only, works on an
+  empty index, filters unit_id/kind, serves records + corrections; no
+  existing endpoint touched). Guarded by `LegalNumbersExtraction` +
+  `test_numbers_endpoint_structured_and_filtered`.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
@@ -545,6 +556,8 @@ Channels that WORK (use in this order):
   Observed/Inferred/Unknown. Investigation was read-only; no code changed.
 - **Endpoint freeze directive recorded** (896dd5b, §2.7): existing HTTP
   endpoints never change (path/method/schemas/semantics); additive only;
+  first sanctioned addition: GET /numbers (Phase-4 item 4, 2026-10-01) —
+  read-only structured legal numbers, no existing endpoint touched;
   local_front is the integration testbed over HTTP; bump SERVICE_VERSION on
   every service change.
 - **GET /config = console self-description** (392fae2, 1.2.4): chat_model +

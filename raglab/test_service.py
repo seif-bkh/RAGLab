@@ -234,6 +234,30 @@ class ServiceTest(unittest.TestCase):
             self.assertEqual(browsing.status_code, 409)
             self.assertEqual(browsing.json()["detail"]["reason"], "empty_index")
 
+    def test_numbers_endpoint_structured_and_filtered(self):
+        """Phase-4 item 4: the NEW additive GET /numbers endpoint — read-only,
+        deterministic, works without provider keys or a query; the frozen
+        endpoints are untouched."""
+        body = self.client.get("/numbers").json()
+        self.assertEqual(body["count"], 53)
+        self.assertEqual(body["by_kind"], {"نسبة": 14, "أجل": 28,
+                                           "حد مالي": 5, "عقوبة مالية": 6})
+        self.assertEqual(len(body["circulaire_corrections"]), 15)
+        # corrections are the option-ج table: official values anchored in the codex
+        self.assertIn("official_evidence", body["circulaire_corrections"][0])
+        # unit filter
+        art32 = self.client.get("/numbers",
+                                params={"unit_id": "loi-2016-48:art032"}).json()
+        self.assertEqual(art32["count"], 4)
+        self.assertTrue(all(r["unit_id"] == "loi-2016-48:art032"
+                            for r in art32["records"]))
+        # kind filter (URL-encoded Arabic)
+        penalties = self.client.get("/numbers",
+                                    params={"kind": "عقوبة مالية"}).json()
+        self.assertEqual(penalties["count"], 6)
+        # every record carries its verbatim anchor
+        self.assertTrue(all(r["raw"] for r in penalties["records"]))
+
     def test_validation_rejects_bad_requests(self):
         for payload in ({"question": ""}, {"question": "x" * 3000},
                         {"question": "hi", "k": 99}):

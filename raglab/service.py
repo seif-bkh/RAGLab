@@ -547,7 +547,37 @@ def create_app(profile: dict | None = None, *, generator=None,
                 "docs": "/docs", "health": "/health",
                 "profile": "/profile", "models": "/models",
                 "endpoints": ["POST /search", "POST /answer",
-                              "POST /ingest", "GET /ingest/status"]}
+                              "POST /ingest", "GET /ingest/status",
+                              "GET /numbers"]}
+
+    @app.get("/numbers")
+    def numbers(unit_id: Optional[str] = None, kind: Optional[str] = None):
+        """Structured legal numbers — Phase 4 item 4 (NEW additive endpoint;
+        the frozen endpoints are untouched). Deterministic extraction from the
+        law's adopted codex plus the Circulaire corrections table (option ج).
+        Read-only: works on an empty index, needs no provider key.
+        Filters: ?unit_id=loi-2016-48:art032&kind=حد مالي"""
+        import legal_numbers as _ln
+        import restructure as _restructure
+        import units as _units
+        codex = _restructure._adopted_codex_text(_ln.LAW_DOC)
+        if codex is None:
+            raise ServiceError(503, "no adopted codex",
+                               hint="the law's corrected codex is unavailable")
+        law_units = _units.extract_law_units(codex)
+        records = _ln.extract_legal_numbers(law_units)
+        if unit_id:
+            records = [r for r in records if r["unit_id"] == unit_id]
+        if kind:
+            records = [r for r in records if r["kind"] == kind]
+        by_kind: dict[str, int] = {}
+        for r in records:
+            by_kind[r["kind"]] = by_kind.get(r["kind"], 0) + 1
+        return {"count": len(records), "by_kind": by_kind,
+                "records": records,
+                "circulaire_corrections": _ln.CIRCULAIRE_CORRECTIONS,
+                "note": "deterministic extraction (governed NUM_WORDS vocabulary); "
+                        "every record's raw span is verbatim in its unit"}
 
     @app.get("/health")
     def health():
