@@ -150,8 +150,11 @@ Current state of the work:
   verbatim unit text. Wired in retrieval.py behind
   RELATIONAL_EXPANSION_ENABLED (default 0). Deterministic BM25 measurement:
   neutral (6+2 queries expanded, zero flips). Live same-run comparison step
-  added to real-test.yml (both sets, expansion vs baselines). Rescue
-  mechanism proven by test. Guarded by `RelationalExpansion`.
+  added to real-test.yml (both sets, expansion vs baselines). LIVE
+  (run 36871131542): NEUTRAL on the vector arm too — 50set 71/80/87 vs
+  71/80/87, targets 50/70/70 vs 50/70/70, zero regression. Default stays
+  OFF pending the owner's activation gate. Rescue mechanism proven by
+  test. Guarded by `RelationalExpansion` (6).
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
