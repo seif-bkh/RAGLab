@@ -47,8 +47,14 @@ Current state of the work:
   refusal/gate counts; offline-testable with injected factories. Running it
   (step 3.3) spends answer-model calls and happens via CI exclusively. Plans:
   `raglab/audits/PHASE2_MACHINERY.md`.
-- **Real-model A/B**: `.github/workflows/real-test.yml` (manual trigger, spends API
-  calls, reads repo secrets) + `raglab/real_report.py` (table builder).
+- **Real-model A/B + retrieval modes**: `.github/workflows/real-test.yml`
+  (manual trigger, spends API calls, reads repo secrets) + `raglab/real_report.py`
+  (table builder). Since step 3.2 (2026-10-01) the run also evaluates the
+  restructure collection in `--hybrid` (RRF) and `--hybrid-blend` modes, and
+  real_report.py renders the vector/rrf/blend comparison (overall, by language,
+  by category, per-mode OOS scale, misses, flips) into the markdown report and
+  the ANNO annotation — the data the hybrid-default decision reads. Plans and
+  records: `raglab/audits/PHASE2_BASELINES.md`.
 - **CI**: `.github/workflows/ci.yml` — API-free, runs on every push, must stay green.
 - **Interactive console** (added 2026-09-08, session `arena/01a08139-raglab`):
   `raglab/app.py` — one menu over every lab function (inspect/ingest/query/

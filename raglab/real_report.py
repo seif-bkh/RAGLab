@@ -5,7 +5,13 @@ Usage (from raglab/):
     python real_report.py results/harness50/real_eval_size.json \
                           results/harness50/real_eval_restructure.json \
                           --out results/harness50/real_models.md \
-                          [--answer results/harness50/real_answer_murabaha.json]
+                          [--answer results/harness50/real_answer_murabaha.json] \
+                          [--rrf results/harness50/real_eval_restructure_rrf.json] \
+                          [--blend results/harness50/real_eval_restructure_blend.json]
+
+--rrf/--blend (Phase 2 step 3.2) add the retrieval-mode comparison on the
+restructure collection: vector (the restructure run above) vs RRF hybrid vs
+score blend — the data the hybrid-default decision reads.
 
 Input schema: the run JSON that `evaluate.save_run` writes — `generated_at`,
 `config`, `metrics` {overall, by_category, by_language, separation,
@@ -36,6 +42,10 @@ ARM_LABEL = {"size": "size (legacy recursive 220/40)",
              "restructure": "restructure (normalization + enrichment + structural split)"}
 CATS = ("verbatim", "paraphrase", "cross-lingual")
 LANGS = ("ar", "en", "fr")
+MODES = ("vector", "rrf", "blend")
+MODE_LABEL = {"vector": "vector (cosine only)",
+              "rrf": "rrf (vector + BM25, reciprocal rank fusion)",
+              "blend": "blend (LAMBDA*cosine + BM25 score)"}
 
 
 def load(path: str) -> dict:
@@ -73,7 +83,8 @@ def metric_row(arm: str, d: dict) -> list:
     return [d.get("n", 0), pct(d.get("hit@1")), pct(d.get("hit@3")), pct(d.get("hit@5"))]
 
 
-def build_md(runs: dict, answer: dict | None, top_k: int) -> str:
+def build_md(runs: dict, answer: dict | None, top_k: int,
+             modes: dict | None = None) -> str:
     size, restr = runs["size"], runs["restructure"]
     conf_s, conf_r = size["config"], restr["config"]
     out: list[str] = []
@@ -206,6 +217,75 @@ def build_md(runs: dict, answer: dict | None, top_k: int) -> str:
            or "none"))
         w("")
 
+    # Retrieval modes on the restructure arm (Phase 2 step 3.2) -----------------
+    if modes:
+        w("## Retrieval modes on the restructure arm (step 3.2 — hybrid decision data)")
+        w("")
+        w("Same restructure collection and the same questions as the restructure "
+          "vector run above; only the fusion strategy differs. Ranking scores are "
+          "NOT comparable across modes (cosine vs RRF vs blend), so separation is "
+          "omitted here; the OOS block stays because a refusal threshold is "
+          "defined per mode on its own score scale.")
+        w("")
+        w("| mode | n | hit@1 | hit@3 | hit@5 |")
+        w("|---|---|---|---|---|")
+        for mode in MODES:
+            if mode in modes:
+                row = metric_row(mode, modes[mode]["metrics"]["overall"])
+                w(f"| {MODE_LABEL[mode]} | " + " | ".join(str(x) for x in row) + " |")
+        w("")
+        for title, key, keys in (("By query language", "by_language", LANGS),
+                                 ("By category", "by_category", CATS)):
+            w(f"### {title}")
+            w("")
+            w("| key | n | vector | rrf | blend |")
+            w("|---|---|---|---|---|")
+            ms = {m: modes[m]["metrics"][key] for m in modes}
+            for k in sorted(set().union(*(set(m) for m in ms.values()))):
+                n = next((ms[m][k]["n"] for m in ms if k in ms[m]), 0)
+                cells = []
+                for mode in MODES:
+                    d = ms.get(mode, {}).get(k) or {}
+                    cells.append(" / ".join(pct(d.get(f"hit@{c}")) for c in (1, 3, 5)))
+                w(f"| {k} | {n} | " + " | ".join(cells) + " |")
+            w("")
+        w("### Out-of-scope top-1 score (refusal threshold input, per-mode scale)")
+        w("")
+        w("| mode | n | max top-1 | mean top-1 |")
+        w("|---|---|---|---|")
+        for mode in MODES:
+            if mode in modes:
+                o = modes[mode]["metrics"]["out_of_scope"]
+                w(f"| {MODE_LABEL[mode]} | {o['n']} | {fnum(o['max_top1_score'])} "
+                  f"| {fnum(o['mean_top1_score'])} |")
+        w("")
+        for mode in MODES:
+            if mode in modes:
+                misses = [q for q in modes[mode]["questions"]
+                          if not q["is_out_of_scope"] and q["correct_rank"] is None]
+                w(f"**misses {MODE_LABEL[mode]}** ({len(misses)}): " +
+                  (", ".join(f"{q['id']} ({q.get('language')}/{q['category']})"
+                             for q in misses) or "none"))
+                w("")
+        by_id = {m: {q["id"]: q for q in modes[m]["questions"]} for m in modes}
+        for a, b in (("vector", "rrf"), ("vector", "blend"), ("rrf", "blend")):
+            if a in by_id and b in by_id:
+                up = [qid for qid in by_id[a]
+                      if not by_id[a][qid]["is_out_of_scope"]
+                      and by_id[a][qid]["correct_rank"] is None
+                      and by_id[b].get(qid, {}).get("correct_rank") is not None]
+                down = [qid for qid in by_id[a]
+                        if not by_id[a][qid]["is_out_of_scope"]
+                        and by_id[a][qid]["correct_rank"] is not None
+                        and by_id[b].get(qid, {}).get("correct_rank") is None]
+                w(f"**flips {a} → {b}:** +{len(up)} ({', '.join(up) or 'none'}) "
+                  f"−{len(down)} ({', '.join(down) or 'none'})")
+                w("")
+        lam = (modes.get("blend", {}).get("config", {}) or {}).get("hybrid_blend_lambda")
+        if lam is not None:
+            w(f"Blend λ = {lam} (config HYBRID_BLEND_LAMBDA).")
+            w("")
+
     if answer is not None:
         w(f"## Answer smoke test (provider={answer.get('provider')} "
           f"model={answer.get('model')} phase={answer.get('phase')}, restructure collection)")
@@ -225,9 +305,10 @@ def build_md(runs: dict, answer: dict | None, top_k: int) -> str:
 
     w("## Reading notes")
     w("")
-    w("- BM25-only reference (harness50, no embeddings): size 40/69/80 vs restructure "
-      "47/78/89 overall hit@1/3/5; the five restructure misses there were q26–q30 "
-      "(fr→ar cross-lingual) — the embedding arm is expected to close them.")
+    w("- BM25-only reference, formal 3.1 baseline on the adopted 50-case set "
+      "(harness50, no embeddings): size 42/60/62 vs restructure 62/82/87 overall "
+      "hit@1/3/5; fr is 33/33/33 on BOTH arms (BM25 lexical ceiling — q28/q29/q32/"
+      "q33); the vector arm here is where the fr gap is expected to close.")
     w("- hit@1 with real embeddings measures whether the correct chunk is the single "
       "nearest neighbour; a healthy gap in the separation table is what makes a "
       "refusal threshold possible on the OOS score.")
@@ -235,7 +316,7 @@ def build_md(runs: dict, answer: dict | None, top_k: int) -> str:
     return "\n".join(out) + "\n"
 
 
-def build_anno(runs: dict, answer: dict | None) -> str:
+def build_anno(runs: dict, answer: dict | None, modes: dict | None = None) -> str:
     """The one self-sufficient line the workflow echoes as ::warning::."""
     size, restr = runs["size"], runs["restructure"]
     parts = []
@@ -294,6 +375,25 @@ def build_anno(runs: dict, answer: dict | None) -> str:
             else:
                 seg.append(f"{q['id']} no-hits")
         parts.append("restr_miss_detail: " + "; ".join(seg))
+    if modes:
+        seg = []
+        for mode in MODES:
+            if mode in modes:
+                seg.append(f"{mode}={triple(modes[mode]['metrics']['overall'])}")
+        if seg:
+            parts.append("modes " + " ".join(seg))
+        fr_s = []
+        for mode in MODES:
+            if mode in modes:
+                d = (modes[mode]["metrics"]["by_language"] or {}).get("fr") or {}
+                fr_s.append(f"{mode}={triple(d)}")
+        if fr_s:
+            parts.append("modes_fr " + " ".join(fr_s))
+        for mode in MODES:
+            if mode in modes:
+                misses = [q["id"] for q in modes[mode]["questions"]
+                          if not q["is_out_of_scope"] and q["correct_rank"] is None]
+                parts.append(f"mode_misses {mode}=[" + ",".join(misses) + "]")
     if answer is not None:
         parts.append(f"answer {answer.get('provider')}/{answer.get('model') or 'n/a'} "
                      f"(phase {answer.get('phase')}) status={answer.get('status')} "
@@ -313,19 +413,30 @@ def main() -> int:
                     help="where to write the markdown comparison")
     ap.add_argument("--answer", default=None,
                     help="optional answer-smoke JSON to summarize")
+    ap.add_argument("--rrf", default=None,
+                    help="optional restructure-arm run JSON in RRF hybrid mode (3.2)")
+    ap.add_argument("--blend", default=None,
+                    help="optional restructure-arm run JSON in score-blend mode (3.2)")
     args = ap.parse_args()
 
     runs = {"size": load(args.eval_size), "restructure": load(args.eval_restructure)}
+    modes = {"vector": runs["restructure"]}
+    for key in ("rrf", "blend"):
+        path = getattr(args, key)
+        if path and Path(path).exists():
+            modes[key] = load(path)
+    if len(modes) == 1:
+        modes = None
     top_k = (runs["size"]["config"].get("retrieval_top_k")
              or runs["restructure"]["config"].get("retrieval_top_k") or 20)
     answer = load(args.answer) if args.answer and Path(args.answer).exists() else None
 
-    md = build_md(runs, answer, top_k)
+    md = build_md(runs, answer, top_k, modes=modes)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(md, encoding="utf-8")
     sys.stdout.write(md)
-    sys.stdout.write(build_anno(runs, answer) + "\n")
+    sys.stdout.write(build_anno(runs, answer, modes=modes) + "\n")
     print(f"[real_report] markdown written to {out_path}")
     return 0
 

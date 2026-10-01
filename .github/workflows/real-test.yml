@@ -3,9 +3,13 @@ name: RAGLab real test
 # Real-model A/B of the two chunking arms:
 #   arm "size"        — legacy recursive 220/40 chunking
 #   arm "restructure" — normalization + context enrichment + recursive structural split
-# Both arms ingest the six-document corpus with the pinned NVIDIA nemotron embeddings and
-# evaluate raglab/questions_50.json (50 mixed ar/fr/en questions) at top-k 20, plus one
-# cited xKiro/Qwen answer as the LLM smoke test.
+# Both arms ingest the docs/ corpus (4 real documents) with the pinned NVIDIA nemotron
+# embeddings and evaluate raglab/questions_50.json (the adopted 50-case set) at top-k 20,
+# plus one cited answer as the LLM smoke test.
+# Phase 2 step 3.2 (added 2026-10-01): on the restructure collection the SAME questions
+# are also evaluated in --hybrid (RRF) and --hybrid-blend modes, so one run yields the
+# vector vs rrf vs blend comparison the hybrid-default decision reads. Real_report.py
+# renders it as the "Retrieval modes" section when the extra run JSONs exist.
 #
 # This workflow SPENDS API CALLS, so it is manual-only:
 #   Actions -> "RAGLab real test" -> Run workflow
@@ -99,6 +103,22 @@ jobs:
           cp "$newest" results/harness50/real_eval_restructure.json
           echo "eval run preserved as results/harness50/real_eval_restructure.json (source: $newest)"
 
+      - name: Retrieval modes on ARM=restructure — rrf + blend (step 3.2)
+        working-directory: raglab
+        run: |
+          set -o pipefail
+          export CHUNKING_MODE=restructure
+          python main.py evaluate --skip-sanity-check --no-translation --hybrid \
+            --top-k 20 --questions questions_50.json 2>&1 | tee /tmp/raglab_ci/restructure_evaluate_rrf.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/harness50/real_eval_restructure_rrf.json
+          echo "eval run preserved as results/harness50/real_eval_restructure_rrf.json (source: $newest)"
+          python main.py evaluate --skip-sanity-check --no-translation --hybrid-blend \
+            --top-k 20 --questions questions_50.json 2>&1 | tee /tmp/raglab_ci/restructure_evaluate_blend.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/harness50/real_eval_restructure_blend.json
+          echo "eval run preserved as results/harness50/real_eval_restructure_blend.json (source: $newest)"
+
       # continue-on-error: the retrieval A/B is the deliverable; an answer-smoke failure is
       # reported as data (below) instead of hiding the tables.
       # NOTE: GitHub wraps run-steps in `bash -e -o pipefail`, so a failing command aborts
@@ -132,9 +152,12 @@ jobs:
           fi
           answer_arg=""
           [ -f results/harness50/real_answer_murabaha.json ] && answer_arg="--answer results/harness50/real_answer_murabaha.json"
+          modes_arg=""
+          [ -f results/harness50/real_eval_restructure_rrf.json ] && modes_arg="$modes_arg --rrf results/harness50/real_eval_restructure_rrf.json"
+          [ -f results/harness50/real_eval_restructure_blend.json ] && modes_arg="$modes_arg --blend results/harness50/real_eval_restructure_blend.json"
           python real_report.py results/harness50/real_eval_size.json \
             results/harness50/real_eval_restructure.json \
-            --out results/harness50/real_models.md $answer_arg \
+            --out results/harness50/real_models.md $answer_arg $modes_arg \
             2>&1 | tee /tmp/raglab_ci/report.log
 
       - name: Post the key numbers as a check-run annotation (sandbox-readable channel)
@@ -190,6 +213,8 @@ jobs:
             raglab/results/harness50/real_models.md
             raglab/results/harness50/real_eval_size.json
             raglab/results/harness50/real_eval_restructure.json
+            raglab/results/harness50/real_eval_restructure_rrf.json
+            raglab/results/harness50/real_eval_restructure_blend.json
             raglab/results/harness50/real_answer_murabaha.json
           if-no-files-found: ignore
           retention-days: 30

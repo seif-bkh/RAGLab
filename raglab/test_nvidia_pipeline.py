@@ -1759,5 +1759,98 @@ class ModelIndependenceAB(unittest.TestCase):
         self.assertEqual(pair['substance_divergent_questions'], [])
 
 
+class RealReportModes(unittest.TestCase):
+    """Phase 2 step 3.2: real_report.py builds the retrieval-mode comparison
+    (vector vs rrf vs blend on the restructure arm) and carries it into the
+    ANNO annotation line the workflow reads from the sandbox."""
+
+    @staticmethod
+    def _run(mode, ranks, generated_at="2026-10-01T00:00:00+00:00"):
+        """Minimal evaluate.save_run-shaped JSON: ranks maps qid -> correct_rank
+        (None = miss). Two answerable questions (ar + fr) and one OOS."""
+        questions = []
+        for qid, lang, rank in (("q1", "ar", ranks["q1"]),
+                                ("q2", "fr", ranks["q2"])):
+            hit = None if rank is None else {"id": f"{qid}::chunk_0001",
+                                             "score": 0.5, "text": "نص",
+                                             "document": "D", "heading": "H"}
+            questions.append({"id": qid, "question": "س", "language": lang,
+                              "category": "verbatim", "is_out_of_scope": False,
+                              "correct_rank": rank,
+                              "correct_any_lang_rank": None,
+                              "hits": [hit] if hit else []})
+        questions.append({"id": "q3", "question": "خارج", "language": "ar",
+                          "category": "out-of-scope", "is_out_of_scope": True,
+                          "correct_rank": None, "correct_any_lang_rank": None,
+                          "hits": [{"id": "x", "score": 0.2, "text": "t",
+                                    "document": "D", "heading": "H"}]})
+        n_ans = 2
+        hit1 = sum(1 for r in ranks.values() if r == 1) / n_ans
+        hit3 = sum(1 for r in ranks.values() if r is not None and r <= 3) / n_ans
+        hit5 = sum(1 for r in ranks.values() if r is not None and r <= 5) / n_ans
+        fr_rank = ranks["q2"]
+        return {
+            "generated_at": generated_at,
+            "config": {"provider": "nvidia", "embedding_model": "m",
+                       "retrieval_mode": mode, "retrieval_top_k": 20,
+                       "chunk_size_tokens": 220, "chunk_overlap_tokens": 40,
+                       "hybrid_blend_lambda": 0.7 if mode == "blend" else None},
+            "metrics": {
+                "overall": {"n": n_ans, "hit@1": hit1, "hit@3": hit3,
+                            "hit@5": hit5},
+                "by_category": {"verbatim": {"n": n_ans, "hit@1": hit1,
+                                             "hit@3": hit3, "hit@5": hit5}},
+                "by_language": {
+                    "ar": {"n": 1, "hit@1": 1.0 if ranks["q1"] == 1 else 0.0,
+                           "hit@3": 1.0 if ranks["q1"] else 0.0,
+                           "hit@5": 1.0 if ranks["q1"] else 0.0},
+                    "fr": {"n": 1, "hit@1": 1.0 if fr_rank == 1 else 0.0,
+                           "hit@3": 1.0 if fr_rank else 0.0,
+                           "hit@5": 1.0 if fr_rank else 0.0}},
+                "separation": {"n_correct_retrieved": n_ans,
+                               "mean_correct_score": 0.5,
+                               "n_with_best_incorrect": 1,
+                               "mean_best_incorrect_score": 0.4,
+                               "gap_mean_correct_minus_best_incorrect": 0.1},
+                "out_of_scope": {"n": 1, "max_top1_score": 0.2,
+                                 "mean_top1_score": 0.2},
+            },
+            "questions": questions,
+        }
+
+    def test_modes_section_and_anno(self):
+        import real_report as rr
+        size = self._run("vector", {"q1": 3, "q2": None})
+        vector = self._run("vector", {"q1": 1, "q2": None})
+        rrf = self._run("rrf", {"q1": 1, "q2": 2})
+        blend = self._run("blend", {"q1": 2, "q2": 2})
+        runs = {"size": size, "restructure": vector}
+        modes = {"vector": vector, "rrf": rrf, "blend": blend}
+        md = rr.build_md(runs, None, top_k=20, modes=modes)
+        self.assertIn("Retrieval modes on the restructure arm", md)
+        self.assertIn("rrf (vector + BM25, reciprocal rank fusion)", md)
+        self.assertIn("blend (LAMBDA*cosine + BM25 score)", md)
+        # misses lists per mode: q2 misses in vector, hits everywhere else
+        self.assertIn("**misses vector (cosine only)** (1): q2 (fr/verbatim)", md)
+        self.assertIn("**misses rrf (vector + BM25, reciprocal rank fusion)** (0): none", md)
+        # flips between modes
+        self.assertIn("**flips vector → rrf:** +1 (q2) −0 (none)", md)
+        self.assertIn("Blend λ = 0.7", md)
+        anno = rr.build_anno(runs, None, modes=modes)
+        # q1: vector rank1, rrf rank1, blend rank2; q2: vector miss, rrf rank2,
+        # blend rank2 -> overall 50/50/50, 50/100/100, 0/100/100
+        self.assertIn("modes vector=50/50/50 rrf=50/100/100 blend=0/100/100",
+                      anno)
+        self.assertIn("modes_fr vector=0/0/0 rrf=0/100/100 blend=0/100/100",
+                      anno)
+        self.assertIn("mode_misses vector=[q2]", anno)
+        self.assertIn("mode_misses rrf=[]", anno)
+        # without modes the section and the segments disappear
+        md2 = rr.build_md(runs, None, top_k=20)
+        self.assertNotIn("Retrieval modes on the restructure arm", md2)
+        anno2 = rr.build_anno(runs, None)
+        self.assertNotIn("modes_fr", anno2)
+
+
 if __name__ == '__main__':
     unittest.main()
