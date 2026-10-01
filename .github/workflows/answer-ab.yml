@@ -1,0 +1,128 @@
+name: RAGLab answer A/B
+
+# Model-independence measurement (Phase 2 step 3.3): ONE retrieval per question,
+# every answer arm answers the SAME hits (first arm = the reference), so the
+# differences between arms measure the answer model, not retrieval. Arms for the
+# owner-authorized 2026-10-01 run: the pinned xkiro/qwen + nvidia/kimi-k3.
+#
+# This workflow SPENDS ANSWER-MODEL CALLS (50 questions x 2 arms = 100 calls), so
+# it is manual-only:
+#   Actions -> "RAGLab answer A/B" -> Run workflow
+# or from the sandbox (workflow dispatch is blocked for the app token — verified
+# HTTP 403 during 3.2, same fallback as real-test.yml):
+#   git tag answer-ab-<label> && git push origin refs/tags/answer-ab-<label>
+#
+# Reading the result from the sandbox (job logs and artifact downloads are NOT
+# reachable there — same constraint as real-test.yml):
+#   1. answer_ab.py prints a final "ANNO| ..." line posted here as a ::warning::
+#      annotation, readable through: gh api repos/seif-bkh/RAGLab/check-runs/<id>/annotations
+#   2. the full report JSON lands in the answer-ab-results artifact (owner can
+#      download it from the run page).
+# A provider-failing arm is DATA, not a dead run: answer_ab records status="error"
+# rows (native provider_error or raised exceptions) and keeps going.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["answer-ab-*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: answer-ab
+  cancel-in-progress: false
+
+jobs:
+  answer-ab:
+    name: Answer A/B — model independence on the adopted 50-case set
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Repo secrets, referenced by name only (repo convention: at most the
+      # first 8 characters are ever printed).
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      XKIRO_API_KEY: ${{ secrets.XKIRO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: raglab/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+        working-directory: raglab
+
+      - name: Fail fast if the secrets are missing or empty
+        run: |
+          missing=0
+          for name in NVIDIA_API_KEY XKIRO_API_KEY; do
+            value="${!name}"
+            if [ -z "$value" ]; then
+              echo "::error::Actions secret $name is empty — answer A/B needs both keys in the repository secrets"
+              missing=1
+            else
+              echo "$name present (prefix ${value:0:8})"
+            fi
+          done
+          [ "$missing" -eq 0 ]
+
+      - name: Ingest the adopted corpus (restructure arm, NVIDIA embeddings)
+        working-directory: raglab
+        run: |
+          set -o pipefail
+          export CHUNKING_MODE=restructure
+          mkdir -p /tmp/raglab_ci
+          python main.py ingest --reset --skip-sanity-check \
+            --data-dir ../docs --data-dir data 2>&1 | tee /tmp/raglab_ci/ingest.log
+
+      # The step exits 0 even if answer_ab fails mid-way: the annotation and the
+      # status-failure steps below still publish everything that was measured
+      # (GitHub wraps run steps in bash -e -o pipefail; the || status=$? idiom is
+      # required to capture the exit code at all).
+      - name: Run answer A/B — pinned xkiro/qwen (reference) vs nvidia/kimi-k3
+        working-directory: raglab
+        run: |
+          set -o pipefail
+          export CHUNKING_MODE=restructure
+          status=0
+          python answer_ab.py --questions questions_50.json \
+            --model xkiro/qwen/qwen3.8-max:free \
+            --model nvidia/moonshotai/kimi-k3 \
+            --mode vector 2>&1 | tee /tmp/raglab_ci/answer_ab.log || status=$?
+          echo "$status" > /tmp/raglab_ci/answer_ab_status
+          exit 0
+
+      - name: Post the key numbers as a check-run annotation (sandbox-readable channel)
+        if: always()
+        run: |
+          line=$(grep -h '^ANNO|' /tmp/raglab_ci/answer_ab.log 2>/dev/null | tail -1 || true)
+          if [ -n "$line" ]; then
+            message=${line#ANNO| }
+            printf '::warning::answer-ab numbers | %s\n' \
+              "$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g')"
+          else
+            echo "::warning::answer-ab produced no ANNO line; the failure step or the logs carry the diagnostic"
+          fi
+
+      - name: Fail the run if answer_ab itself exited non-zero
+        if: always()
+        run: |
+          status=$(cat /tmp/raglab_ci/answer_ab_status 2>/dev/null || echo "")
+          if [ -n "$status" ] && [ "$status" != "0" ]; then
+            echo "::error::answer_ab exited with status $status — tail of the log follows"
+            echo "::error::answer_ab.log tail: $(tail -c 1200 /tmp/raglab_ci/answer_ab.log | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')"
+            exit 1
+          fi
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: answer-ab-results
+          path: raglab/results/answer_ab/
+          if-no-files-found: ignore
+          retention-days: 30

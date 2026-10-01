@@ -1734,6 +1734,69 @@ class ModelIndependenceAB(unittest.TestCase):
         self.assertEqual(report['per_model']['ref']['answered'], 1)
         self.assertEqual(report['per_model']['alt']['refused'], 1)
 
+    def test_a_failing_arm_is_data_not_a_dead_run(self):
+        from answer_ab import anno_line, run_comparison
+        collection, vectors = self._collection()
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+
+        class NativeErrorGen:
+            # answer.py returns status="error" (provider_error) as a dict
+            def answer(self, question, hits, language, use_cache=True):
+                return {'status': 'error', 'reason': 'provider_error',
+                        'model': 'nat', 'claims': [], 'sources': [],
+                        'validation_ok': False, 'provider_ok': False}
+
+        class RaisingGen:
+            def answer(self, question, hits, language, use_cache=True):
+                raise RuntimeError('boom: capacity 502')
+
+        cases = [{'id': 'q1', 'question': 'س', 'language': 'ar',
+                  'category': 'verbatim'}]
+        report = run_comparison(self.cfg, fake_embedder, collection, cases,
+                                [('nat', NativeErrorGen()), ('raise', RaisingGen())],
+                                top_k=2, mode='vector')
+        self.assertEqual(report['per_model']['nat']['errors'], 1)
+        self.assertEqual(report['per_model']['raise']['errors'], 1)
+        self.assertEqual(report['per_model']['nat']['answered'], 0)
+        row = report['per_question'][0]['arms']['raise']
+        self.assertEqual(row['status'], 'error')
+        self.assertIn('RuntimeError', row['reason'])
+        anno = anno_line(report)
+        self.assertIn('nat: answered=0 refused=0 errors=1 gate=0', anno)
+        self.assertIn('raise: answered=0 refused=0 errors=1 gate=0', anno)
+
+    def test_anno_line_carries_the_gate_numbers(self):
+        from answer_ab import anno_line, run_comparison
+        collection, vectors = self._collection()
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+
+        class RefGen:
+            def answer(self, question, hits, language, use_cache=True):
+                return {'status': 'answered', 'reason': None, 'model': 'ref',
+                        'claims': [{'text': 'a'}],
+                        'sources': [{'chunk_id': h['id']} for h in hits[:1]],
+                        'validation_ok': True}
+
+        class AltGen:
+            def answer(self, question, hits, language, use_cache=True):
+                return {'status': 'refused', 'reason': 'no_evidence', 'model': 'alt',
+                        'claims': [], 'sources': [],
+                        'validation_ok': True}
+
+        cases = [{'id': 'q1', 'question': 'س', 'language': 'ar',
+                  'category': 'verbatim'}]
+        report = run_comparison(self.cfg, fake_embedder, collection, cases,
+                                [('ref', RefGen()), ('alt', AltGen())],
+                                top_k=2, mode='vector')
+        anno = anno_line(report)
+        self.assertTrue(anno.startswith('ANNO| '))
+        self.assertIn('n=1', anno)
+        self.assertIn('retrieval=vector/top2 fixed (model-independent)', anno)
+        self.assertIn('ref: answered=1 refused=0 errors=0 gate=0', anno)
+        self.assertIn('alt: answered=0 refused=1 errors=0 gate=0', anno)
+        self.assertIn('ref vs alt: agree=0.000', anno)
+        self.assertIn('divergent(1)=[q1]', anno)
+
     def test_agreement_when_arms_match(self):
         from answer_ab import run_comparison
         collection, vectors = self._collection()

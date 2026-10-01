@@ -44,9 +44,16 @@ Current state of the work:
   `raglab/answer_ab.py` — ONE retrieval per question fed identically to N answer
   models (`--model provider/model-id`, first is the reference); pairwise status
   agreement + source-Jaccard, substance-divergent question lists, per-model
-  refusal/gate counts; offline-testable with injected factories. Running it
-  (step 3.3) spends answer-model calls and happens via CI exclusively. Plans:
-  `raglab/audits/PHASE2_MACHINERY.md`.
+  refusal/gate counts; offline-testable with injected factories. A provider-
+  failing arm is data, not a dead run (status="error" rows, per-arm error
+  counts, raised exceptions caught per question). Running it (step 3.3) spends
+  answer-model calls and happens via CI exclusively:
+  `.github/workflows/answer-ab.yml` (manual trigger, or the answer-ab-* tag
+  fallback when dispatch is blocked for the app token) — it ingests the
+  restructure arm, runs the owner-authorized arms (2026-10-01: pinned
+  xkiro/qwen + nvidia/kimi-k3), posts the ANNO summary as an annotation and
+  uploads the report JSON. Plans: `raglab/audits/PHASE2_MACHINERY.md`;
+  baselines and records: `raglab/audits/PHASE2_BASELINES.md`.
 - **Real-model A/B + retrieval modes**: `.github/workflows/real-test.yml`
   (manual trigger, spends API calls, reads repo secrets) + `raglab/real_report.py`
   (table builder). Since step 3.2 (2026-10-01) the run also evaluates the

@@ -89,7 +89,13 @@ def run_comparison(local, embedder, collection, cases: list, generators: list,
             top_k=top_k or local.ANSWER_TOP_K, variant_strategy="original")
         arms = {}
         for label, generator in generators:
-            result = generator.answer(question, hits, language, use_cache=False)
+            try:
+                result = generator.answer(question, hits, language, use_cache=False)
+            except Exception as exc:  # noqa: BLE001 — a failing arm is data, not a dead run
+                result = {"status": "error",
+                          "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+                          "model": label, "claims": [], "sources": [],
+                          "validation_ok": False}
             arms[label] = _arm_row(result)
         per_question.append({
             "id": case["id"],
@@ -109,6 +115,8 @@ def run_comparison(local, embedder, collection, cases: list, generators: list,
                             if q["arms"][label]["status"] == "answered"),
             "refused": sum(1 for q in per_question
                            if q["arms"][label]["status"] == "refused"),
+            "errors": sum(1 for q in per_question
+                          if q["arms"][label]["status"] == "error"),
             "gate_rejected": sum(
                 1 for q in per_question
                 if q["arms"][label]["reason"] in ("invalid_output",
@@ -165,10 +173,10 @@ def print_report(report: dict) -> None:
           f"top {report['retrieval']['top_k']}, "
           f"{report['retrieval']['embedding_model']})")
     print("=" * 78)
-    print(f"{'arm':<44}{'answered':>9}{'refused':>9}{'gate':>6}{'claims':>8}")
+    print(f"{'arm':<44}{'answered':>9}{'refused':>9}{'errors':>8}{'gate':>6}{'claims':>8}")
     for label, d in report["per_model"].items():
         print(f"{label:<44}{d['answered']:>9}{d['refused']:>9}"
-              f"{d['gate_rejected']:>6}"
+              f"{d['errors']:>8}{d['gate_rejected']:>6}"
               f"{(d['mean_claims'] or 0):>8.1f}")
     for pair, d in report["pairwise"].items():
         jac = d["mean_source_jaccard"]
@@ -184,6 +192,25 @@ def print_report(report: dict) -> None:
         else:
             print("  -> no substance divergence: differences are wording-only.")
     print("=" * 78)
+
+
+def anno_line(report: dict) -> str:
+    """One self-sufficient summary line (real_report.py ANNO convention) that
+    the answer-ab workflow pipes into a ::warning:: check-run annotation — the
+    channel readable from the sandbox, where job logs are not."""
+    parts = [f"n={report['questions']}",
+             f"retrieval={report['retrieval']['mode']}/top{report['retrieval']['top_k']}"
+             " fixed (model-independent)"]
+    for label, d in report["per_model"].items():
+        parts.append(f"{label}: answered={d['answered']} refused={d['refused']}"
+                     f" errors={d['errors']} gate={d['gate_rejected']}")
+    for pair, d in report["pairwise"].items():
+        jac = d["mean_source_jaccard"]
+        jac_txt = f"{jac:.3f}" if jac is not None else "n/a"
+        div = d["substance_divergent_questions"]
+        parts.append(f"{pair}: agree={d['status_agreement']:.3f}"
+                     f" jaccard={jac_txt} divergent({len(div)})=[{','.join(div)}]")
+    return "ANNO| " + " | ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +271,7 @@ def main() -> int:
     report = run_comparison(local, embedder_obj, collection, cases, generators,
                             top_k=args.top_k, mode=args.mode)
     print_report(report)
+    print(anno_line(report))
 
     out_dir = (HERE / "results" / args.results if args.results
                else HERE / "results" / "answer_ab" / questions_path.stem)
