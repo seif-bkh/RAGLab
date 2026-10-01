@@ -596,6 +596,19 @@ Channels that WORK (use in this order):
   live vector arm in 3.2 decides the fr gap). OOS (5): max top-1 score 11.8 (base)
   vs 11.4 (restructure). Until the owner adopts them, these numbers are measured
   and reproducible but not yet fixed as targets.
+- **FORMAL 3.2 live run (2026-10-01, tag `real-test-3.2-20261001`, run
+  36818475024, commit `e9694dd`; record: `raglab/audits/PHASE2_BASELINES.md`)**:
+  NVIDIA nemotron embeddings, adopted 50-case set, k=20. Chunking A/B (vector
+  mode): size `51/64/71` -> restructure `71/80/87` (fr `50/67/67` both arms;
+  live restructure misses q01/q02/q03/q32/q38). Retrieval modes on the
+  restructure arm: vector `71/80/87`, rrf `71/80/82`, blend(λ=0.7) `62/80/84`;
+  fr: vector `50/67/67` > rrf `33/33/50` ~= blend `33/33/67` — on this set the
+  pure vector arm leads and BM25 fusion hurts fr. Complementarity noted: the
+  live vector misses (q01-q03) are BM25 hits and vice versa (q18/q28/q29/q33) —
+  input for the Phase-3 deterministic reranker. The hybrid-default DECISION is
+  the owner's gate. Answer smoke: nvidia attempt rejected by the citation gate
+  (quote not in cited source), google fallback answered validated (known,
+  documented behavior).
 - **BM25-only A/B on the FULLY-ADOPTED corpus (2026-09-30, INTERIM — the current
   30-case set, not the final 50; regenerable via `harness50.py`)**: overall hit@1/3/5
   size-220/40 `44/76/80` → restructure (all four corrected codices) `60/92/100`;
