@@ -629,6 +629,18 @@ Channels that WORK (use in this order):
   the citation gate (quote not in cited source), google fallback answered
   validated (known, documented behavior). ADOPTED 2026-10-01 with the 3.1
   numbers as the official reference baselines.
+- **3.3 model-independence run (2026-10-01, tag `answer-ab-3.3b-20261001`,
+  run 36823495283; record: `raglab/audits/PHASE2_BASELINES.md`)**: one fixed
+  vector/top5 retrieval per question, two answer arms — pinned
+  xkiro/qwen/qwen3.8-max:free (answered 37 / refused 13 / provider errors 0 /
+  gate 7) vs nvidia/moonshotai/kimi-k3 (27 / 14 / 9 / 7). Status agreement
+  0.720; source Jaccard 1.000 whenever both answered — same context yields
+  identical citations, so divergence is answered/refused status only (14
+  questions; evidence-completeness work, Phase 5). The first attempt
+  (run 36822841842) failed on a wiring bug the live run itself exposed
+  (stale collection handle after self-ingest; fixed, zero answer calls spent).
+  PHASE 2 CLOSED 2026-10-01: adopted set + both-arm baselines + hybrid
+  decision + 3.3, all four gate conditions met.
 - **BM25-only A/B on the FULLY-ADOPTED corpus (2026-09-30, INTERIM — the current
   30-case set, not the final 50; regenerable via `harness50.py`)**: overall hit@1/3/5
   size-220/40 `44/76/80` → restructure (all four corrected codices) `60/92/100`;
