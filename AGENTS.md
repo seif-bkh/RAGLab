@@ -45,11 +45,11 @@ Current state of the work:
   en/fr equivalents, colloquial->formal; every target verified present in the
   adopted corrected codex, enforced by a governance test) expanded
   deterministically BEFORE embedding and BM25 via `retrieval.retrieve`, behind
-  `LEXICON_ENABLED` (default OFF until the owner reviews the table entry by
-  entry). Strictly separate from the retired translation path. Exact
-  whole-word surface forms; Arabic definite forms need their own rows. Plan +
-  record: `raglab/audits/PHASE3_INTERVENTIONS.md`. Measuring its effect awaits
-  the colloquial/synonyms authoring round (owner decision).
+  `LEXICON_ENABLED` (default OFF). The seed table was ADOPTED as-is by the
+  owner 2026-10-01; flipping the default awaits the target-category
+  authoring-round measurement. Strictly separate from the retired translation
+  path. Exact whole-word surface forms; Arabic definite forms need their own
+  rows. Plan + record: `raglab/audits/PHASE3_INTERVENTIONS.md`.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
@@ -62,8 +62,8 @@ Current state of the work:
   vector 69/78/84 -> rerank 71/80/87 with fr preserved 50/67/67 and q44
   recovered — the best mode on the live arm. Embedding jitter between runs is
   +-2pp (q44 flip), so same-run tables are the honest comparison; details in
-  `raglab/audits/PHASE3_INTERVENTIONS.md`. Activating it by default is the
-  owner's gate.
+  `raglab/audits/PHASE3_INTERVENTIONS.md`. ACTIVATED as the default
+  2026-10-01 (owner decision; RERANK_ENABLED defaults to 1 — set 0 to disable).
 - **Model-independence tool** (re-introduced 2026-10-01, step 2.4-ج):
   `raglab/answer_ab.py` — ONE retrieval per question fed identically to N answer
   models (`--model provider/model-id`, first is the reference); pairwise status

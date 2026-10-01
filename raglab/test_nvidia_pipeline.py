@@ -2006,7 +2006,9 @@ class RerankerDeterministic(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         cfg = make_config(CHROMA_DIR=Path(self.temp.name) / 'chroma',
                           ANSWER_CACHE_PATH=Path(self.temp.name) / 'answers.json')
-        self.assertFalse(cfg.RERANK_ENABLED)   # OFF by default
+        # ON by default since the owner decision of 2026-10-01
+        self.assertTrue(cfg.RERANK_ENABLED)
+        cfg.RERANK_ENABLED = False   # explicit off for the before-leg
 
         def chunk(index, source, language, text, heading):
             return SimpleNamespace(index=index, source=source, language=language,
@@ -2033,6 +2035,16 @@ class RerankerDeterministic(unittest.TestCase):
                             variant_strategy='original')
         self.assertEqual(hits2[0]['id'], 'ar.md::chunk_0000')  # lifted by terms
         self.assertIn('rerank', hits2[0])
+        # the deployed default (no explicit flag) reranks too
+        cfg2 = make_config(CHROMA_DIR=Path(self.temp.name) / 'chroma2',
+                           ANSWER_CACHE_PATH=Path(self.temp.name) / 'a2.json')
+        collection2 = get_collection(cfg2, reset=True)
+        store_chunks(collection2, list(zip(chunks, vectors)), cfg2)
+        hits3, _ = retrieve(cfg2, fake_embedder, collection2, q,
+                            language='ar', mode='vector', top_k=2,
+                            variant_strategy='original')
+        self.assertEqual(hits3[0]['id'], 'ar.md::chunk_0000')
+        self.assertIn('rerank', hits3[0])
 
 
 class RealReportModes(unittest.TestCase):
