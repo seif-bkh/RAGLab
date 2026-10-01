@@ -69,7 +69,15 @@ class DemoQuoteClient:
 
     @staticmethod
     def _slice(text, n=170):
-        return " ".join(text.split())[:n]
+        # start at the first non-header line for readability, but the quote
+        # stays a VERBATIM substring of the source (gate membership holds)
+        offset = 0
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith((">", "#", "**")):
+                break
+            offset += len(line) + 1
+        return " ".join(text[offset:].split())[:n]
 
     def chat(self, model, messages, *, max_tokens=4096):
         payload = json.loads(messages[1]["content"])
@@ -115,7 +123,8 @@ def main() -> int:
                           "model": "Qwen/Qwen3-Embedding-0.6B"}
     state["answer"] = {"provider": "nvidia", "model": "demo-deterministic"}
     state["chunking"] = {"mode": "restructure", "size": 220, "overlap": 40}
-    state["retrieval"] = {"mode": "rrf", "lang_filter": None}
+    state["retrieval"] = {"mode": "rrf", "lang_filter": None,
+                          "top_k": 20, "neighbor_radius": 0}
     state["data_dirs"] = [str(DOCS)]
 
     demo_dir = HERE / "results" / "demo"
