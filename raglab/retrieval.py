@@ -61,15 +61,25 @@ def retrieve(cfg, embedder, collection, text, *, language=None, translator=None,
             # pool BEFORE the top-k cut (the whole pool, not just top_k).
             import rerank
             lists[0] = rerank.rerank_hits(text, lists[0])
-        return [dict(h, from_variant=label, variant_ranks={label: h["rank"]})
-                for h in lists[0][:top_k]], variants
+        out = [dict(h, from_variant=label, variant_ranks={label: h["rank"]})
+               for h in lists[0][:top_k]]
+        if getattr(cfg, "RELATIONAL_EXPANSION_ENABLED", False):
+            # Phase-5 item 3: policy-gated units appended BESIDE the results
+            # (env-gated, default OFF; extras only compete for the tail).
+            import relational_expansion
+            out = relational_expansion.expand(cfg, text, out, top_k)
+        return out, variants
     hits = best_variant_merge(lists, score_key=score_key, labels=[v["label"] for v in variants],
                               tie_break=getattr(cfg, "FUSION_TIE_BREAK", "same_lang_margin"))
     if rerank_on:
         # Phase-3 intervention 3: same deterministic reorder after fusion.
         import rerank
         hits = rerank.rerank_hits(text, hits)
-    return hits[:top_k], variants
+    if getattr(cfg, "RELATIONAL_EXPANSION_ENABLED", False):
+        # Phase-5 item 3: policy-gated units appended BESIDE the results.
+        import relational_expansion
+        hits = relational_expansion.expand(cfg, text, hits[:top_k], top_k)
+    return hits, variants
 
 
 def expand_neighbors(collection, hits, radius=0):

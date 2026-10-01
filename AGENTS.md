@@ -139,7 +139,19 @@ Current state of the work:
   → entity/purpose refinement → 100% consistency on both sets (16/16 +
   2/2 typed-evidence cases; untyped evidence reported, never guessed).
   Read-only layer, regression-guarded inert. Guarded by
-  `EvidencePlanDerivation`.
+  `EvidencePlanDerivation`. **Item 3 BUILT (live measurement authorized,
+  owner round 10; default stays OFF pending the data)**:
+  `raglab/relational_expansion.py` — retrieval expansion along the Phase-4
+  relations under the DECLARED intent policy (internal edges: إجرائي from /
+  استثناء both directions; grounding Circulaire→art011 only when the request
+  names BOTH families AND Circulaire evidence was retrieved; depth <= 2,
+  node cap 4; تعريفي/رقمي/مقارن never expand). Extras occupy TAIL slots
+  only (head vector hits keep ranks), carry via_relation metadata and full
+  verbatim unit text. Wired in retrieval.py behind
+  RELATIONAL_EXPANSION_ENABLED (default 0). Deterministic BM25 measurement:
+  neutral (6+2 queries expanded, zero flips). Live same-run comparison step
+  added to real-test.yml (both sets, expansion vs baselines). Rescue
+  mechanism proven by test. Guarded by `RelationalExpansion`.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;

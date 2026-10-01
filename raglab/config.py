@@ -272,6 +272,9 @@ LEXICON_ENABLED = os.getenv("LEXICON_ENABLED", "") == "1"
 # no verbatim/OOS regression — raglab/audits/PHASE3_INTERVENTIONS.md). It only
 # reorders retrieved candidates — it can never introduce unretrieved text.
 RERANK_ENABLED = os.getenv("RERANK_ENABLED", "1") == "1"
+# Phase-5 item 3: relational expansion under the declared intent policy.
+# Default OFF — activation is the owner's data-driven gate (the plan's item 6).
+RELATIONAL_EXPANSION_ENABLED = os.getenv("RELATIONAL_EXPANSION_ENABLED", "0") == "1"
 RETRIEVAL_CANDIDATE_K = 20
 
 # Selected measured profile. Old .env values are rejected, not silently used.

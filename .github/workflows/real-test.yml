@@ -197,6 +197,52 @@ jobs:
             echo "no units-index ANNO found"
           fi
 
+      - name: Relational expansion (Phase-5 item 3) — deployed default vs expansion-on
+        working-directory: raglab
+        run: |
+          set -o pipefail
+          export CHUNKING_MODE=restructure
+          export RELATIONAL_EXPANSION_ENABLED=1
+          python main.py evaluate --skip-sanity-check --no-translation \
+            --top-k 20 --questions questions_50.json 2>&1 | tee /tmp/raglab_ci/expansion_50.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/harness50/expansion_50.json
+          python main.py evaluate --skip-sanity-check --no-translation \
+            --top-k 20 --questions questions_targets.json 2>&1 | tee /tmp/raglab_ci/expansion_targets.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/harness50/expansion_targets.json
+
+      - name: Post the expansion numbers as an annotation
+        if: always()
+        working-directory: raglab
+        run: |
+          python3 - <<'EOF'
+          import json
+          def overall(path):
+              try:
+                  return json.load(open(path, encoding="utf-8"))["metrics"]["overall"]
+              except Exception:
+                  return None
+          def fmt(o):
+              if not o:
+                  return "n/a"
+              return (f"{(o['hit@1'] or 0)*100:.0f}/{(o['hit@3'] or 0)*100:.0f}/"
+                      f"{(o['hit@5'] or 0)*100:.0f}")
+          parts = []
+          base50 = overall("results/harness50/real_eval_restructure.json")
+          exp50 = overall("results/harness50/expansion_50.json")
+          if base50 and exp50:
+              parts.append(f"50set base {fmt(base50)} vs exp {fmt(exp50)}")
+          baseT = overall("results/harness50/targets_default.json")
+          expT = overall("results/harness50/expansion_targets.json")
+          if baseT and expT:
+              parts.append(f"targets base {fmt(baseT)} vs exp {fmt(expT)}")
+          msg = " | ".join(parts) if parts else "no expansion run JSONs found"
+          print("ANNO| expansion | " + msg)
+          enc = msg.replace("%", "%25").replace(":", "%3A")
+          print(f"::warning::expansion | {enc}")
+          EOF
+
       # continue-on-error: the retrieval A/B is the deliverable; an answer-smoke failure is
       # reported as data (below) instead of hiding the tables.
       # NOTE: GitHub wraps run-steps in `bash -e -o pipefail`, so a failing command aborts
@@ -298,6 +344,8 @@ jobs:
             raglab/results/harness50/targets_default.json
             raglab/results/harness50/targets_lexicon.json
             raglab/results/harness50/real_eval_unit_index.json
+            raglab/results/harness50/expansion_50.json
+            raglab/results/harness50/expansion_targets.json
             raglab/results/harness50/real_answer_murabaha.json
           if-no-files-found: ignore
           retention-days: 30

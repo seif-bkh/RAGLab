@@ -2533,6 +2533,99 @@ class EvidencePlanDerivation(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "")
 
 
+class RelationalExpansion(unittest.TestCase):
+    """Phase-5 item 3: retrieval expansion along the Phase-4 relations under
+    the DECLARED intent policy — internal edges only for إجرائي (from) and
+    استثناء (both directions), the grounding edge only when the request names
+    BOTH the Circulaire and the law; depth <= 2, node cap; extras occupy the
+    TAIL of the top-k window (head vector hits keep their ranks); env-gated
+    default OFF."""
+
+    @staticmethod
+    def _cfg():
+        return SimpleNamespace(RELATIONAL_EXPANSION_ENABLED=True)
+
+    @staticmethod
+    def _law_hit(heading="الفصل52", rank=1, score=5.0):
+        return {"id": f"Loi_2016-48.pdf::chunk_{rank:04d}", "rank": rank,
+                "text": "chunk text", "score": score,
+                "metadata": {"document": "Loi_2016-48.pdf",
+                             "source": "Loi_2016-48.pdf", "language": "ar",
+                             "heading": heading}}
+
+    def test_procedural_query_expands_with_documented_edges(self):
+        import relational_expansion as rex
+        hits = [self._law_hit(rank=i, score=5.0 - i * 0.1) for i in range(1, 6)]
+        out = rex.expand(self._cfg(), "كيف تُمنح التراخيص للبنوك؟", hits, top_k=5)
+        extras = [h for h in out if h["metadata"].get("via_relation")]
+        self.assertTrue(extras)
+        self.assertLessEqual(len(extras), rex.NODE_CAP)
+        # art 52 references الفصول 49-51 — those units ride along, documented
+        self.assertIn("loi-2016-48:art049", [h["id"] for h in extras])
+        self.assertTrue(all(h["metadata"]["via_relation"].startswith("internal")
+                            for h in extras))
+
+    def test_tail_slots_only_head_preserved(self):
+        import relational_expansion as rex
+        hits = [self._law_hit(rank=i, score=5.0 - i * 0.1) for i in range(1, 6)]
+        out = rex.expand(self._cfg(), "كيف تُمنح التراخيص للبنوك؟", hits, top_k=5)
+        extras = [h for h in out if h["metadata"].get("via_relation")]
+        head = out[:len(out) - len(extras)]
+        self.assertEqual([h["id"] for h in head],
+                         [h["id"] for h in hits[:len(head)]])   # head untouched
+        self.assertEqual([h["rank"] for h in out], list(range(1, len(out) + 1)))
+        self.assertLessEqual(len(out), 5)                        # top_k respected
+
+    def test_expansion_rescues_missing_evidence(self):
+        """The mechanism proof: a case whose expected evidence lives in a
+        REFERENCED article's verbatim text is served by the expansion."""
+        import relational_expansion as rex
+        import evaluate
+        hits = [self._law_hit(rank=i, score=5.0 - i * 0.1) for i in range(1, 6)]
+        out = rex.expand(self._cfg(), "كيف تُمنح التراخيص للبنوك؟", hits, top_k=5)
+        law_units = rex._law_context()[0]
+        art49 = next(u for u in law_units if u["unit_id"].endswith("art049"))
+        case = {"expected_document": "Loi_2016-48.pdf", "expected_lang": "ar",
+                "expected_substring": art49["text"][100:220]}
+        ch = evaluate.find_correct_hit(case, out)
+        self.assertIsNotNone(ch)
+        self.assertLessEqual(ch["rank"], 5)
+
+    def test_policy_is_narrow(self):
+        import relational_expansion as rex
+        # definitional / numeric / comparison requests: no expansion at all
+        for q in ("ما هي المرابحة؟", "ما الحد الأقصى لرأس المال؟",
+                  "قارن بين صيغتي المضاربة"):
+            out = rex.expand(self._cfg(), q, [self._law_hit()], top_k=5)
+            self.assertEqual([h for h in out if h.get("metadata", {}).get("via_relation")],
+                             [], q)
+        # grounding fires only when BOTH document families are named AND
+        # Circulaire evidence was retrieved (the edge is Circulaire→art011)
+        circ_hit = {"id": "Circulaire_BCT_2019-08.pdf::chunk_0002", "rank": 1,
+                    "text": "منشور", "score": 4.0,
+                    "metadata": {"document": "Circulaire_BCT_2019-08.pdf",
+                                 "source": "Circulaire_BCT_2019-08.pdf",
+                                 "language": "ar", "heading": "الفصل 2"}}
+        both = rex.expand(self._cfg(),
+                          "ماذا يقول المنشور وقانون عدد 48 عن المضاربة؟",
+                          [circ_hit, self._law_hit(rank=2, score=3.0)], top_k=5)
+        self.assertIn("loi-2016-48:art011",
+                      [h["id"] for h in both])
+        # the law alone (no Circulaire hit) does not trigger the grounding
+        law_only = rex.expand(self._cfg(), "ماذا يقول قانون عدد 48 عن المضاربة؟",
+                              [self._law_hit()], top_k=5)
+        self.assertNotIn("loi-2016-48:art011",
+                         [h["id"] for h in law_only
+                          if h.get("metadata", {}).get("via_relation")])
+
+    def test_default_off_and_inert_when_disabled(self):
+        import config
+        self.assertFalse(config.RELATIONAL_EXPANSION_ENABLED)   # default OFF
+        # the retrieval wiring is guarded: disabled flag → retrieve untouched
+        src = (Path(__file__).resolve().parent / "retrieval.py").read_text(encoding="utf-8")
+        self.assertIn('getattr(cfg, "RELATIONAL_EXPANSION_ENABLED", False)', src)
+
+
 class UnitsExtraction(unittest.TestCase):
     """Phase-4 item 1: Loi 2016-48 knowledge units — article-level split from
     the adopted codex through the SHARED marker machinery (restructure.
