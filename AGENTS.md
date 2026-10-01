@@ -62,7 +62,13 @@ Current state of the work:
   (synonyms/colloquial lexical gaps) — the decisive measurement is the live
   arm (a real-test.yml target-set step, pending owner authorization).
   Integrity guarded by `TargetSetIntegrity`; record:
-  `raglab/audits/PHASE3_INTERVENTIONS.md`.
+  `raglab/audits/PHASE3_INTERVENTIONS.md`. **Live measurement DONE (run
+  36840207930, tag `real-test-targets2-20261001`)**: deployed arm 50/70/70
+  (compound 100/100/100, implicit+ambiguous 50/100/100, synonyms 50/50/50,
+  colloquial 0/0/0); `LEXICON_ENABLED=1` changes NOTHING (identical numbers —
+  its BM25 lift does not transfer to the vector arm) → data says keep the
+  lexicon default OFF (owner gate). No 50-set regression same-run
+  (71/80/87, verbatim 50/60/80, OOS 0.286).
 - **Phase-4 knowledge layer (plan stage)**: `raglab/audits/PHASE4_KNOWLEDGE.md`
   — the 8-item plans for building the knowledge layer on Loi 2016-48 (owner's
   2026-10-01 choice): units.py with functional types and stable ids, the
