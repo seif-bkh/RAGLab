@@ -116,6 +116,10 @@ Current state of the work:
   normalized-containment rule against the same-run restructure baseline;
   new real-test.yml step (`--live`) posts the units-index ANNO with the
   automated gate (hit@5 >= baseline). Guarded by `UnitIndexMeasure`.
+  **LIVE RESULT (run 36851358899, tag `real-test-units-20261001`): units
+  index 100/100/100 vs same-run baseline 67/92/92 — GATE PASS** (every law
+  question, cross-lingual included, finds its article at rank 1 on the
+  description surface).
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
