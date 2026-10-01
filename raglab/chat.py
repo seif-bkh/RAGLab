@@ -244,8 +244,15 @@ class ReasoningSwitch:
 
 def ask(local, embedder, collection, generator, question, *, top_k=None, neighbor_radius=None,
         use_cache=True, mode='vector', language=None, lang_filter=None, corpus_langs=None,
-        return_pool=False):
-    """One turn: retrieve, optionally widen the excerpts, then answer with citations or abstain."""
+        return_pool=False, allowed_documents=None, pre_generate=None):
+    """One turn: retrieve, optionally widen the excerpts, then answer with citations or abstain.
+
+    pre_generate(question, hits) — an inert hook (Phase-6 item 2) called after
+    retrieval and neighbor expansion, BEFORE any model call. Returning None
+    proceeds normally; returning a dict short-circuits generation and that
+    dict becomes the turn's result (the sufficiency commitment uses it to
+    refuse on evidence absence without spending a model call, or to run one
+    bounded regeneration over the covered micro-questions only)."""
     from answer import local_private_refusal
     from evaluate import prepare_query_text
     from retrieval import expand_neighbors, retrieve
@@ -264,7 +271,18 @@ def ask(local, embedder, collection, generator, question, *, top_k=None, neighbo
                               lang_filter=lang_filter)
     hits = expand_neighbors(collection, hits, radius=local.ANSWER_NEIGHBOR_RADIUS
                             if neighbor_radius is None else neighbor_radius)
-    result = generator.answer(question, hits, language, use_cache=use_cache)
+    if pre_generate is not None:
+        short = pre_generate(question, hits)
+        if short is not None:
+            return {**short, 'question': question, 'retrieved': len(hits),
+                    'query_variants': variants, 'language': language,
+                    'retrieval_mode': mode,
+                    'context_tokens': local.ANSWER_CONTEXT_TOKENS,
+                    'corpus_languages': sorted(corpus_langs or []),
+                    'question_language_mismatch': bool(corpus_langs)
+                    and language not in set(corpus_langs)}
+    result = generator.answer(question, hits, language, use_cache=use_cache,
+                              allowed_documents=allowed_documents)
     kept = len(result.get('sources') or [])
     # Phase-5 item 5 (inert by default): expose the post-neighbor retrieval
     # pool so the service can compute the sufficiency fields WITHOUT a second

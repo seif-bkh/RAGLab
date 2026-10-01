@@ -152,6 +152,39 @@ All are background jobs: response `{"state": "accepted", …}` → poll
 the remedy). During the job the app is SEALED (FRONTEND.md §4.3): reads
 return `409 ingest_in_progress`.
 
+### 2.9 Understanding & sufficiency layers (1.3.0 — env-gated, additive-only)
+
+Three independent service-side switches; none changes a pre-existing field,
+all default **off**:
+
+| Env var | Effect when `1` |
+|---|---|
+| `SUFFICIENCY_FIELDS_ENABLED` | `/answer` gains `evidence_status` (كافٍ/غير كافٍ/متعارض/غير محسوم), `requirements_covered/missing`, `conflicts`, `refusal_reason`. |
+| `ANSWER_SUFFICIENCY_COMMITMENT` | Insufficient-and-uncovered questions are refused **before any model call** (`reason: evidence_insufficient` + `referral`); partially covered questions are downgraded to one bounded regeneration over the covered micro-questions (`partial: true`). |
+| `RELATIONAL_EXPANSION_ENABLED` | Retrieval expansion along the Phase-4 relations under the declared intent policy (measured neutral on both arms). |
+
+Worked sequence (fields + audit):
+
+```
+# 1) ask with the fields on (service started with SUFFICIENCY_FIELDS_ENABLED=1)
+POST /answer  {"question": "ما هي عملية المرابحة على معنى القانون عدد 48 لسنة 2016؟"}
+→ {..., "evidence_status": "كافٍ", "requirements_covered": ["definition_or_purpose_unit"],
+     "requirements_missing": []}
+
+# 2) an out-of-corpus question names its missing requirement
+POST /answer  {"question": "كيف احجز تذكرة طائرة من تونس الى دبي؟"}
+→ {..., "evidence_status": "غير كافٍ", "requirements_missing": ["procedural_evidence"],
+     "refusal_reason": "evidence absent for: procedural_evidence"}
+
+# 3) the audit trail (always on; questions are PII-scrubbed before storage)
+GET /audit?limit=5
+→ {"retention": 500, "entries": [{"trace_id": "9f1c0a2b7d3e", ...}]}
+
+# 4) stable unit ids on cited law chunks (always on in 1.3.0)
+POST /answer  {"question": "...", "include_excerpts": false}
+→ sources[0].unit_id == "loi-2016-48:art052"   (deep-linkable across chunking changes)
+```
+
 ## 3. The two side-effect rules (memorize these)
 
 1. **Answer-model or retrieval change → nothing to rebuild.** Next query

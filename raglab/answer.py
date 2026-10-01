@@ -46,6 +46,51 @@ def needs_private_or_live_data(question):
     ))
 
 
+# ---------------------------------------------------------------------------
+# Phase-6 item 1: stable unit identifiers on sources + the deterministic
+# expansion of the citation gate (مسترجَع فعلًا / مسموح / نافذ).
+# ---------------------------------------------------------------------------
+
+# The citation-gate policy is DECLARED REVIEW DATA:
+# - allowed: a cited source's document must be part of the deployed corpus
+#   (the caller passes the collection's document set — never assumed);
+# - in force (نافذ): checked ONLY where the governance axis is registered
+#   (deferred documents carry no status claim — they pass, unflagged).
+CITATION_GATE_POLICY = {
+    "required_status": "نافذ",
+    "status_check": "registered documents only (governance axes present)",
+}
+
+_UNIT_MAP_CACHE: dict = {}
+
+
+def _law_unit_map() -> dict:
+    """(document, heading) -> stable unit_id for typed law chunks (cached)."""
+    if "map" not in _UNIT_MAP_CACHE:
+        try:
+            import restructure
+            import units
+            codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+            if codex is None:
+                _UNIT_MAP_CACHE["map"] = {}
+            else:
+                _UNIT_MAP_CACHE["map"] = {
+                    ("Loi_2016-48.pdf", u["heading"]): u["unit_id"]
+                    for u in units.extract_law_units(codex)
+                }
+        except Exception:                                   # noqa: BLE001
+            _UNIT_MAP_CACHE["map"] = {}   # never break answering over provenance
+    return _UNIT_MAP_CACHE["map"]
+
+
+def resolve_unit_id(document, heading) -> str | None:
+    """The STABLE unit identifier (e.g. loi-2016-48:art052) for a law chunk,
+    resolved from its heading — None for untyped documents."""
+    if not document or not heading:
+        return None
+    return _law_unit_map().get((document, heading))
+
+
 def build_sources(hits, token_budget):
     if token_budget <= 0:
         raise ValueError("Answer context token budget must be positive")
@@ -58,9 +103,20 @@ def build_sources(hits, token_budget):
         if used + size > token_budget:
             continue  # do not turn a truncation into an apparent complete quote
         meta = hit.get("metadata") or {}
-        sources.append({"source_id": f"S{len(sources)+1}", "chunk_id": hit["id"],
-                        "document": meta.get("document") or meta.get("source") or hit.get("document"),
-                        "heading": meta.get("heading", ""), "text": hit["text"]})
+        document = (meta.get("document") or meta.get("source")
+                    or hit.get("document"))
+        row = {"source_id": f"S{len(sources)+1}", "chunk_id": hit["id"],
+               "document": document,
+               "heading": meta.get("heading", ""), "text": hit["text"]}
+        # Phase-6 item 1 (additive provenance): the stable unit id where the
+        # chunk is a typed law unit, and the governance status axis where
+        # registered — the citation gate's نافذ check reads the latter.
+        unit_id = resolve_unit_id(document, meta.get("heading", ""))
+        if unit_id:
+            row["unit_id"] = unit_id
+        if meta.get("gov_status"):
+            row["gov_status"] = meta["gov_status"]
+        sources.append(row)
         used += size
     return sources
 
@@ -97,8 +153,18 @@ def answer_messages(question, language, sources, version="grounded-v1"):
             {"role": "user", "content": json.dumps({"question": question, "sources": sources}, ensure_ascii=False)}]
 
 
-def validate_answer(output, sources):
-    """Strict structural and quote-membership gate. Returns validated claims."""
+def validate_answer(output, sources, allowed_documents=None):
+    """Strict structural and quote-membership gate. Returns validated claims.
+
+    Phase-6 item 1 — the deterministic expansion (optional arguments; every
+    existing caller keeps the previous behavior):
+    - every cited source is built from actually-RETRIEVED hits (by
+      construction: `sources` comes from build_sources(hits));
+    - allowed_documents: when given, every cited source's document must be
+      in it (the deployed corpus's document set — never assumed here);
+    - in force (نافذ): a source that carries a registered gov_status must
+      satisfy CITATION_GATE_POLICY['required_status'] — deferred documents
+      (no axis) pass, unflagged."""
     if isinstance(output, str):
         # A single fenced JSON object is harmless; commentary is not.
         match = re.fullmatch(r"\s*```(?:json)?\s*([\s\S]*?)\s*```\s*", output)
@@ -115,6 +181,18 @@ def validate_answer(output, sources):
     if not claims or len(claims) > 12:
         raise ValueError("An answer needs 1–12 cited claims")
     source_map = {s["source_id"]: s for s in sources}
+    if allowed_documents is not None:
+        for s in sources:
+            if s.get("document") not in allowed_documents:
+                raise ValueError(
+                    "Cited document is not part of the deployed corpus: "
+                    + str(s.get("document")))
+    for s in sources:
+        status = s.get("gov_status")
+        if status is not None and status != CITATION_GATE_POLICY["required_status"]:
+            raise ValueError(
+                "Cited document is not in force (gov_status="
+                + str(status) + "): " + str(s.get("document")))
     clean = []
     for claim in claims:
         if not isinstance(claim, dict) or not isinstance(claim.get("text"), str) or not claim["text"].strip():
@@ -288,7 +366,8 @@ class AnswerGenerator:
             print("[answer] WARNING: unreadable cache; answers will be regenerated")
             return {}
 
-    def answer(self, question, hits, language=None, use_cache=True):
+    def answer(self, question, hits, language=None, use_cache=True,
+               allowed_documents=None):
         language = language or detect_language(question)
         if language not in REFUSALS:
             raise ValueError("Answer language must be en, fr or ar")
@@ -328,7 +407,8 @@ class AnswerGenerator:
                     "http_status": getattr(exc, 'status_code', None),
                     "retry_after_s": getattr(exc, 'retry_after', None)}
         try:
-            claims = validate_answer(response["text"], sources)
+            claims = validate_answer(response["text"], sources,
+                                     allowed_documents=allowed_documents)
         except UnsourcedNumber as exc:
             reply = response.get("text") if isinstance(response, dict) else None
             return {**base, "status": "refused", "reason": "unsourced_number",

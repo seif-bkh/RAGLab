@@ -183,6 +183,35 @@ Current state of the work:
   field-free by design. Inert-layer guard updated (one gated reference in
   service.py, none elsewhere). Tests: SufficiencyFieldsTest (4) + the
   OFF regression in ServiceTest — suites 197 + 52 OK.
+- **Phase 6 COMPLETE (2026-10-01, owner directive «أنجز ما تبقى»; records in
+  raglab/audits/PHASE6_DELIVERY.md; SERVICE_VERSION 1.3.0):**
+  1. Stable unit ids on cited sources (`unit_id` on law chunks, additive)
+     + DETERMINISTIC citation-gate expansion (declared
+     CITATION_GATE_POLICY): cited source must be actually retrieved, its
+     document ALLOWED (the corpus document set MEASURED from the live index,
+     cached — never hard-coded) and IN FORCE (gov_status == نافذ where the
+     axis is registered; deferred docs pass unflagged). Optional args — all
+     existing callers unchanged. Guarded by `CitationGateExpansion` (5).
+  2. Sufficiency COMMITMENT behind ANSWER_SUFFICIENCY_COMMITMENT (default
+     OFF) via chat.ask's inert pre_generate hook (one retrieval, decision
+     BEFORE any model call): nothing covered -> refused
+     (reason evidence_insufficient) with a REFERRAL naming the missing
+     requirements + advisory clarifications; partially covered -> ONE
+     bounded regeneration over the covered micro-questions only, tagged
+     partial/answered_requirements/unanswered_requirements. Guarded by
+     `SufficiencyCommitmentTest` (6, incl. the same-question-same-effect
+     determinism test = the phase-6 close gate).
+  3. raglab/audit.py — per-request JSONL trail under RESULTS_DIR (outside
+     the repo by design): trace id, UTC ts, PII-scrubbed question (scrubbed
+     BEFORE writing), status/evidence_status/model/counts/latency; retention
+     AUDIT_LOG_MAX_ENTRIES (default 500, oldest dropped); GET /audit?limit=
+     (1..500). Operational only — never changes a response. Guarded by
+     `AuditTrail` (3) + HTTP tests.
+  4. CONTRACT.md (§3.10 expanded, §3.16 /audit) + COOKBOOK.md (§2.9 the
+     three understanding/sufficiency env gates + worked sequence).
+  Suites: 215 (pipeline) + 58 (service) OK; offline gate EXIT=0. Phase 7
+  remains pending owner decisions (identity provider, disclosure policy,
+  reference precedence).
 - **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
   `raglab/decompose.py` (read-only): the intermediate decomposition layer.
   EVERY question → reformulated micro-questions, each with its partial

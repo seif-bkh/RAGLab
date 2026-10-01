@@ -108,7 +108,7 @@ from scrub import scrub_pii
 
 import docstore as docstore_mod
 
-SERVICE_VERSION = "1.2.5"
+SERVICE_VERSION = "1.3.0"
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +288,22 @@ class Runtime:
             self._local = None
             self._embedder = None
             self._generator = None
+
+
+_DOCS_CACHE: dict = {}
+
+
+def _collection_documents(collection) -> set:
+    """The deployed corpus's document set (cached per name+count) — the
+    citation gate's «مسموح» allowlist. Never assumed, always measured."""
+    key = (getattr(collection, "name", None) or id(collection),
+           collection.count())
+    if key not in _DOCS_CACHE:
+        metas = collection.get(include=["metadatas"])["metadatas"] or []
+        _DOCS_CACHE.clear()
+        _DOCS_CACHE[key] = {(m or {}).get("document")
+                            for m in metas if (m or {}).get("document")}
+    return _DOCS_CACHE[key]
 
 
 class IngestJobs:
@@ -548,7 +564,7 @@ def create_app(profile: dict | None = None, *, generator=None,
                 "profile": "/profile", "models": "/models",
                 "endpoints": ["POST /search", "POST /answer",
                               "POST /ingest", "GET /ingest/status",
-                              "GET /numbers"]}
+                              "GET /numbers", "GET /audit"]}
 
     @app.get("/numbers")
     def numbers(unit_id: Optional[str] = None, kind: Optional[str] = None):
@@ -578,6 +594,20 @@ def create_app(profile: dict | None = None, *, generator=None,
                 "circulaire_corrections": _ln.CIRCULAIRE_CORRECTIONS,
                 "note": "deterministic extraction (governed NUM_WORDS vocabulary); "
                         "every record's raw span is verbatim in its unit"}
+
+    @app.get("/audit")
+    def audit_trail(limit: int = 20):
+        """Recent request-audit entries, newest first (Phase 6, item 3 —
+        additive). The stored questions are PII-scrubbed; retention is
+        bounded by AUDIT_LOG_MAX_ENTRIES."""
+        if limit < 1 or limit > 500:
+            raise ServiceError(400, "bad_limit", limit=limit, allowed="1..500")
+        import audit as audit_mod
+        local = runtime.local()
+        path = Path(local.RESULTS_DIR) / "audit_log.jsonl"
+        return {"retention": getattr(local, "AUDIT_LOG_MAX_ENTRIES",
+                                     audit_mod.RETENTION_MAX_ENTRIES),
+                "entries": audit_mod.recent(path, limit)}
 
     @app.get("/health")
     def health():
@@ -806,6 +836,13 @@ def create_app(profile: dict | None = None, *, generator=None,
         except OSError as exc:               # mid-request network failure
             raise ServiceError(502, "provider_unreachable", slot="embedding",
                                error=safe_error(exc)) from None
+        try:
+            import audit
+            audit.record(Path(local.RESULTS_DIR) / "audit_log.jsonl", {
+                "endpoint": "/search", "question": scrub_pii(request.question),
+                "language": language, "status": "ok", "retrieved": len(hits)})
+        except Exception:                                   # noqa: BLE001
+            pass            # bookkeeping must never break a search
         return {"question": request.question, "language": language, "k": k, "mode": mode,
                 "embedder": {"provider": embedder.provider_name, "model": embedder.model},
                 "variants": [{"label": v["label"], "text": v["text"]} for v in variants],
@@ -833,6 +870,14 @@ def create_app(profile: dict | None = None, *, generator=None,
         if greeting is not None:
             # smalltalk never touches the index — it works during an ingest
             language, text = greeting
+            try:
+                import audit
+                audit.record(Path(local.RESULTS_DIR) / "audit_log.jsonl", {
+                    "endpoint": "/answer", "question": scrub_pii(request.question),
+                    "language": language, "status": "greeting", "reason": "smalltalk",
+                    "model": "(none — answered locally)"})
+            except Exception:                               # noqa: BLE001
+                pass
             return {"status": "greeting", "reason": "smalltalk", "answer": text,
                     "language": language, "inference_performed": False,
                     "model": "(none — answered locally)", "claims": [], "sources": []}
@@ -842,11 +887,62 @@ def create_app(profile: dict | None = None, *, generator=None,
         collection = runtime.collection()
         generator = runtime.generator()
         k = request.k or local.ANSWER_TOP_K
-        # Phase-5 item 5: the sufficiency fields need the retrieval pool —
-        # ask() exposes it (inert switch, no second retrieval) only when the
-        # additive-fields gate is on; OFF keeps the response shape unchanged.
+        # Phase-5 item 5 + Phase-6 item 2 gates: the sufficiency fields are
+        # additive-only; the COMMITMENT (refuse on evidence absence before any
+        # model call + one bounded partial regeneration) is a separate gate.
+        # Both compute the sufficiency state ONCE, inside ask()'s pre_generate
+        # hook — after retrieval, before generation, no second retrieval.
         want_sufficiency = bool(getattr(local, "SUFFICIENCY_FIELDS_ENABLED", False))
+        want_commitment = bool(getattr(local, "ANSWER_SUFFICIENCY_COMMITMENT", False))
+        allowed_docs = _collection_documents(collection)
+        state_box: dict = {}          # sufficiency state shared with the hook
+
+        def _commitment_gate(question, hits):
+            import sufficiency
+            s = sufficiency.check(
+                question, hits,
+                df=sufficiency.df_for_collection(collection))
+            state_box["s"] = s
+            if not want_commitment or s["state"] != "غير كافٍ":
+                return None                      # proceed to the model
+            covered = [r["req"] for r in s["requirements"] if r["covered"]]
+            missing = [r["req"] for r in s["requirements"] if not r["covered"]]
+            if not covered:
+                # NOTHING covers the plan — refuse BEFORE any model call:
+                # the refusal is tied to evidence absence and carries a
+                # referral (the missing requirements + clarifications).
+                import decompose
+                from answer import REFUSALS
+                d = decompose.decompose(question)
+                language = state_box.get("language") or "ar"
+                return {"status": "refused", "reason": "evidence_insufficient",
+                        "answer": REFUSALS.get(language, REFUSALS["en"]),
+                        "claims": [], "sources": [], "model": "(none — refused before generation)",
+                        "language": language, "validation_ok": True, "cached": False,
+                        "seconds": 0.0,
+                        "refusal_reason": s["reason"],
+                        "requirements_missing": missing,
+                        "referral": {"missing_requirements": missing,
+                                     "clarifications": d["clarifications"]}}
+            # PARTIAL: some requirements are covered — one bounded
+            # regeneration answers ONLY the covered micro-questions, and the
+            # response is tagged with what was answered and what was not.
+            import decompose
+            d = decompose.decompose(question)
+            covered_kinds = set(covered)
+            micros = [m for m in d["micro_questions"] if m["requirement"] in covered_kinds]
+            reduced = "؛ ".join(m["text"] for m in micros) or question
+            reg = generator.answer(reduced, hits,
+                                   state_box.get("language"),
+                                   allowed_documents=allowed_docs)
+            return {**reg, "partial": True,
+                    "answered_requirements": covered,
+                    "unanswered_requirements": missing}
+
         try:
+            from translate import detect_language
+            state_box["language"] = (request.query_lang
+                                     or detect_language(request.question))
             result = chat_mod.ask(local, embedder, collection, generator,
                                   request.question, top_k=k,
                                   neighbor_radius=local.ANSWER_NEIGHBOR_RADIUS,
@@ -855,7 +951,9 @@ def create_app(profile: dict | None = None, *, generator=None,
                                   lang_filter=(request.lang_filter if request.lang_filter is not None
                                                else runtime.profile["retrieval"]["lang_filter"]),
                                   language=request.query_lang,
-                                  return_pool=want_sufficiency)
+                                  pre_generate=_commitment_gate
+                                  if (want_sufficiency or want_commitment) else None,
+                                  allowed_documents=allowed_docs)
         except (ValueError, RuntimeError) as exc:
             raise ServiceError(409, "answer_refused", error=safe_error(exc)) from None
         except OSError as exc:               # mid-request network failure
@@ -867,6 +965,10 @@ def create_app(profile: dict | None = None, *, generator=None,
         for source in result.get("sources") or []:
             row = {"source_id": source["source_id"], "document": source["document"],
                    "chunk_id": source["chunk_id"], "heading": source.get("heading", "")}
+            # Phase-6 item 1 (additive): the stable unit identifier for typed
+            # law chunks (loi-2016-48:artNNN)
+            if source.get("unit_id"):
+                row["unit_id"] = source["unit_id"]
             if request.include_excerpts:
                 row["text"] = scrub_pii(source["text"])
             sources.append(row)
@@ -897,16 +999,13 @@ def create_app(profile: dict | None = None, *, generator=None,
                                    if result.get("raw_preview") else None),
                    "inference_performed": result.get("status") not in (None, "refused", "greeting")}
         # Phase-5 item 5 — ADDITIVE-ONLY sufficiency fields (§2.7 freeze):
-        # with the gate ON and a retrieval pool present (greeting and local
-        # privacy refusals retrieve nothing, so they stay field-free), the
-        # response gains exactly sufficiency.RESPONSE_FIELDS — nothing else
-        # changes. With the gate OFF the payload above is byte-identical to
-        # the pre-item-5 response.
-        if want_sufficiency and result.get("retrieval_pool") is not None:
-            import sufficiency
-            s = sufficiency.check(result["question"],
-                                  result["retrieval_pool"],
-                                  df=sufficiency.df_for_collection(collection))
+        # with the fields gate ON and the sufficiency state computed (greeting
+        # and local privacy refusals retrieve nothing, so they stay
+        # field-free), the response gains exactly sufficiency.RESPONSE_FIELDS
+        # — nothing else changes. With the gate OFF the payload above is
+        # byte-identical to the pre-item-5 response.
+        s = state_box.get("s")
+        if want_sufficiency and s is not None:
             payload["evidence_status"] = s["state"]
             payload["requirements_covered"] = [r["req"] for r in s["requirements"]
                                                if r["covered"]]
@@ -917,6 +1016,35 @@ def create_app(profile: dict | None = None, *, generator=None,
             # requirements) — never to a classification failure
             if s["state"] == "غير كافٍ":
                 payload["refusal_reason"] = s["reason"]
+        # Phase-6 item 2 — the commitment's additive tags: a partial answer
+        # says WHAT it answered and what lacked evidence; a commitment
+        # refusal carries its referral.
+        for key in ("partial", "answered_requirements", "unanswered_requirements"):
+            if result.get(key) is not None:
+                payload[key] = result[key]
+        if result.get("referral"):
+            payload["referral"] = result["referral"]
+        # Phase-6 item 3 — the audit trail (operational; never changes the
+        # response). The question is scrubbed BEFORE recording.
+        try:
+            import audit
+            audit.record(Path(local.RESULTS_DIR) / "audit_log.jsonl", {
+                "endpoint": "/answer",
+                "question": scrub_pii(request.question),
+                "language": result.get("language"),
+                "status": payload.get("status"),
+                "reason": payload.get("reason"),
+                "evidence_status": (s["state"] if s is not None else None),
+                "model": payload.get("model"),
+                "claims": len(payload.get("claims") or []),
+                "sources": len(payload.get("sources") or []),
+                "retrieved": payload.get("retrieved"),
+                "validation_ok": payload.get("validation_ok"),
+                "seconds": payload.get("seconds"),
+                "error": payload.get("error"),
+            })
+        except Exception:                                   # noqa: BLE001
+            pass            # bookkeeping must never break an answer
         return payload
 
     # -- ingestion --------------------------------------------------------------

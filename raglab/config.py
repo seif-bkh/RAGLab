@@ -281,6 +281,18 @@ RELATIONAL_EXPANSION_ENABLED = os.getenv("RELATIONAL_EXPANSION_ENABLED", "0") ==
 # requirements_covered / requirements_missing / conflicts / refusal_reason to
 # the response; "0" keeps the response byte-identical to today's.
 SUFFICIENCY_FIELDS_ENABLED = os.getenv("SUFFICIENCY_FIELDS_ENABLED", "0") == "1"
+
+# Phase-6 item 2: the answer's COMMITMENT to the sufficiency state (default
+# OFF — activation is the owner's). ON means: an insufficient question is
+# refused BEFORE any model call (refusal tied to evidence absence, with a
+# referral listing the missing requirements); a PARTIALLY covered question is
+# downgraded — one bounded regeneration answers ONLY the covered
+# micro-questions and the response is tagged partial.
+ANSWER_SUFFICIENCY_COMMITMENT = os.getenv("ANSWER_SUFFICIENCY_COMMITMENT", "0") == "1"
+
+# Phase-6 item 3: the request audit trail (always on — it is operational
+# bookkeeping, never changes a response). Entries live under RESULTS_DIR.
+AUDIT_LOG_MAX_ENTRIES = int(os.getenv("AUDIT_LOG_MAX_ENTRIES", "500"))
 RETRIEVAL_CANDIDATE_K = 20
 
 # Selected measured profile. Old .env values are rejected, not silently used.

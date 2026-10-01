@@ -852,7 +852,8 @@ class ChatEntry(unittest.TestCase):
             def __init__(self):
                 self.asked = []
 
-            def answer(self, question, hits, language=None, use_cache=True):
+            def answer(self, question, hits, language=None, use_cache=True,
+                        allowed_documents=None):
                 self.asked.append(question)
                 return {'answer': 'unreachable'}
 
@@ -1009,7 +1010,8 @@ class ChatEntry(unittest.TestCase):
             return [], [{'label': 'en(original)', 'lang': 'en', 'text': text}]
 
         class Generator:
-            def answer(self, question, hits, language=None, use_cache=True):
+            def answer(self, question, hits, language=None, use_cache=True,
+                        allowed_documents=None):
                 return {'status': 'refused', 'reason': 'no_context', 'answer': 'no', 'sources': [],
                         'model': language and 'm'}
 
@@ -2533,6 +2535,141 @@ class EvidencePlanDerivation(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "")
 
 
+class CitationGateExpansion(unittest.TestCase):
+    """Phase-6 item 1: stable unit ids on sources + the deterministic
+    expansion of the citation gate — a cited source must be actually
+    retrieved (by construction), ALLOWED (its document is in the deployed
+    corpus set, passed by the caller — never assumed) and IN FORCE
+    (gov_status == نافذ where the axis is registered; deferred documents
+    carry no status claim and pass unflagged)."""
+
+    @staticmethod
+    def _hit(doc="Loi_2016-48.pdf", heading="الفصل52", gov=None, hid="h1"):
+        meta = {"document": doc, "source": doc, "language": "ar",
+                "heading": heading}
+        if gov:
+            meta["gov_status"] = gov
+        return {"id": hid, "text": "نص الفصل 52 ينص على أحكام معينة",
+                "metadata": meta}
+
+    def test_resolve_unit_id_stable(self):
+        import answer
+        self.assertEqual(answer.resolve_unit_id("Loi_2016-48.pdf", "الفصل52"),
+                         "loi-2016-48:art052")
+        # untyped documents / unknown headings -> None (never invented)
+        self.assertIsNone(answer.resolve_unit_id("Guide_Interne_x.docx", "2.1-"))
+        self.assertIsNone(answer.resolve_unit_id("Loi_2016-48.pdf", "لا-فصل"))
+        self.assertIsNone(answer.resolve_unit_id(None, "الفصل52"))
+
+    def test_build_sources_carries_unit_id_and_status(self):
+        import answer
+        law = self._hit(gov="نافذ")
+        other = self._hit(doc="Guide_Interne_Operations_Bancaires_Islamiques.docx",
+                          heading="2.1- عملية التمويل بصيغة المرابحة", hid="h2")
+        sources = answer.build_sources([law, other], 3000)
+        by_doc = {s["document"]: s for s in sources}
+        self.assertEqual(by_doc["Loi_2016-48.pdf"]["unit_id"],
+                         "loi-2016-48:art052")
+        self.assertEqual(by_doc["Loi_2016-48.pdf"]["gov_status"], "نافذ")
+        self.assertNotIn("unit_id", by_doc[
+            "Guide_Interne_Operations_Bancaires_Islamiques.docx"])
+        self.assertNotIn("gov_status", by_doc[
+            "Guide_Interne_Operations_Bancaires_Islamiques.docx"])
+
+    def _validated(self, output, sources, allowed=None):
+        import answer
+        return answer.validate_answer(output, sources,
+                                      allowed_documents=allowed)
+
+    def test_gate_rejects_document_outside_the_corpus(self):
+        import answer
+        hit = self._hit(doc="Phantom_Doc.pdf", heading="")
+        sources = answer.build_sources([hit], 3000)
+        out = {"answerable": True, "claims": [
+            {"text": "claim", "evidence": [
+                {"source_id": "S1", "quote": sources[0]["text"][:40]}]}]}
+        # allowed corpus set does not contain Phantom_Doc.pdf -> refused
+        with self.assertRaises(ValueError):
+            self._validated(out, sources, allowed={"Loi_2016-48.pdf"})
+        # with the right allowlist it passes (quote membership still enforced)
+
+    def test_gate_rejects_document_not_in_force(self):
+        import answer
+        hit = self._hit(gov="ملغى")     # registered axis, not نافذ
+        sources = answer.build_sources([hit], 3000)
+        out = {"answerable": True, "claims": [
+            {"text": "claim", "evidence": [
+                {"source_id": "S1", "quote": sources[0]["text"][:40]}]}]}
+        with self.assertRaises(ValueError):
+            self._validated(out, sources, allowed={"Loi_2016-48.pdf"})
+        # نافذ passes; no axis (deferred doc) passes unflagged
+        ok = answer.build_sources([self._hit(gov="نافذ")], 3000)
+        self._validated(out, {**out, "claims": [{"text": "claim", "evidence": [
+            {"source_id": "S1", "quote": ok[0]["text"][:40]}]}]} and [
+            {"source_id": "S1", "chunk_id": "h1", "document": "Loi_2016-48.pdf",
+             "heading": "الفصل52", "text": ok[0]["text"], "gov_status": "نافذ"}],
+            allowed={"Loi_2016-48.pdf"})
+        deferred = answer.build_sources([
+            self._hit(doc="Madkhal_Sayrafa_Islamiya.docx", heading="ب-")], 3000)
+        self._validated(
+            {"answerable": True, "claims": [{"text": "claim", "evidence": [
+                {"source_id": "S1", "quote": deferred[0]["text"][:40]}]}]},
+            deferred, allowed={"Madkhal_Sayrafa_Islamiya.docx"})
+
+    def test_policy_declared(self):
+        import answer
+        self.assertEqual(answer.CITATION_GATE_POLICY["required_status"], "نافذ")
+        self.assertIn("registered", answer.CITATION_GATE_POLICY["status_check"])
+
+
+class AuditTrail(unittest.TestCase):
+    """Phase-6 item 3: bounded, PII-safe request audit trail (JSONL)."""
+
+    def test_record_recent_roundtrip_and_defaults(self):
+        import audit
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "audit_log.jsonl"
+            row = audit.record(path, {"endpoint": "/answer",
+                                      "question": "سؤال اختبار",
+                                      "status": "answered"})
+            self.assertEqual(len(row["trace_id"]), 12)
+            self.assertIn("T", row["ts"])
+            rows = audit.recent(path, 10)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["question"], "سؤال اختبار")
+
+    def test_retention_trims_oldest(self):
+        import audit
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "audit_log.jsonl"
+            saved = audit.RETENTION_MAX_ENTRIES
+            try:
+                audit.RETENTION_MAX_ENTRIES = 3
+                for i in range(5):
+                    audit.record(path, {"endpoint": "/answer",
+                                        "question": f"q{i}", "status": "ok"})
+                rows = audit.recent(path, 10)
+                self.assertEqual(len(rows), 3)
+                self.assertEqual([r["question"] for r in rows],
+                                 ["q4", "q3", "q2"])   # newest first
+            finally:
+                audit.RETENTION_MAX_ENTRIES = saved
+
+    def test_torn_line_tolerated_and_schema_bounded(self):
+        import audit
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "audit_log.jsonl"
+            path.write_text('{"trace_id": "abc", "endpoint": "/answer"\n'
+                            '{"trace_id": "def", "endpoint": "/answer"}\n',
+                            encoding="utf-8")
+            rows = audit.recent(path, 10)
+            self.assertEqual(len(rows), 1)      # the torn line is skipped
+            self.assertTrue(set(rows[0]) <= set(audit.ENTRY_FIELDS))
+
+
 class DecompositionCheck(unittest.TestCase):
     """Phase-5 item 6 (owner directive 2026-10-01): the intermediate
     decomposition layer — EVERY question becomes micro-questions, each with
@@ -2638,14 +2775,30 @@ class DecompositionCheck(unittest.TestCase):
             self.assertEqual(m["ambiguous_without_clarification"], 0, name)
 
     def test_inert_layer_no_deployed_execution(self):
+        """decompose executes in the deployed path ONLY inside the
+        ANSWER_SUFFICIENCY_COMMITMENT gate (Phase-6 item 2 — the partial
+        regeneration and the referral are built from its micro-questions);
+        never on the default path."""
         import subprocess
-        for f in ["service.py", "main.py", "retrieval.py", "store.py",
-                  "answer.py", "answer_ab.py", "chat.py"]:
+        for f in ["main.py", "retrieval.py", "store.py", "answer.py",
+                  "answer_ab.py", "chat.py"]:
             out = subprocess.run(
                 ["grep", "-nE", "import decompose|decompose\.", f],
                 capture_output=True, text=True)
             self.assertEqual(out.returncode, 1,
                              f"{f} executes decompose in the deployed path")
+        # service.py: every reference is inside the gated callback (the
+        # commitment branches — indented deeper than any top-level code)
+        out = subprocess.run(
+            ["grep", "-nE", "import decompose|decompose\.", "service.py"],
+            capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, "service.py lost its gated use")
+        refs = [l for l in out.stdout.splitlines() if l.strip()]
+        self.assertGreaterEqual(len(refs), 2)
+        for line in refs:
+            code = line.split(":", 1)[1]
+            self.assertGreaterEqual(len(code) - len(code.lstrip()), 12,
+                                    "decompose reference outside the gate: " + line)
 
 
 class SufficiencyCheck(unittest.TestCase):

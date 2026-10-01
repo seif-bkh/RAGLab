@@ -1,7 +1,7 @@
 # RAGLab service — HTTP contract
 
 **Audience:** the fullstack team building against this service.
-**Service version:** `1.2.5` (reported by `GET /health` → `version`).
+**Service version:** `1.3.0` (reported by `GET /health` → `version`).
 **Machine-readable schema:** FastAPI generates OpenAPI 3 at `/openapi.json` and
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
@@ -201,7 +201,7 @@ this service needs a CLI — if a console claims "configured via CLI", it is
 reading an outdated premise.
 
 ```json
-{"service": "raglab", "version": "1.2.5",
+{"service": "raglab", "version": "1.3.0",
  "chat_model": "xkiro/qwen/qwen3.8-max:free",
  "embedding_model": "nvidia/nvidia/nemotron-3-embed-1b",
  "vector_dimension": 2048,
@@ -232,7 +232,7 @@ The endpoint your UI polls. No secrets — key values never appear, only
 `set`/`missing` per env var.
 
 ```json
-{"status": "ok", "version": "1.2.5",
+{"status": "ok", "version": "1.3.0",
  "profile": {"embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
              "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
              "chunking": {"mode": "restructure", "size": 220, "overlap": 40},
@@ -524,6 +524,35 @@ Field contract for (c):
 | `seconds` | Provider call duration. |
 | `error` / `raw_preview` | `null` on this path; populated only on `invalid_output`/`unsourced_number` refusals (see (b)). |
 | `inference_performed` | `false` for greetings and local refusals — use it to mark "no AI call" in your UI. |
+| `sources[].unit_id` | **1.3.0** — present when the chunk is a typed law unit: the stable identifier (`loi-2016-48:art052`). Use it to deep-link citations across versions (chunk ids change with chunking; unit ids do not). |
+
+**Optional sufficiency fields (1.3.0 — env-gated, additive-only).** With
+`SUFFICIENCY_FIELDS_ENABLED=1` on the service, an `answered`/`refused`
+response additionally carries the deterministic evidence-sufficiency state
+computed from the retrieval pool: `evidence_status` (one of `كافٍ` /
+`غير كافٍ` / `متعارض` / `غير محسوم`), `requirements_covered` /
+`requirements_missing` (the evidence plan's requirements), `conflicts` (only
+when a precedence-resolved conflict was detected) and `refusal_reason` (only
+when insufficient — names the missing requirements; the refusal is tied to
+evidence absence, never to a classification failure). With the variable
+unset the response is byte-identical to 1.2.x.
+
+**Sufficiency commitment (1.3.0 — env-gated, default off).** With
+`ANSWER_SUFFICIENCY_COMMITMENT=1`: a question whose evidence plan is covered
+by NOTHING is refused **before any model call** (`reason:
+"evidence_insufficient"`, `inference_performed: false`, plus a `referral`
+object naming the missing requirements and any advisory clarifications); a
+PARTIALLY covered question is downgraded — one bounded regeneration answers
+only the covered micro-questions, and the response is tagged `partial: true`
+with `answered_requirements` / `unanswered_requirements`. Both gates can be
+flipped independently; neither changes any pre-existing field.
+
+**Deterministic citation-gate expansion (1.3.0):** a cited source must be
+actually retrieved (by construction), its document must be part of the
+deployed corpus (the allowed set is measured from the live index — never
+hard-coded), and — where the governance axis is registered — the document
+must be in force (`gov_status == نافذ`). Deferred documents carry no status
+claim and pass unflagged.
 
 **What is machine-verified before you see an `answered` payload:** every
 evidence quote is a contiguous verbatim member of its cited chunk, AND every
@@ -658,7 +687,28 @@ no re-ingest:
 
 ---
 
-## 4. Error catalog
+### 3.16 `GET /audit?limit=20` — the request audit trail (1.3.0, free)
+The newest audit entries, newest first. Every `/answer` and `/search` request
+leaves one JSONL entry under the service's results dir: `trace_id` (12 hex
+chars), UTC `ts`, endpoint, the **PII-scrubbed** question (emails/phones/RIB/
+CIN are replaced with markers before the trail is written), language,
+`status`/`reason`, `evidence_status` (when the sufficiency fields are on),
+model, claims/sources counts, `retrieved`, `validation_ok`, `seconds`,
+`error`. Retention is bounded (`AUDIT_LOG_MAX_ENTRIES`, default 500 — oldest
+dropped). `limit` must be 1..500 (`400 bad_limit` otherwise). The trail is
+operational bookkeeping: it never changes any response.
+
+```json
+{"retention": 500,
+ "entries": [{"trace_id": "9f1c0a2b7d3e", "ts": "2026-10-01T21:55:01+00:00",
+              "endpoint": "/answer", "question": "What does the Atlas card cost?",
+              "language": "en", "status": "answered", "reason": "supported",
+              "evidence_status": "كافٍ", "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+              "claims": 1, "sources": 1, "retrieved": 1, "validation_ok": true,
+              "seconds": 1.8, "error": null}]}
+```
+
+## 4.## 4. Error catalog
 
 ### 4.1 Service errors — `{"detail": {"reason": …}}`
 

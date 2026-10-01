@@ -398,6 +398,140 @@ class SufficiencyFieldsTest(unittest.TestCase):
         self.assertNotIn("evidence_status", body)
         self.assertNotIn("refusal_reason", body)
 
+class SufficiencyCommitmentTest(unittest.TestCase):
+    """Phase-6 item 2: the answer's commitment to the sufficiency state
+    (ANSWER_SUFFICIENCY_COMMITMENT, default OFF). ON means: an insufficient
+    question with NOTHING covered is refused BEFORE any model call (refusal
+    carries a referral naming the missing requirements); a partially covered
+    question is downgraded — ONE bounded regeneration over the covered
+    micro-questions only, tagged partial. Plus: determinism (the phase-6
+    close gate) and the HTTP audit trail (item 3)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        (cls.tmp / "note.md").write_text(CORPUS, encoding="utf-8")
+        cls.profile = _service_profile(cls.tmp)
+        overrides = {
+            "CHROMA_DIR": cls.tmp / "chroma",
+            "EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+            "NVIDIA_EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+            "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
+            "RESULTS_DIR": cls.tmp,
+            "SUFFICIENCY_FIELDS_ENABLED": True,
+            "ANSWER_SUFFICIENCY_COMMITMENT": True,   # the item-2 gate ON
+        }
+        local = build_lab_config(cls.profile)
+        for key, value in overrides.items():
+            setattr(local, key, value)
+        generator = AnswerGenerator(local, client=_FakeChatClient(),
+                                    approved_models=(PROFILE_MODEL,))
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+        cls.client = TestClient(service.create_app(
+            cls.profile, generator=generator, allow_profile_switch=False,
+            config_overrides=overrides))
+        accepted = cls.client.post("/ingest").json()
+        deadline = time.monotonic() + 60
+        status = {"state": "running"}
+        while time.monotonic() < deadline:
+            status = cls.client.get("/ingest/status").json()
+            if status["state"] != "running":
+                break
+            time.sleep(0.2)
+        assert accepted.get("state") == "accepted" and status["state"] == "done", status
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.modules.pop("sentence_transformers", None)
+
+    def test_insufficient_refused_before_model_call_with_referral(self):
+        body = self.client.post("/answer", json={
+            "question": "Quelle est la recette de la bouillabaisse marseillaise ?"
+        }).json()
+        self.assertEqual(body["status"], "refused", body)
+        self.assertEqual(body["reason"], "evidence_insufficient")
+        self.assertFalse(body["inference_performed"])       # NO model call
+        self.assertIn("refusal_reason", body)
+        self.assertTrue(body["requirements_missing"])
+        # the referral names the missing requirements (evidence absence,
+        # never a classification failure)
+        self.assertEqual(body["referral"]["missing_requirements"],
+                         body["requirements_missing"])
+        self.assertIn("evidence", body["refusal_reason"])
+
+    def test_partial_downgrade_one_bounded_regeneration(self):
+        # sufficiency mocked to «غير كافٍ with one covered requirement» —
+        # the wiring must re-ask ONLY the covered micro-question and tag the
+        # answer partial (the check itself has its own measured tests)
+        from unittest.mock import patch
+        fake = {"state": "غير كافٍ",
+                "reason": "evidence absent for: procedural_evidence",
+                "requirements": [
+                    {"req": "definition_or_purpose_unit", "covered": True,
+                     "by": ["note.md::chunk_0001"]},
+                    {"req": "procedural_evidence", "covered": False, "by": []}],
+                "missing": ["procedural_evidence"], "guided_rounds": []}
+        with patch("sufficiency.check", return_value=fake):
+            body = self.client.post("/answer",
+                                    json={"question": QUESTION}).json()
+        self.assertEqual(body["status"], "answered", body)
+        self.assertTrue(body["partial"])
+        self.assertEqual(body["answered_requirements"],
+                         ["definition_or_purpose_unit"])
+        self.assertEqual(body["unanswered_requirements"],
+                         ["procedural_evidence"])
+        self.assertTrue(body["claims"])          # the bounded regeneration ran
+        self.assertEqual(body["evidence_status"], "غير كافٍ")
+
+    def test_sufficient_question_untouched_by_commitment(self):
+        # a sufficient question flows to the model exactly as before (the
+        # tiny English corpus cannot satisfy the Arabic shape patterns, so
+        # sufficiency is mocked كافٍ here — the wiring must simply proceed)
+        from unittest.mock import patch
+        fake = {"state": "كافٍ", "reason": "all requirements covered",
+                "requirements": [{"req": "definition_or_purpose_unit",
+                                  "covered": True, "by": ["note.md::chunk_0001"]}],
+                "missing": [], "guided_rounds": []}
+        with patch("sufficiency.check", return_value=fake):
+            body = self.client.post("/answer",
+                                    json={"question": QUESTION}).json()
+        self.assertEqual(body["status"], "answered", body)
+        self.assertNotIn("partial", body)
+        self.assertNotIn("referral", body)
+        self.assertEqual(body["evidence_status"], "كافٍ")
+
+    def test_same_question_same_effect(self):
+        # phase-6 close gate: re-running the same question gives the same
+        # effect (answer, claims, sources — the cache and deterministic
+        # retrieval make the turn reproducible)
+        a = self.client.post("/answer", json={"question": QUESTION}).json()
+        b = self.client.post("/answer", json={"question": QUESTION}).json()
+        for field in ("status", "answer", "claims", "sources", "model",
+                      "evidence_status"):
+            self.assertEqual(a[field], b[field], field)
+
+    def test_audit_trail_http_scrubbed_and_bounded(self):
+        # an email in the question is scrubbed BEFORE the trail is written
+        self.client.post("/answer", json={
+            "question": "What does the Atlas card cost? mail me at a@b.com"})
+        self.client.post("/search", json={"question": QUESTION, "k": 3})
+        body = self.client.get("/audit?limit=10").json()
+        self.assertTrue(body["entries"])
+        newest = next(e for e in body["entries"]
+                      if e["endpoint"] == "/answer")
+        self.assertIn("[EMAIL]", newest["question"])
+        self.assertNotIn("a@b.com", newest["question"])
+        self.assertEqual(len(newest["trace_id"]), 12)
+        self.assertTrue(any(e["endpoint"] == "/search" for e in body["entries"]))
+        self.assertGreaterEqual(body["retention"], 1)
+
+    def test_audit_bad_limit_is_400(self):
+        response = self.client.get("/audit?limit=0")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"]["reason"], "bad_limit")
+
+
 class LocalFrontOverHttp(unittest.TestCase):
     """local_front.py's smoke suite against a REAL HTTP server.
 
