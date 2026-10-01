@@ -639,15 +639,45 @@ def bm25_store(docs_dir: Path | None = None):
     return search, build_df([c["text"] for c in corpus])
 
 
+def live_store():
+    """(search_fn, df) on the DEPLOYED live arm — the real embedder + the
+    stored collection + the deployed retrieval (vector + rerank per config).
+    Same contract as bm25_store; --live (CI) measures the sufficiency states
+    on the live vector arm — read-only, no /answer call."""
+    import config as cfg
+    from embedder import make_embedder
+    from evaluate import prepare_query_text
+    from retrieval import retrieve
+    from store import get_collection
+
+    embedder = make_embedder(skip_sanity=True)
+    collection = get_collection(cfg, reset=False)
+    if not collection.count():
+        raise SystemExit("live collection is empty — ingest first")
+
+    def search(query, k):
+        hits, _ = retrieve(cfg, embedder, collection, prepare_query_text(query),
+                           mode="vector", top_k=k, candidate_k=k)
+        return hits
+
+    return search, df_for_collection(collection)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="sufficiency",
                                      description=__doc__.splitlines()[0])
     parser.add_argument("--sets", nargs="*", default=["questions_50.json",
                                                       "questions_targets.json"])
     parser.add_argument("--k", type=int, default=20)
+    parser.add_argument("--live", action="store_true",
+                        help="measure on the deployed live arm (real embedder "
+                             "+ stored collection) instead of local BM25")
     args = parser.parse_args()
 
-    search, df = bm25_store()
+    if getattr(args, 'live', False):
+        search, df = live_store()
+    else:
+        search, df = bm25_store()
     report = {}
     for name in args.sets:
         cases = json.loads((HERE / name).read_text(encoding="utf-8"))["cases"]
@@ -664,6 +694,10 @@ def main() -> int:
         for r in m["per_case"]:
             report[name]["states"][r["state"]] = \
                 report[name]["states"].get(r["state"], 0) + 1
+        report[name]["per_case_compact"] = [
+            {"id": r["id"], "state": r["state"], "expected": r["expected"],
+             "guided_rounds": len(r["guided_rounds"]), "rescued": r["rescued"]}
+            for r in m["per_case"]]
     print(json.dumps(report, ensure_ascii=False, indent=1))
     return 0
 

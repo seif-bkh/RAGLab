@@ -212,6 +212,45 @@ jobs:
           newest=$(ls -t results/eval_*.json | head -1)
           cp "$newest" results/harness50/expansion_targets.json
 
+      - name: Sufficiency on the live vector arm (Phase 5 item 4 + Phase 6)
+        working-directory: raglab
+        run: |
+          set -o pipefail
+          export CHUNKING_MODE=restructure
+          python sufficiency.py --live 2>&1 | tee /tmp/raglab_ci/sufficiency_live.log
+      - name: Post the sufficiency distribution as an annotation
+        if: always()
+        working-directory: raglab
+        run: |
+          python3 - <<'EOF'
+          import re
+          try:
+              log = open("/tmp/raglab_ci/sufficiency_live.log", encoding="utf-8").read()
+          except OSError:
+              print("::warning::sufficiency-live | no log"); raise SystemExit(0)
+          # keep the JSON body of the report (starts at the first '{')
+          i = log.find("{")
+          if i < 0:
+              print("::warning::sufficiency-live | no report"); raise SystemExit(0)
+          import json
+          try:
+              report = json.loads(log[i:])
+          except json.JSONDecodeError:
+              print("::warning::sufficiency-live | unparseable report"); raise SystemExit(0)
+          parts = []
+          for name, m in report.items():
+              states = " ".join(f"{k}={v}" for k, v in m.get("states", {}).items())
+              parts.append(f"{name}: {states} | FS={m.get('false_sufficient')} "
+                           f"FR={m.get('false_refusal')} esc={m.get('escalated')} "
+                           f"agree={m.get('agreement')}")
+          msg = " | ".join(parts)
+          print("ANNO| sufficiency-live | " + msg)
+          enc = msg.replace("%", "%25").replace(":", "%3A").replace("|", "%7C")
+          print(f"::warning::sufficiency-live | {enc}")
+          open("results/harness50/sufficiency_live.json", "w",
+               encoding="utf-8").write(json.dumps(report, ensure_ascii=False, indent=1))
+          EOF
+
       - name: Post the expansion numbers as an annotation
         if: always()
         working-directory: raglab
@@ -346,6 +385,7 @@ jobs:
             raglab/results/harness50/real_eval_unit_index.json
             raglab/results/harness50/expansion_50.json
             raglab/results/harness50/expansion_targets.json
+            raglab/results/harness50/sufficiency_live.json
             raglab/results/harness50/real_answer_murabaha.json
           if-no-files-found: ignore
           retention-days: 30
