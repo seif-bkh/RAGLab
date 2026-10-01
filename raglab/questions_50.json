@@ -209,6 +209,24 @@
       "expected_substring": "نسبة مساهمتهم المباشرة وغير المباشرة"
     },
     {
+      "id": "q24",
+      "question": "ما هو الاعتماد المستندي كما يعرفه الدليل الارشادي الداخلي لبنك البركة تونس؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "تعهد مكتوب صادر من بنك"
+    },
+    {
+      "id": "q25",
+      "question": "ما الشرط المتعلق بالإيراد الناتج عن عنصر محرم في معايير فرز الأسهم وفق الدليل الداخلي؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "الا يتجاوز مقدار الايراد الناتج من عنصر محرم نسبة 5 %"
+    },
+    {
       "id": "q26",
       "question": "En quelle année et dans quelle ville la Banque Islamique de Développement a-t-elle été fondée ?",
       "language": "fr",
@@ -243,6 +261,42 @@
       "expected_document": "Loi_2016-48.pdf",
       "expected_lang": "ar",
       "expected_substring": "جمعية مهنية"
+    },
+    {
+      "id": "q30",
+      "question": "هل يجوز أن يكون رأس مال المضاربة دينًا للبنك على الحريف وفق الدليل الداخلي؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "لا يجوز ان يكون راس مال المضاربة دينا للبنك على الحريف-المضارب او غيره"
+    },
+    {
+      "id": "q31",
+      "question": "هل يجوز أخذ أجرة على خطاب الضمان لقاء مجرد الضمان وفق الدليل الداخلي؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "لا يجوز اخذ الاجرة على خطاب الضمان لقاء مجرد الضمان"
+    },
+    {
+      "id": "q32",
+      "question": "Quels types de cartes bancaires l'établissement émet-il selon le guide interne ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "بطاقات الحسم الفوري وبطاقات الحسم الاجل"
+    },
+    {
+      "id": "q33",
+      "question": "Quel produit du guide interne finance-t-il l'activité du client à court terme ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "تيسير البركة"
     },
     {
       "id": "q38",
