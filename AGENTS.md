@@ -57,10 +57,13 @@ Current state of the work:
   pool before the top-k cut, wired in `retrieval.retrieve` behind
   `RERANK_ENABLED` (default OFF). It can only reorder retrieved candidates.
   Deterministic measurement on the adopted BM25 arm: 62/82/87 -> 62/89/89
-  (hit@1 and verbatim/OOS unregressed; detail in
-  `raglab/audits/PHASE3_INTERVENTIONS.md`); the live vector+rerank measurement
-  runs through real-test.yml (--rerank row in the modes table). Activating it
-  by default is the owner's gate.
+  (hit@1 and verbatim/OOS unregressed). Live measurement (tag
+  real-test-rerank-20261001, run 36832594492, same-run comparison):
+  vector 69/78/84 -> rerank 71/80/87 with fr preserved 50/67/67 and q44
+  recovered — the best mode on the live arm. Embedding jitter between runs is
+  +-2pp (q44 flip), so same-run tables are the honest comparison; details in
+  `raglab/audits/PHASE3_INTERVENTIONS.md`. Activating it by default is the
+  owner's gate.
 - **Model-independence tool** (re-introduced 2026-10-01, step 2.4-ج):
   `raglab/answer_ab.py` — ONE retrieval per question fed identically to N answer
   models (`--model provider/model-id`, first is the reference); pairwise status
