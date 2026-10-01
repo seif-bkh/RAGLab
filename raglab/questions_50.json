@@ -191,6 +191,24 @@
       "expected_substring": "صندوق ضمان الودائع البنكية"
     },
     {
+      "id": "q22",
+      "question": "ما هو المبلغ الذي يمكن للبنك أن يطلبه من الحريف لتوثيق وعده قبل إبرام عقود التمويل التجاري وفق المنشور؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "هامش الجدية"
+    },
+    {
+      "id": "q23",
+      "question": "ما هي المعلومات التي يجب على البنك إعلام حرفائه أصحاب الودائع الاستثمارية بها كل ستة أشهر؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "نسبة مساهمتهم المباشرة وغير المباشرة"
+    },
+    {
       "id": "q26",
       "question": "En quelle année et dans quelle ville la Banque Islamique de Développement a-t-elle été fondée ?",
       "language": "fr",
