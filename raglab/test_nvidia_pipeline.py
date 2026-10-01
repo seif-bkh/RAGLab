@@ -2153,6 +2153,70 @@ class GovernanceRegistry(unittest.TestCase):
             self.assertNotIn(axis, guide_meta)     # deferred doc stays clean
 
 
+class RelationsExtraction(unittest.TestCase):
+    """Phase-4 item 3: the two minimal relations tables — grounding (declared,
+    evidence-checked) and internal cross-references (deterministic from the
+    item-1 units; only the literal «من هذا القانون» form becomes an edge, so
+    other-law references like «من المجلة الجزائية» never do)."""
+
+    @staticmethod
+    def _units_and_internal():
+        import restructure, units, relations
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        law_units = units.extract_law_units(codex)
+        return law_units, relations.extract_internal_references(law_units)
+
+    def test_validation_clean_and_counts(self):
+        import restructure, units, relations
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        law_units = units.extract_law_units(codex)
+        report = relations.validate_relations(law_units)
+        self.assertEqual(report["violations"], [])
+        self.assertEqual(report["grounding_edges"], 1)
+        self.assertEqual(report["internal_edges"], 77)   # 68 singular + 9 from و-lists
+        self.assertEqual(report["self_references"], 0)
+
+    def test_grounding_edge_is_documented_and_verbatim(self):
+        import restructure, relations
+        edge = relations.GROUNDING_EDGES[0]
+        self.assertEqual(edge["to_unit"], "loi-2016-48:art011")
+        circ = restructure._adopted_codex_text(edge["from_document"])
+        self.assertIn(edge["evidence"], circ)            # verbatim in the codex
+        self.assertIn("MASTER_INDEX", edge["documented_by"])
+
+    def test_internal_extraction_deterministic(self):
+        _, first = self._units_and_internal()
+        _, second = self._units_and_internal()
+        self.assertEqual(first, second)
+        self.assertTrue(all(e["relation"] == "إحالة داخلية" for e in first))
+
+    def test_other_law_references_never_become_edges(self):
+        import relations
+        synthetic = [{"unit_id": "loi-2016-48:art999", "text":
+                      "وخاضعة للعقوبات المنصوص عليها بالفصل254 من المجلة الجزائية ."}]
+        self.assertEqual(relations.extract_internal_references(synthetic), [])
+
+    def test_list_references_yield_one_edge_per_number(self):
+        import relations
+        synthetic = [{"unit_id": "loi-2016-48:art999", "text":
+                      "تطبق احكام الفصول 49 و50 و51 من هذا القانون على الحالة."}]
+        edges = relations.extract_internal_references(synthetic)
+        self.assertEqual([e["to_unit"] for e in edges],
+                         ["loi-2016-48:art049", "loi-2016-48:art050",
+                          "loi-2016-48:art051"])
+        self.assertTrue(all(e["evidence"] == "الفصول 49 و50 و51 من هذا القانون"
+                            for e in edges))
+
+    def test_emitted_file_matches_extraction(self):
+        import json as _json
+        from pathlib import Path as _Path
+        law_units, internal = self._units_and_internal()
+        data = _json.loads((_Path(__file__).resolve().parent
+                            / "relations_loi_2016_48.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["internal"], internal)
+        self.assertEqual(data["grounding"], __import__("relations").GROUNDING_EDGES)
+
+
 class UnitsExtraction(unittest.TestCase):
     """Phase-4 item 1: Loi 2016-48 knowledge units — article-level split from
     the adopted codex through the SHARED marker machinery (restructure.

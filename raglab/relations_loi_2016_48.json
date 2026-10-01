@@ -1,0 +1,476 @@
+{
+ "_comment": "Minimal relations tables — Phase 4 item 3. Grounding (declared) + internal cross-references (deterministic from the item-1 units). Regenerate: python relations.py --emit. Every edge documented with verbatim codex evidence; validated by validate_relations.",
+ "grounding": [
+  {
+   "relation": "مؤسس على",
+   "from_document": "Circulaire_BCT_2019-08.pdf",
+   "to_unit": "loi-2016-48:art011",
+   "evidence": "وخاصة الفصل 11 منه وما بعده",
+   "documented_by": "audits/MASTER_INDEX.md §6 (السلسلة القانونية: الفصل 11 من القانون — تعريف الصيرفة الإسلامية ومراقبة مطابقتها — أساس إحالة المنشور)"
+  }
+ ],
+ "internal": [
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art017",
+   "to_unit": "loi-2016-48:art005",
+   "evidence": "الفصل5 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art017",
+   "to_unit": "loi-2016-48:art004",
+   "evidence": "الفصل4 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art020",
+   "to_unit": "loi-2016-48:art010",
+   "evidence": "الفصل10 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art021",
+   "to_unit": "loi-2016-48:art020",
+   "evidence": "الفصل20 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art022",
+   "to_unit": "loi-2016-48:art004",
+   "evidence": "الفصل4 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art023",
+   "to_unit": "loi-2016-48:art004",
+   "evidence": "الفصل4 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art024",
+   "to_unit": "loi-2016-48:art004",
+   "evidence": "الفصل4 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art027",
+   "to_unit": "loi-2016-48:art102",
+   "evidence": "الفصل 102 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art027",
+   "to_unit": "loi-2016-48:art102",
+   "evidence": "الفصل 102 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art029",
+   "to_unit": "loi-2016-48:art027",
+   "evidence": "الفصل 27 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art030",
+   "to_unit": "loi-2016-48:art032",
+   "evidence": "الفصل32 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art035",
+   "to_unit": "loi-2016-48:art102",
+   "evidence": "الفصل 102 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art035",
+   "to_unit": "loi-2016-48:art036",
+   "evidence": "الفصل 36 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art036",
+   "to_unit": "loi-2016-48:art034",
+   "evidence": "الفصل34 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art038",
+   "to_unit": "loi-2016-48:art034",
+   "evidence": "الفصل34 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art038",
+   "to_unit": "loi-2016-48:art035",
+   "evidence": "الفصل35 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art039",
+   "to_unit": "loi-2016-48:art024",
+   "evidence": "الفصل 24 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art052",
+   "to_unit": "loi-2016-48:art049",
+   "evidence": "الفصول49 و50 و51 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art052",
+   "to_unit": "loi-2016-48:art050",
+   "evidence": "الفصول49 و50 و51 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art052",
+   "to_unit": "loi-2016-48:art051",
+   "evidence": "الفصول49 و50 و51 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art052",
+   "to_unit": "loi-2016-48:art047",
+   "evidence": "الفصل47 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art055",
+   "to_unit": "loi-2016-48:art056",
+   "evidence": "الفصل56 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art056",
+   "to_unit": "loi-2016-48:art055",
+   "evidence": "الفصل55 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art056",
+   "to_unit": "loi-2016-48:art060",
+   "evidence": "الفصل60 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art056",
+   "to_unit": "loi-2016-48:art047",
+   "evidence": "الفصل47 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art062",
+   "to_unit": "loi-2016-48:art043",
+   "evidence": "الفصل43 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art074",
+   "to_unit": "loi-2016-48:art189",
+   "evidence": "الفصل189 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art087",
+   "to_unit": "loi-2016-48:art086",
+   "evidence": "الفصل86 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art093",
+   "to_unit": "loi-2016-48:art092",
+   "evidence": "الفصل92 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art101",
+   "to_unit": "loi-2016-48:art100",
+   "evidence": "الفصل100 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art102",
+   "to_unit": "loi-2016-48:art101",
+   "evidence": "الفصل101 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art104",
+   "to_unit": "loi-2016-48:art043",
+   "evidence": "الفصل43 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art105",
+   "to_unit": "loi-2016-48:art102",
+   "evidence": "الفصل102 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art107",
+   "to_unit": "loi-2016-48:art103",
+   "evidence": "الفصل103 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art107",
+   "to_unit": "loi-2016-48:art103",
+   "evidence": "الفصل103 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art109",
+   "to_unit": "loi-2016-48:art110",
+   "evidence": "الفصل110 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art111",
+   "to_unit": "loi-2016-48:art113",
+   "evidence": "الفصل113 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art111",
+   "to_unit": "loi-2016-48:art110",
+   "evidence": "الفصل110 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art112",
+   "to_unit": "loi-2016-48:art110",
+   "evidence": "الفصل110 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art112",
+   "to_unit": "loi-2016-48:art004",
+   "evidence": "الفصل4 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art114",
+   "to_unit": "loi-2016-48:art125",
+   "evidence": "الفصل125 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art125",
+   "to_unit": "loi-2016-48:art111",
+   "evidence": "الفصل111 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art125",
+   "to_unit": "loi-2016-48:art043",
+   "evidence": "الفصل43 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art131",
+   "to_unit": "loi-2016-48:art043",
+   "evidence": "الفصل43 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art136",
+   "to_unit": "loi-2016-48:art043",
+   "evidence": "الفصل43 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art140",
+   "to_unit": "loi-2016-48:art137",
+   "evidence": "الفصل137 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art149",
+   "to_unit": "loi-2016-48:art153",
+   "evidence": "الفصل153 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art149",
+   "to_unit": "loi-2016-48:art117",
+   "evidence": "الفصل117 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art150",
+   "to_unit": "loi-2016-48:art002",
+   "evidence": "الفصل2 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art152",
+   "to_unit": "loi-2016-48:art021",
+   "evidence": "الفصل21 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art152",
+   "to_unit": "loi-2016-48:art032",
+   "evidence": "الفصل32 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art153",
+   "to_unit": "loi-2016-48:art149",
+   "evidence": "الفصل149 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art169",
+   "to_unit": "loi-2016-48:art170",
+   "evidence": "الفصل170 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art169",
+   "to_unit": "loi-2016-48:art037",
+   "evidence": "الفصل37 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art169",
+   "to_unit": "loi-2016-48:art073",
+   "evidence": "الفصل73 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art170",
+   "to_unit": "loi-2016-48:art169",
+   "evidence": "الفصل169 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art172",
+   "to_unit": "loi-2016-48:art173",
+   "evidence": "الفصل173 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art173",
+   "to_unit": "loi-2016-48:art172",
+   "evidence": "الفصل172 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art180",
+   "to_unit": "loi-2016-48:art179",
+   "evidence": "الفصل179 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art181",
+   "to_unit": "loi-2016-48:art071",
+   "evidence": "الفصل71 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art181",
+   "to_unit": "loi-2016-48:art170",
+   "evidence": "الفصل170 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art183",
+   "to_unit": "loi-2016-48:art024",
+   "evidence": "الفصل24 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art185",
+   "to_unit": "loi-2016-48:art181",
+   "evidence": "الفصل181 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art187",
+   "to_unit": "loi-2016-48:art186",
+   "evidence": "الفصل186 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art187",
+   "to_unit": "loi-2016-48:art083",
+   "evidence": "الفصل83 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art189",
+   "to_unit": "loi-2016-48:art032",
+   "evidence": "الفصل32 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art189",
+   "to_unit": "loi-2016-48:art031",
+   "evidence": "الفصل31 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art193",
+   "to_unit": "loi-2016-48:art032",
+   "evidence": "الفصل32 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art194",
+   "to_unit": "loi-2016-48:art046",
+   "evidence": "الفصول46 و47 و51 و52 و57 و58 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art194",
+   "to_unit": "loi-2016-48:art047",
+   "evidence": "الفصول46 و47 و51 و52 و57 و58 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art194",
+   "to_unit": "loi-2016-48:art051",
+   "evidence": "الفصول46 و47 و51 و52 و57 و58 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art194",
+   "to_unit": "loi-2016-48:art052",
+   "evidence": "الفصول46 و47 و51 و52 و57 و58 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art194",
+   "to_unit": "loi-2016-48:art057",
+   "evidence": "الفصول46 و47 و51 و52 و57 و58 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art194",
+   "to_unit": "loi-2016-48:art058",
+   "evidence": "الفصول46 و47 و51 و52 و57 و58 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art195",
+   "to_unit": "loi-2016-48:art075",
+   "evidence": "الفصل75 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art196",
+   "to_unit": "loi-2016-48:art070",
+   "evidence": "الفصل70 من هذا القانون"
+  },
+  {
+   "relation": "إحالة داخلية",
+   "from_unit": "loi-2016-48:art197",
+   "to_unit": "loi-2016-48:art093",
+   "evidence": "الفصل93 من هذا القانون"
+  }
+ ]
+}

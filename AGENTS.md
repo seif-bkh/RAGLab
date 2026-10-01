@@ -91,6 +91,14 @@ Current state of the work:
   axes ride on chunk metadata at ingest via `store.store_chunks` (additive —
   no retrieval/eval change). Guarded by `GovernanceRegistry` (fingerprint
   checks: registry+deferred == corpus, no phantoms, no empty axes).
+  **Item 3 BUILT**: `raglab/relations.py` + declared data
+  `raglab/relations_loi_2016_48.json` — the two minimal tables per the plan:
+  grounding (Circulaire 80/2019 → loi-2016-48:art011, verbatim codex
+  evidence «وخاصة الفصل 11 منه وما بعده», documented MASTER_INDEX §6) and
+  internal cross-references (77 deterministic edges from the item-1 units;
+  ONLY the literal «من هذا القانون» form counts, so other-law references
+  never become edges). validate_relations enforces verbatim evidence +
+  existing targets; no graph store. Guarded by `RelationsExtraction`.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
