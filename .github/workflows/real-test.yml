@@ -119,6 +119,18 @@ jobs:
           cp "$newest" results/harness50/real_eval_restructure_blend.json
           echo "eval run preserved as results/harness50/real_eval_restructure_blend.json (source: $newest)"
 
+      - name: Reranker on ARM=restructure — vector + deterministic rerank (Phase-3 intervention 3)
+        working-directory: raglab
+        run: |
+          set -o pipefail
+          export CHUNKING_MODE=restructure
+          export RERANK_ENABLED=1
+          python main.py evaluate --skip-sanity-check --no-translation \
+            --top-k 20 --questions questions_50.json 2>&1 | tee /tmp/raglab_ci/restructure_evaluate_rerank.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/harness50/real_eval_restructure_rerank.json
+          echo "eval run preserved as results/harness50/real_eval_restructure_rerank.json (source: $newest)"
+
       # continue-on-error: the retrieval A/B is the deliverable; an answer-smoke failure is
       # reported as data (below) instead of hiding the tables.
       # NOTE: GitHub wraps run-steps in `bash -e -o pipefail`, so a failing command aborts
@@ -155,6 +167,7 @@ jobs:
           modes_arg=""
           [ -f results/harness50/real_eval_restructure_rrf.json ] && modes_arg="$modes_arg --rrf results/harness50/real_eval_restructure_rrf.json"
           [ -f results/harness50/real_eval_restructure_blend.json ] && modes_arg="$modes_arg --blend results/harness50/real_eval_restructure_blend.json"
+          [ -f results/harness50/real_eval_restructure_rerank.json ] && modes_arg="$modes_arg --rerank results/harness50/real_eval_restructure_rerank.json"
           python real_report.py results/harness50/real_eval_size.json \
             results/harness50/real_eval_restructure.json \
             --out results/harness50/real_models.md $answer_arg $modes_arg \
@@ -215,6 +228,7 @@ jobs:
             raglab/results/harness50/real_eval_restructure.json
             raglab/results/harness50/real_eval_restructure_rrf.json
             raglab/results/harness50/real_eval_restructure_blend.json
+            raglab/results/harness50/real_eval_restructure_rerank.json
             raglab/results/harness50/real_answer_murabaha.json
           if-no-files-found: ignore
           retention-days: 30

@@ -51,14 +51,24 @@ def retrieve(cfg, embedder, collection, text, *, language=None, translator=None,
                     blend_hybrid(hits, keywords, lambd=lambd))[:candidates]
         lists.append(hits)
     score_key = {"vector": "similarity", "rrf": "rrf_score", "blend": "blend_score"}[mode]
+    rerank_on = getattr(cfg, "RERANK_ENABLED", False)
     if len(lists) == 1:
         # No fusion is needed. Preserve even zero/negative cosine hits and
         # their original ordering rather than dividing by a nonpositive max.
         label = variants[0]["label"]
+        if rerank_on:
+            # Phase-3 intervention 3: deterministic reorder of the candidate
+            # pool BEFORE the top-k cut (the whole pool, not just top_k).
+            import rerank
+            lists[0] = rerank.rerank_hits(text, lists[0])
         return [dict(h, from_variant=label, variant_ranks={label: h["rank"]})
                 for h in lists[0][:top_k]], variants
     hits = best_variant_merge(lists, score_key=score_key, labels=[v["label"] for v in variants],
                               tie_break=getattr(cfg, "FUSION_TIE_BREAK", "same_lang_margin"))
+    if rerank_on:
+        # Phase-3 intervention 3: same deterministic reorder after fusion.
+        import rerank
+        hits = rerank.rerank_hits(text, hits)
     return hits[:top_k], variants
 
 

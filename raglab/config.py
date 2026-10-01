@@ -264,6 +264,12 @@ QUERY_VARIANT_STRATEGY = os.getenv("QUERY_VARIANT_STRATEGY", "original")
 # the owner reviews the seed table; an empty/off lexicon reproduces the current
 # behaviour exactly. Separate from the retired translation path by construction.
 LEXICON_ENABLED = os.getenv("LEXICON_ENABLED", "") == "1"
+
+# Phase-3 intervention 3: deterministic feature-based reranker (raglab/rerank.py)
+# applied to the retrieved candidate pool BEFORE the top-k cut. OFF by default
+# until the owner reviews the measured before/after numbers; it only reorders
+# retrieved candidates — it can never introduce unretrieved text.
+RERANK_ENABLED = os.getenv("RERANK_ENABLED", "") == "1"
 RETRIEVAL_CANDIDATE_K = 20
 
 # Selected measured profile. Old .env values are rejected, not silently used.

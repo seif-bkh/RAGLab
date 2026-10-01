@@ -1940,6 +1940,101 @@ class LexiconExpansion(unittest.TestCase):
                       by_id['ar.md::chunk_0000']['variant_ranks'])
 
 
+class RerankerDeterministic(unittest.TestCase):
+    """Phase-3 intervention 3: the deterministic feature-based reranker —
+    coverage/heading/phrase signals over a rank prior, ties keeping the
+    retriever's order, no model calls, no network."""
+
+    def test_query_terms_stop_filtered_and_stable(self):
+        import rerank
+        terms = rerank.query_terms('ما هي شروط المرابحة؟ What is the rule?')
+        self.assertNotIn('ما', terms)
+        self.assertNotIn('هي', terms)
+        self.assertNotIn('the', terms)
+        self.assertIn('شروط', terms)
+        self.assertIn('المرابحة', terms)
+        self.assertNotIn('what', terms)   # function word, filtered
+        self.assertEqual(terms, rerank.query_terms('ما هي شروط المرابحة؟ What is the rule?'))
+
+    def test_rerank_lifts_the_term_covering_chunk(self):
+        import rerank
+        q = 'شروط عملية المرابحة المصرفية'
+        hits = [
+            {"id": "a::1", "text": "عملية الإجارة تأجير ثم تملك", "heading": "الإجارة"},
+            {"id": "a::2", "text": "شروط عملية المرابحة المصرفية محددة في هذا الفصل",
+             "heading": "شروط المرابحة"},
+            {"id": "a::3", "text": "نص آخر لا صلة له", "heading": ""},
+        ]
+        out = rerank.rerank_hits(q, hits)
+        self.assertEqual(out[0]["id"], "a::2")
+        self.assertTrue(out[0]["rerank"]["features"]["phrase_bonus"] > 0)
+        self.assertEqual(out[0]["rerank"]["features"]["term_coverage"], 1.0)
+
+    def test_ties_keep_the_retriever_order(self):
+        import rerank
+        hits = [{"id": f"a::{i}", "text": "نص واحد متطابق", "heading": "عنوان"}
+                for i in range(1, 4)]
+        out = rerank.rerank_hits('استعلام لا مصطلحات مشتركة', hits)
+        self.assertEqual([h["id"] for h in out], ["a::1", "a::2", "a::3"])
+
+    def test_deterministic_and_annotated(self):
+        import rerank
+        q = 'قواعد التمويل بالمرابحة'
+        hits = [{"id": "a::1", "text": "قواعد عامة", "heading": "عام"},
+                {"id": "a::2", "text": "التمويل بالمرابحة قواعده واضحة", "heading": "المرابحة"}]
+        first = rerank.rerank_hits(q, hits)
+        second = rerank.rerank_hits(q, hits)
+        self.assertEqual(first, second)
+        for h in first:
+            self.assertIn("rerank", h)
+            self.assertIn("score", h["rerank"])
+            self.assertIn("base_position", h["rerank"]["features"])
+        # inputs are not mutated
+        self.assertNotIn("rerank", hits[0])
+
+    def test_short_penalty_and_missing_fields(self):
+        import rerank
+        out = rerank.rerank_hits('المرابحة', [
+            {"id": "a::1", "text": "قصير جدا", "heading": ""},
+            {"id": "a::2", "text": "المرابحة صيغة تمويل معروفة بشروطها المفصلة هنا", "heading": ""},
+        ])
+        self.assertEqual(out[0]["id"], "a::2")
+
+    def test_retrieval_wiring_off_by_default_and_on(self):
+        from retrieval import retrieve
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        cfg = make_config(CHROMA_DIR=Path(self.temp.name) / 'chroma',
+                          ANSWER_CACHE_PATH=Path(self.temp.name) / 'answers.json')
+        self.assertFalse(cfg.RERANK_ENABLED)   # OFF by default
+
+        def chunk(index, source, language, text, heading):
+            return SimpleNamespace(index=index, source=source, language=language,
+                                   text=text, heading=heading, origin='test/',
+                                   section_type='content', token_count=20)
+        chunks = [chunk(0, 'ar.md', 'ar', 'شروط المرابحة كما وردت في النص', 'المرابحة'),
+                  chunk(1, 'ar.md', 'ar', 'نص عام عن الصيرفة', 'عام')]
+        # vector space: chunk 1 (general) is the retriever's top-1
+        vectors = [[0.0, 1.0] + [0.0] * 2046, [1.0, 0.0] + [0.0] * 2046]
+        collection = get_collection(cfg, reset=True)
+        store_chunks(collection, list(zip(chunks, vectors)), cfg)
+        # the retriever's top-1 is the GENERAL chunk (cosine 1.0 with it)
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[1])
+
+        q = 'شروط المرابحة'
+        hits, _ = retrieve(cfg, fake_embedder, collection, q,
+                           language='ar', mode='vector', top_k=2,
+                           variant_strategy='original')
+        self.assertEqual(hits[0]['id'], 'ar.md::chunk_0001')  # retriever order
+
+        cfg.RERANK_ENABLED = True
+        hits2, _ = retrieve(cfg, fake_embedder, collection, q,
+                            language='ar', mode='vector', top_k=2,
+                            variant_strategy='original')
+        self.assertEqual(hits2[0]['id'], 'ar.md::chunk_0000')  # lifted by terms
+        self.assertIn('rerank', hits2[0])
+
+
 class RealReportModes(unittest.TestCase):
     """Phase 2 step 3.2: real_report.py builds the retrieval-mode comparison
     (vector vs rrf vs blend on the restructure arm) and carries it into the
@@ -2026,6 +2121,16 @@ class RealReportModes(unittest.TestCase):
                       anno)
         self.assertIn("mode_misses vector=[q2]", anno)
         self.assertIn("mode_misses rrf=[]", anno)
+        # a rerank run joins the table as a fourth labeled row (Phase-3 int. 3)
+        rerank_run = self._run("vector", {"q1": 1, "q2": 1})
+        modes["rerank"] = rerank_run
+        md3 = rr.build_md(runs, None, top_k=20, modes=modes)
+        self.assertIn("vector + deterministic rerank (Phase-3 intervention 3)", md3)
+        self.assertIn("| key | n | vector | rrf | blend | rerank |", md3)
+        self.assertIn("**flips vector → rerank:**", md3)
+        anno3 = rr.build_anno(runs, None, modes=modes)
+        self.assertIn("rerank=100/100/100", anno3)
+        self.assertIn("mode_misses rerank=[]", anno3)
         # without modes the section and the segments disappear
         md2 = rr.build_md(runs, None, top_k=20)
         self.assertNotIn("Retrieval modes on the restructure arm", md2)

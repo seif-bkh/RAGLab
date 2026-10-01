@@ -42,10 +42,11 @@ ARM_LABEL = {"size": "size (legacy recursive 220/40)",
              "restructure": "restructure (normalization + enrichment + structural split)"}
 CATS = ("verbatim", "paraphrase", "cross-lingual")
 LANGS = ("ar", "en", "fr")
-MODES = ("vector", "rrf", "blend")
+MODES = ("vector", "rrf", "blend", "rerank")
 MODE_LABEL = {"vector": "vector (cosine only)",
               "rrf": "rrf (vector + BM25, reciprocal rank fusion)",
-              "blend": "blend (LAMBDA*cosine + BM25 score)"}
+              "blend": "blend (LAMBDA*cosine + BM25 score)",
+              "rerank": "vector + deterministic rerank (Phase-3 intervention 3)"}
 
 
 def load(path: str) -> dict:
@@ -221,30 +222,32 @@ def build_md(runs: dict, answer: dict | None, top_k: int,
     if modes:
         w("## Retrieval modes on the restructure arm (step 3.2 — hybrid decision data)")
         w("")
+        present = [m for m in MODES if m in modes]
         w("Same restructure collection and the same questions as the restructure "
-          "vector run above; only the fusion strategy differs. Ranking scores are "
+          "vector run above; only the fusion/ranking strategy differs (the rerank "
+          "row is the same vector retrieval with the deterministic reranker "
+          "applied before the top-k cut, RERANK_ENABLED=1). Ranking scores are "
           "NOT comparable across modes (cosine vs RRF vs blend), so separation is "
           "omitted here; the OOS block stays because a refusal threshold is "
           "defined per mode on its own score scale.")
         w("")
         w("| mode | n | hit@1 | hit@3 | hit@5 |")
         w("|---|---|---|---|---|")
-        for mode in MODES:
-            if mode in modes:
-                row = metric_row(mode, modes[mode]["metrics"]["overall"])
-                w(f"| {MODE_LABEL[mode]} | " + " | ".join(str(x) for x in row) + " |")
+        for mode in present:
+            row = metric_row(mode, modes[mode]["metrics"]["overall"])
+            w(f"| {MODE_LABEL[mode]} | " + " | ".join(str(x) for x in row) + " |")
         w("")
         for title, key, keys in (("By query language", "by_language", LANGS),
                                  ("By category", "by_category", CATS)):
             w(f"### {title}")
             w("")
-            w("| key | n | vector | rrf | blend |")
-            w("|---|---|---|---|---|")
+            w("| key | n | " + " | ".join(present) + " |")
+            w("|---|---|" + "|".join(["---"] * len(present)) + "|")
             ms = {m: modes[m]["metrics"][key] for m in modes}
             for k in sorted(set().union(*(set(m) for m in ms.values()))):
                 n = next((ms[m][k]["n"] for m in ms if k in ms[m]), 0)
                 cells = []
-                for mode in MODES:
+                for mode in present:
                     d = ms.get(mode, {}).get(k) or {}
                     cells.append(" / ".join(pct(d.get(f"hit@{c}")) for c in (1, 3, 5)))
                 w(f"| {k} | {n} | " + " | ".join(cells) + " |")
@@ -253,22 +256,21 @@ def build_md(runs: dict, answer: dict | None, top_k: int,
         w("")
         w("| mode | n | max top-1 | mean top-1 |")
         w("|---|---|---|---|")
-        for mode in MODES:
-            if mode in modes:
-                o = modes[mode]["metrics"]["out_of_scope"]
-                w(f"| {MODE_LABEL[mode]} | {o['n']} | {fnum(o['max_top1_score'])} "
-                  f"| {fnum(o['mean_top1_score'])} |")
+        for mode in present:
+            o = modes[mode]["metrics"]["out_of_scope"]
+            w(f"| {MODE_LABEL[mode]} | {o['n']} | {fnum(o['max_top1_score'])} "
+              f"| {fnum(o['mean_top1_score'])} |")
         w("")
-        for mode in MODES:
-            if mode in modes:
-                misses = [q for q in modes[mode]["questions"]
-                          if not q["is_out_of_scope"] and q["correct_rank"] is None]
-                w(f"**misses {MODE_LABEL[mode]}** ({len(misses)}): " +
+        for mode in present:
+            misses = [q for q in modes[mode]["questions"]
+                      if not q["is_out_of_scope"] and q["correct_rank"] is None]
+            w(f"**misses {MODE_LABEL[mode]}** ({len(misses)}): " +
                   (", ".join(f"{q['id']} ({q.get('language')}/{q['category']})"
                              for q in misses) or "none"))
-                w("")
+            w("")
         by_id = {m: {q["id"]: q for q in modes[m]["questions"]} for m in modes}
-        for a, b in (("vector", "rrf"), ("vector", "blend"), ("rrf", "blend")):
+        for a, b in (("vector", "rrf"), ("vector", "blend"), ("rrf", "blend"),
+                     ("vector", "rerank")):
             if a in by_id and b in by_id:
                 up = [qid for qid in by_id[a]
                       if not by_id[a][qid]["is_out_of_scope"]
@@ -417,11 +419,14 @@ def main() -> int:
                     help="optional restructure-arm run JSON in RRF hybrid mode (3.2)")
     ap.add_argument("--blend", default=None,
                     help="optional restructure-arm run JSON in score-blend mode (3.2)")
+    ap.add_argument("--rerank", default=None,
+                    help="optional restructure-arm vector run JSON with the "
+                         "deterministic reranker enabled (Phase-3 intervention 3)")
     args = ap.parse_args()
 
     runs = {"size": load(args.eval_size), "restructure": load(args.eval_restructure)}
     modes = {"vector": runs["restructure"]}
-    for key in ("rrf", "blend"):
+    for key in ("rrf", "blend", "rerank"):
         path = getattr(args, key)
         if path and Path(path).exists():
             modes[key] = load(path)

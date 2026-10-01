@@ -50,6 +50,17 @@ Current state of the work:
   whole-word surface forms; Arabic definite forms need their own rows. Plan +
   record: `raglab/audits/PHASE3_INTERVENTIONS.md`. Measuring its effect awaits
   the colloquial/synonyms authoring round (owner decision).
+- **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
+  `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
+  query-term coverage in text/heading, exact phrase, degenerate-length penalty;
+  stop list for the coverage features only) reordering the retrieved candidate
+  pool before the top-k cut, wired in `retrieval.retrieve` behind
+  `RERANK_ENABLED` (default OFF). It can only reorder retrieved candidates.
+  Deterministic measurement on the adopted BM25 arm: 62/82/87 -> 62/89/89
+  (hit@1 and verbatim/OOS unregressed; detail in
+  `raglab/audits/PHASE3_INTERVENTIONS.md`); the live vector+rerank measurement
+  runs through real-test.yml (--rerank row in the modes table). Activating it
+  by default is the owner's gate.
 - **Model-independence tool** (re-introduced 2026-10-01, step 2.4-ج):
   `raglab/answer_ab.py` — ONE retrieval per question fed identically to N answer
   models (`--model provider/model-id`, first is the reference); pairwise status
