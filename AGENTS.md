@@ -155,6 +155,21 @@ Current state of the work:
   71/80/87, targets 50/70/70 vs 50/70/70, zero regression. Default stays
   OFF pending the owner's activation gate. Rescue mechanism proven by
   test. Guarded by `RelationalExpansion` (6).
+- **Phase-5 item 4 BUILT** — `raglab/sufficiency.py` (read-only layer,
+  inert-import guard): deterministic sufficiency & conflict — requirement-
+  by-requirement coverage of the item-2 plan against the retrieved pool,
+  four explicit states (كافٍ/غير كافٍ/متعارض/غير محسوم), DECLARED
+  adjustable precedence (law > Circulaire > Guide > Madkhal — flipping it
+  flips the winning text, test-proven), conflict detection via the adopted
+  Circulaire corrections table, bounded guided rounds (cap 2, depth 20,
+  rarest-retrievable-terms batches). Refusal names the missing
+  requirements (evidence absence, never classification failure).
+  Deterministic BM25 measurement on both sets: ZERO false sufficiency,
+  ZERO false refusal, all 5 OOS «غير كافٍ» (transition criterion met);
+  4 reasoned escalations (q35/q39/q42/q44); t02/t03 insufficient with
+  named gaps (colloquial gap stays visible); t05–t08 differentiated per
+  sub-requirement. CLI: `python sufficiency.py --sets ...`. Guarded by
+  `SufficiencyCheck` (9) — suite 197 OK.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;

@@ -2533,6 +2533,161 @@ class EvidencePlanDerivation(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "")
 
 
+class SufficiencyCheck(unittest.TestCase):
+    """Phase-5 item 4: deterministic sufficiency & conflict — coverage of the
+    item-2 evidence plan against the RETRIEVED pool (requirement by
+    requirement), declared adjustable precedence, the four explicit states
+    (كافٍ/غير كافٍ/متعارض/غير محسوم), bounded guided rounds, and refusal tied
+    to evidence absence (never classification failure). Read-only layer."""
+
+    @staticmethod
+    def _hit(text, doc="Guide_Interne_Operations_Bancaires_Islamiques.docx",
+             heading="", hid="h1"):
+        return {"id": hid, "text": text, "keyword_score": 1.0, "rank": 1,
+                "metadata": {"document": doc, "source": doc, "language": "ar",
+                             "heading": heading}}
+
+    def test_anchor_bar_relative_and_junk_excluded(self):
+        import sufficiency as S
+        # long question: the bar caps at AR_ANCHOR_MIN
+        q = ("ما الصيغة التي يشارك فيها العميل بخبرته وإدارته فقط دون أن "
+             "يدفع رأس مال")
+        self.assertEqual(S._anchor_bar(q), S.AR_ANCHOR_MIN)
+        # two-term question: ceil(0.6*2)=2
+        self.assertEqual(S._anchor_bar("من يتحمل الخسائر؟"), 2)
+        # «يها» residue (فيها minus ف) is junk — never a question term
+        self.assertNotIn("يها", S.question_terms("كيف ينظر إلى النقد فيها؟"))
+
+    def test_cross_anchor_df_checked_digits(self):
+        import sufficiency as S
+        df = {"48": 240, "2016": 240, "2019": 13, "مرابحة": 16}
+        q = "According to BCT circular 80/2019, who gives the order to purchase?"
+        self.assertTrue(S._is_cross_script(q))
+        # header digits (df=240) carry no signal — no anchor
+        header = "الفصل 1 من القانون عدد 48 لسنة 2016"
+        self.assertFalse(S._anchors(q, header, df))
+        # specific rare terms anchor (>= CROSS_ANCHOR_MIN distinctive)
+        good = "يتولى البنك الشراء بمقتضى المنشور عدد 80 لسنة 2019"
+        self.assertTrue(S._anchors(q, good, df))
+
+    def test_mixed_script_question_uses_cross_rules(self):
+        import sufficiency as S
+        q = "Under the BCT circular, the investment-deposit mudaraba (المضاربة)"
+        self.assertTrue(S._is_cross_script(q))   # 1 Arabic token <= MIXED_AR_MAX
+
+    def test_sufficient_and_insufficient_states(self):
+        import sufficiency as S
+        # covered definition question -> كافٍ
+        q = "ما هي عملية التمويل بالمرابحة على معنى منشور البنك المركزي التونسي؟"
+        hit = self._hit("تعتبر عملية التمويل بالمرابحة على معنى منشور البنك "
+                        "المركزي التونسي عملية تمويل حيث يشتري البنك المرابحة",
+                        doc="Circulaire_BCT_2019-08.pdf")
+        res = S.check(q, [hit])
+        self.assertEqual(res["state"], "كافٍ")
+        self.assertTrue(all(r["covered"] for r in res["requirements"]))
+        # nothing anchors -> غير كافٍ, refusal names the missing requirement
+        oos = "ما هو سعر سهم شركة تسلا اليوم في بورصة نيويورك؟"
+        res2 = S.check(oos, [hit])
+        self.assertEqual(res2["state"], "غير كافٍ")
+        self.assertTrue(res2["reason"].startswith("evidence absent"))
+        self.assertIn(res2["missing"][0], res2["reason"])
+        # refusal is tied to evidence absence, never to the intent label
+        self.assertNotIn(res2["intent_type"], res2["reason"])
+
+    def test_conflict_resolved_by_precedence_and_adjustable(self):
+        import sufficiency as S
+        import legal_numbers
+        row = legal_numbers.CIRCULAIRE_CORRECTIONS[3]   # القانون 48-2016 topic
+        q = "ما القانون عدد 48 لسنة 2016 والمنشور حول الاعتمادات الاسلامية؟"
+        circ = self._hit("القانون عدد 19 لسنة6142 المؤرخ في 44 جويلية 6142 "
+                         "الاعتمادات الاسلامية",
+                         doc="Circulaire_BCT_2019-08.pdf", hid="c1")
+        loi = self._hit("القانون عدد 48 لسنة 2016 المؤرخ في 11 جويلية 2016 "
+                        "الاعتمادات الاسلامية",
+                        doc="Loi_2016-48.pdf", hid="l1")
+        self.assertTrue(S._anchors(q, circ["text"], None))
+        self.assertTrue(S._anchors(q, loi["text"], None))
+        conflicts = S.detect_conflicts([circ, loi])
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["resolution"], S._CONFLICT_RESOLVED)
+        # declared order: the law (rank 1) wins — official evidence
+        self.assertEqual(conflicts[0]["winning_text"], "official_evidence")
+        # the table is ADJUSTABLE: flip the two levels and the winner flips
+        saved = dict(S.PRECEDENCE)
+        try:
+            S.PRECEDENCE["Circulaire_BCT_2019-08.pdf"] = 1
+            S.PRECEDENCE["Loi_2016-48.pdf"] = 2
+            flipped = S.detect_conflicts([circ, loi])
+            self.assertEqual(flipped[0]["winning_text"], "raw_form")
+        finally:
+            S.PRECEDENCE.clear()
+            S.PRECEDENCE.update(saved)
+        # an unranked document -> unresolvable -> غير محسوم at check level
+        unknown = self._hit(circ["text"], doc="Unknown_Doc.pdf", hid="u1")
+        res = S.check(q, [loi, unknown])
+        self.assertEqual(res["state"], "غير محسوم")
+
+    def test_guided_rounds_bounded_and_rescuing(self):
+        import sufficiency as S
+        q = "ما هي شروط التمويل بالمشاركة حسب الدليل الداخلي للبنك؟"
+        weak = self._hit("البنك يقدم خدمات مالية للحرفاء داخل الفرع",
+                         hid="w1")
+        # gold evidence carries the rare term the first pool lacks
+        gold = self._hit("التمويل بالمشاركة تعني حسب الدليل الداخلي للبنك "
+                         "اتفاق الطرفين على حصص المشاركة ونسبتها",
+                         hid="g1")
+        calls = {"n": 0}
+
+        def search_fn(query, k):
+            calls["n"] += 1
+            return [dict(gold)] if "مشاركة" in query else []
+
+        res = S.check(q, [weak], search_fn=search_fn)
+        self.assertEqual(res["state"], "كافٍ")
+        self.assertEqual(len(res["guided_rounds"]), 1)
+        self.assertLessEqual(calls["n"], S.MAX_GUIDED_ROUNDS)
+
+        # junk rounds only: bounded by the declared cap, state stays insufficient
+        def junk_fn(query, k):
+            return [{"id": f"j{calls['n']}", "text": "نص آخر مختلف تمامًا",
+                     "metadata": {"document": "Guide_Interne_Operations_"
+                                              "Bancaires_Islamiques.docx"}}]
+
+        res2 = S.check(q, [weak], search_fn=junk_fn)
+        self.assertEqual(res2["state"], "غير كافٍ")
+        self.assertEqual(len(res2["guided_rounds"]), S.MAX_GUIDED_ROUNDS)
+
+    def test_multi_requirement_differentiation(self):
+        import sufficiency as S
+        # compound question: sub-question 2 (numeric) missing from the pool
+        q = "في المضاربة المقيدة: من يتحمل مخاطر الاستثمار، وكم تبلغ نسبة عائد الحريف؟"
+        base = self._hit("المضاربة المقيدة يتحمل فيها البنك مخاطر الاستثمار "
+                         "في حدود معينة",
+                         doc="Circulaire_BCT_2019-08.pdf", hid="a")
+        res = S.check(q, [base])
+        subs = {r["sub_question"] for r in res["requirements"]}
+        self.assertIn(1, subs)
+        self.assertIn(2, subs)
+        self.assertEqual(res["state"], "غير كافٍ")
+        # the refusal names WHICH requirement is missing (differentiation)
+        self.assertTrue(res["missing"])
+
+    def test_precedence_table_declared(self):
+        import sufficiency as S
+        self.assertEqual(list(S.PRECEDENCE.values()), [1, 2, 3, 4])
+        self.assertEqual(S.PRECEDENCE["Loi_2016-48.pdf"], 1)
+
+    def test_inert_layer_no_deployed_imports(self):
+        """Read-only layer: nothing in the deployed path imports sufficiency."""
+        import subprocess
+        deployed = ["service.py", "main.py", "retrieval.py", "store.py",
+                    "answer.py", "answer_ab.py"]
+        for f in deployed:
+            out = subprocess.run(
+                ["grep", "-n", "sufficiency", f], capture_output=True, text=True)
+            self.assertEqual(out.returncode, 1, f"{f} references sufficiency")
+
+
 class RelationalExpansion(unittest.TestCase):
     """Phase-5 item 3: retrieval expansion along the Phase-4 relations under
     the DECLARED intent policy — internal edges only for إجرائي (from) and
