@@ -275,6 +275,12 @@ RERANK_ENABLED = os.getenv("RERANK_ENABLED", "1") == "1"
 # Phase-5 item 3: relational expansion under the declared intent policy.
 # Default OFF — activation is the owner's data-driven gate (the plan's item 6).
 RELATIONAL_EXPANSION_ENABLED = os.getenv("RELATIONAL_EXPANSION_ENABLED", "0") == "1"
+
+# Phase-5 item 5: optional sufficiency fields on POST /answer (additive-only,
+# §2.7 freeze). OFF by default — flipping it to "1" ADDS evidence_status /
+# requirements_covered / requirements_missing / conflicts / refusal_reason to
+# the response; "0" keeps the response byte-identical to today's.
+SUFFICIENCY_FIELDS_ENABLED = os.getenv("SUFFICIENCY_FIELDS_ENABLED", "0") == "1"
 RETRIEVAL_CANDIDATE_K = 20
 
 # Selected measured profile. Old .env values are rejected, not silently used.

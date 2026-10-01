@@ -215,6 +215,27 @@ def _is_cross_script(question: str) -> bool:
     return n_ar <= MIXED_AR_MAX
 
 
+# The /answer response fields this module feeds (Phase-5 item 5, additive-
+# only §2.7). The service adds exactly these keys when
+# SUFFICIENCY_FIELDS_ENABLED=1 and none of them when it is off.
+RESPONSE_FIELDS = ("evidence_status", "requirements_covered",
+                   "requirements_missing", "conflicts", "refusal_reason")
+
+_DF_CACHE: dict = {}
+
+
+def df_for_collection(collection) -> dict[str, int]:
+    """build_df over a live collection's texts, cached per (name, count) —
+    the corpus is small and re-tokenizing it per request would be waste."""
+    key = (getattr(collection, "name", None) or id(collection),
+           collection.count())
+    if key not in _DF_CACHE:
+        docs = collection.get(include=["documents"])["documents"] or []
+        _DF_CACHE.clear()          # keep a single entry: corpora are small
+        _DF_CACHE[key] = build_df(docs)
+    return _DF_CACHE[key]
+
+
 def build_df(texts: list[str]) -> dict[str, int]:
     """Document frequency of every term over the corpus texts (declared
     distinctiveness signal for cross-script anchoring)."""

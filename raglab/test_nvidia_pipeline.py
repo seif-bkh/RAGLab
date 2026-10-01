@@ -2678,14 +2678,28 @@ class SufficiencyCheck(unittest.TestCase):
         self.assertEqual(S.PRECEDENCE["Loi_2016-48.pdf"], 1)
 
     def test_inert_layer_no_deployed_imports(self):
-        """Read-only layer: nothing in the deployed path imports sufficiency."""
+        """Read-only layer: sufficiency executes in the deployed path ONLY
+        inside the SUFFICIENCY_FIELDS_ENABLED gate (item 5) — never on the
+        default path. service.py may reference it nowhere else; every other
+        deployed module must not reference it at all."""
         import subprocess
-        deployed = ["service.py", "main.py", "retrieval.py", "store.py",
-                    "answer.py", "answer_ab.py"]
-        for f in deployed:
+        for f in ["main.py", "retrieval.py", "store.py", "answer.py",
+                  "answer_ab.py", "chat.py"]:
             out = subprocess.run(
-                ["grep", "-n", "sufficiency", f], capture_output=True, text=True)
-            self.assertEqual(out.returncode, 1, f"{f} references sufficiency")
+                ["grep", "-nE", "import sufficiency|sufficiency\.", f],
+                capture_output=True, text=True)
+            self.assertEqual(out.returncode, 1,
+                             f"{f} executes sufficiency outside the gate")
+        # service.py: exactly ONE reference, and it is the gated import
+        # (indented inside `if want_sufficiency and ...`)
+        out = subprocess.run(["grep", "-n", "import sufficiency", "service.py"],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, "service.py lost its gated import")
+        lines = [l for l in out.stdout.splitlines() if "import sufficiency" in l]
+        self.assertEqual(len(lines), 1)
+        code = lines[0].split(":", 1)[1]      # drop grep's line-number prefix
+        self.assertTrue(code.startswith("            import sufficiency"),
+                        "the sufficiency import is not inside the gate branch")
 
 
 class RelationalExpansion(unittest.TestCase):

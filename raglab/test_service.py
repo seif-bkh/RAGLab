@@ -207,6 +207,15 @@ class ServiceTest(unittest.TestCase):
                                       "include_excerpts": True}).json()
         self.assertIn("text", body["sources"][0])
 
+    def test_answer_has_no_sufficiency_fields_by_default(self):
+        # §2.7 freeze regression: SUFFICIENCY_FIELDS_ENABLED defaults OFF —
+        # the /answer response must not gain any Phase-5 item-5 field.
+        body = self.client.post("/answer", json={"question": QUESTION}).json()
+        self.assertEqual(body["status"], "answered", body)
+        for field in ("evidence_status", "requirements_covered",
+                      "requirements_missing", "conflicts", "refusal_reason"):
+            self.assertNotIn(field, body)
+
     def test_answer_greeting_short_circuits_without_model(self):
         body = self.client.post("/answer", json={"question": "bonjour"}).json()
         self.assertEqual(body["status"], "greeting")
@@ -293,6 +302,101 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(bad.status_code, 400)
         self.assertIn("xkiro", bad.json()["detail"]["registered"])
 
+
+class SufficiencyFieldsTest(unittest.TestCase):
+    """Phase-5 item 5: the sufficiency state reaches /answer as OPTIONAL new
+    response fields — additive-only (§2.7 freeze). Gate
+    SUFFICIENCY_FIELDS_ENABLED=1 adds exactly sufficiency.RESPONSE_FIELDS;
+    0 keeps the response shape byte-identical (checked on ServiceTest's
+    default-gate client)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        (cls.tmp / "note.md").write_text(CORPUS, encoding="utf-8")
+        cls.profile = _service_profile(cls.tmp)
+        overrides = {
+            "CHROMA_DIR": cls.tmp / "chroma",
+            "EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+            "NVIDIA_EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
+            "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
+            "RESULTS_DIR": cls.tmp,
+            "SUFFICIENCY_FIELDS_ENABLED": True,   # the item-5 gate ON
+        }
+        local = build_lab_config(cls.profile)
+        for key, value in overrides.items():
+            setattr(local, key, value)
+        generator = AnswerGenerator(local, client=_FakeChatClient(),
+                                    approved_models=(PROFILE_MODEL,))
+        sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+        sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
+        cls.client = TestClient(service.create_app(
+            cls.profile, generator=generator, allow_profile_switch=False,
+            config_overrides=overrides))
+        # build the index once (same pattern as ServiceTest)
+        accepted = cls.client.post("/ingest").json()
+        deadline = time.monotonic() + 60
+        status = {"state": "running"}
+        while time.monotonic() < deadline:
+            status = cls.client.get("/ingest/status").json()
+            if status["state"] != "running":
+                break
+            time.sleep(0.2)
+        assert accepted.get("state") == "accepted" and status["state"] == "done", status
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.modules.pop("sentence_transformers", None)
+
+    def test_fields_appear_when_enabled_and_covered(self):
+        import sufficiency
+        body = self.client.post("/answer",
+                                json={"question": QUESTION}).json()
+        self.assertEqual(body["status"], "answered", body)
+        # every pre-existing field is still there (additive-only)
+        for field in ("answer", "claims", "sources", "model", "validation_ok",
+                      "retrieved", "inference_performed"):
+            self.assertIn(field, body)
+        # the sufficiency fields appear, with the declared contract
+        self.assertIn("evidence_status", body)
+        self.assertIn(body["evidence_status"],
+                      ("كافٍ", "غير كافٍ", "متعارض", "غير محسوم"))
+        self.assertIn("requirements_covered", body)
+        self.assertIn("requirements_missing", body)
+        self.assertIsInstance(body["requirements_covered"], list)
+        self.assertIsInstance(body["requirements_missing"], list)
+        # sync gate: covered + missing partition the plan's requirements
+        n_total = len(body["requirements_covered"]) + len(body["requirements_missing"])
+        self.assertGreaterEqual(n_total, 1)
+        # a sufficient answer has no refusal_reason
+        if body["evidence_status"] == "كافٍ":
+            self.assertNotIn("refusal_reason", body)
+            self.assertTrue(body["requirements_covered"])
+        # the service fields are exactly the declared contract names
+        self.assertTrue(set(sufficiency.RESPONSE_FIELDS) >=
+                        {"evidence_status", "requirements_covered",
+                         "requirements_missing"})
+
+    def test_insufficient_evidence_names_missing_requirements(self):
+        # no lexical contact with the corpus -> غير كافٍ and the refusal is
+        # tied to EVIDENCE ABSENCE (named missing requirement), never to a
+        # classification failure
+        body = self.client.post("/answer", json={
+            "question": "Quelle est la recette de la bouillabaisse marseillaise ?"
+        }).json()
+        self.assertEqual(body["evidence_status"], "غير كافٍ", body)
+        self.assertTrue(body["requirements_missing"])
+        self.assertIn("refusal_reason", body)
+        self.assertIn(body["requirements_missing"][0], body["refusal_reason"])
+        # refusal_reason speaks about evidence, not about the intent label
+        self.assertNotIn(body.get("language") or "", body["refusal_reason"])
+
+    def test_greeting_has_no_sufficiency_fields(self):
+        # greeting retrieves nothing — no evidence semantics to report
+        body = self.client.post("/answer", json={"question": "bonjour"}).json()
+        self.assertEqual(body["status"], "greeting")
+        self.assertNotIn("evidence_status", body)
+        self.assertNotIn("refusal_reason", body)
 
 class LocalFrontOverHttp(unittest.TestCase):
     """local_front.py's smoke suite against a REAL HTTP server.

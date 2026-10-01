@@ -842,6 +842,10 @@ def create_app(profile: dict | None = None, *, generator=None,
         collection = runtime.collection()
         generator = runtime.generator()
         k = request.k or local.ANSWER_TOP_K
+        # Phase-5 item 5: the sufficiency fields need the retrieval pool —
+        # ask() exposes it (inert switch, no second retrieval) only when the
+        # additive-fields gate is on; OFF keeps the response shape unchanged.
+        want_sufficiency = bool(getattr(local, "SUFFICIENCY_FIELDS_ENABLED", False))
         try:
             result = chat_mod.ask(local, embedder, collection, generator,
                                   request.question, top_k=k,
@@ -850,7 +854,8 @@ def create_app(profile: dict | None = None, *, generator=None,
                                   mode=request.mode or runtime.profile["retrieval"]["mode"],
                                   lang_filter=(request.lang_filter if request.lang_filter is not None
                                                else runtime.profile["retrieval"]["lang_filter"]),
-                                  language=request.query_lang)
+                                  language=request.query_lang,
+                                  return_pool=want_sufficiency)
         except (ValueError, RuntimeError) as exc:
             raise ServiceError(409, "answer_refused", error=safe_error(exc)) from None
         except OSError as exc:               # mid-request network failure
@@ -874,23 +879,45 @@ def create_app(profile: dict | None = None, *, generator=None,
                    "evidence": [{**ev, "quote": scrub_pii(ev.get("quote", ""))}
                                 for ev in claim.get("evidence") or []]}
                   for claim in result.get("claims") or []]
-        return {"status": result["status"], "reason": result.get("reason"),
-                "answer": scrub_pii(result["answer"]), "claims": claims,
-                "sources": sources, "model": result["model"],
-                "language": result.get("language"),
-                "validation_ok": result.get("validation_ok", True),
-                "cached": result.get("cached", False),
-                "retrieved": result.get("retrieved", 0),
-                "dropped_for_budget": result.get("dropped_for_budget", 0),
-                "seconds": result.get("seconds", 0.0),
-                # refusal diagnostics (None on the answered/greeting paths):
-                # error = the gate's finding (safe-redacted), raw_preview =
-                # the model's rejected reply, shown to the caller the same
-                # way the console shows "[model said, not accepted]"
-                "error": result.get("error"),
-                "raw_preview": (scrub_pii(result["raw_preview"])
-                                if result.get("raw_preview") else None),
-                "inference_performed": result.get("status") not in (None, "refused", "greeting")}
+        payload = {"status": result["status"], "reason": result.get("reason"),
+                   "answer": scrub_pii(result["answer"]), "claims": claims,
+                   "sources": sources, "model": result["model"],
+                   "language": result.get("language"),
+                   "validation_ok": result.get("validation_ok", True),
+                   "cached": result.get("cached", False),
+                   "retrieved": result.get("retrieved", 0),
+                   "dropped_for_budget": result.get("dropped_for_budget", 0),
+                   "seconds": result.get("seconds", 0.0),
+                   # refusal diagnostics (None on the answered/greeting paths):
+                   # error = the gate's finding (safe-redacted), raw_preview =
+                   # the model's rejected reply, shown to the caller the same
+                   # way the console shows "[model said, not accepted]"
+                   "error": result.get("error"),
+                   "raw_preview": (scrub_pii(result["raw_preview"])
+                                   if result.get("raw_preview") else None),
+                   "inference_performed": result.get("status") not in (None, "refused", "greeting")}
+        # Phase-5 item 5 — ADDITIVE-ONLY sufficiency fields (§2.7 freeze):
+        # with the gate ON and a retrieval pool present (greeting and local
+        # privacy refusals retrieve nothing, so they stay field-free), the
+        # response gains exactly sufficiency.RESPONSE_FIELDS — nothing else
+        # changes. With the gate OFF the payload above is byte-identical to
+        # the pre-item-5 response.
+        if want_sufficiency and result.get("retrieval_pool") is not None:
+            import sufficiency
+            s = sufficiency.check(result["question"],
+                                  result["retrieval_pool"],
+                                  df=sufficiency.df_for_collection(collection))
+            payload["evidence_status"] = s["state"]
+            payload["requirements_covered"] = [r["req"] for r in s["requirements"]
+                                               if r["covered"]]
+            payload["requirements_missing"] = s["missing"]
+            if s.get("conflicts"):
+                payload["conflicts"] = s["conflicts"]
+            # refusal tied to EVIDENCE ABSENCE (the named missing
+            # requirements) — never to a classification failure
+            if s["state"] == "غير كافٍ":
+                payload["refusal_reason"] = s["reason"]
+        return payload
 
     # -- ingestion --------------------------------------------------------------
 

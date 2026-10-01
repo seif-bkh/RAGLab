@@ -243,7 +243,8 @@ class ReasoningSwitch:
 
 
 def ask(local, embedder, collection, generator, question, *, top_k=None, neighbor_radius=None,
-        use_cache=True, mode='vector', language=None, lang_filter=None, corpus_langs=None):
+        use_cache=True, mode='vector', language=None, lang_filter=None, corpus_langs=None,
+        return_pool=False):
     """One turn: retrieve, optionally widen the excerpts, then answer with citations or abstain."""
     from answer import local_private_refusal
     from evaluate import prepare_query_text
@@ -265,11 +266,16 @@ def ask(local, embedder, collection, generator, question, *, top_k=None, neighbo
                             if neighbor_radius is None else neighbor_radius)
     result = generator.answer(question, hits, language, use_cache=use_cache)
     kept = len(result.get('sources') or [])
+    # Phase-5 item 5 (inert by default): expose the post-neighbor retrieval
+    # pool so the service can compute the sufficiency fields WITHOUT a second
+    # retrieval. Every existing caller keeps the previous result shape.
+    pool = ({'retrieval_pool': hits} if return_pool else {})
     return {**result, 'question': question, 'retrieved': len(hits), 'query_variants': variants,
             'language': language, 'retrieval_mode': mode,
             'dropped_for_budget': max(0, len(hits) - kept), 'context_tokens': local.ANSWER_CONTEXT_TOKENS,
             'corpus_languages': sorted(corpus_langs or []),
-            'question_language_mismatch': bool(corpus_langs) and language not in set(corpus_langs)}
+            'question_language_mismatch': bool(corpus_langs) and language not in set(corpus_langs),
+            **pool}
 
 
 def format_turn(result, *, show_context=False):

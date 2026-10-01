@@ -170,6 +170,19 @@ Current state of the work:
   named gaps (colloquial gap stays visible); t05–t08 differentiated per
   sub-requirement. CLI: `python sufficiency.py --sets ...`. Guarded by
   `SufficiencyCheck` (9) — suite 197 OK.
+- **Phase-5 item 5 BUILT** — the sufficiency state reaches POST /answer as
+  OPTIONAL response fields (additive-only, §2.7 freeze), gated by
+  SUFFICIENCY_FIELDS_ENABLED (config.py, default OFF; flows into the
+  service config automatically). ON adds exactly
+  sufficiency.RESPONSE_FIELDS: evidence_status, requirements_covered,
+  requirements_missing, conflicts, refusal_reason (names the missing
+  requirements — evidence absence, never classification failure). OFF
+  keeps the response byte-identical (explicit regression test). The pool
+  comes from chat.ask's inert return_pool switch (no second retrieval);
+  df cached per (name, count); greeting/local-privacy paths stay
+  field-free by design. Inert-layer guard updated (one gated reference in
+  service.py, none elsewhere). Tests: SufficiencyFieldsTest (4) + the
+  OFF regression in ServiceTest — suites 197 + 52 OK.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
