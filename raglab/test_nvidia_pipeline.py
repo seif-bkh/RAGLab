@@ -1573,6 +1573,68 @@ class Phase2Machinery(unittest.TestCase):
             cases = ev.load_question_set(Path(__file__).parent / "questions_50.json")
         self.assertEqual(len(cases), 50)
 
+    def _hit(self, rank, text, doc="Loi_2016-48.pdf"):
+        return {"rank": rank, "id": f"c{rank}", "text": text,
+                "metadata": {"document": doc}}
+
+    def test_requirement_completion_rank_semantics(self):
+        import evaluate as ev
+        case = {"expected_document": "Loi_2016-48.pdf",
+                "expected_substrings": ["هامش ربح محدد مسبقا", "على اقساط معلومة"]}
+        hits = [self._hit(1, "نص لا يحمل شيئا من المطالب"),
+                self._hit(2, "الصيغة تتضمن هامش ربح محدد مسبقا فقط"),
+                self._hit(3, "بعض النص"),
+                self._hit(4, "ويتم تسديده على اقساط معلومة")]
+        # ALL requirements are only covered once rank 4 is reached
+        self.assertEqual(ev.requirement_completion_rank(case, hits), 4)
+        cov = ev.requirement_coverage(case, [h["text"] for h in hits])
+        self.assertEqual((cov["found"], cov["total"]), (2, 2))
+        self.assertEqual(cov["missing"], [])
+        # Uncovered set -> None (hit@k false at every k)
+        self.assertIsNone(ev.requirement_completion_rank(
+            case, hits[:3]))
+        # Document scoping: same texts but wrong document -> never completes
+        wrong_doc = [self._hit(1, "هامش ربح محدد مسبقا", doc="other.pdf"),
+                     self._hit(2, "على اقساط معلومة", doc="other.pdf")]
+        self.assertIsNone(ev.requirement_completion_rank(case, wrong_doc))
+        # Cases without expected_substrings are untouched
+        self.assertIsNone(ev.requirement_completion_rank(
+            {"expected_substring": "x"}, hits))
+        self.assertIsNone(ev.requirement_coverage(
+            {"expected_substring": "x"}, [t["text"] for t in hits]))
+
+    def test_expected_substrings_validation(self):
+        import evaluate as ev
+        import json as _json
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "q.json"
+            good = {"cases": [dict(
+                id="i1", question="ما الوثائق والشروط؟", language="ar",
+                category="implicit", expected_document="Loi_2016-48.pdf",
+                expected_lang="ar",
+                expected_substrings=["عقد مضاربة", "عقد وكالة"])]}
+            p.write_text(_json.dumps(good, ensure_ascii=False), encoding="utf-8")
+            with patch("builtins.print"):
+                ev.load_question_set(p)      # clean: no warnings expected
+            bad = {"cases": [dict(
+                id="i2", question="سؤال", language="ar", category="implicit",
+                expected_document="Loi_2016-48.pdf", expected_lang="ar",
+                expected_substrings=[])]}
+            p.write_text(_json.dumps(bad, ensure_ascii=False), encoding="utf-8")
+            with patch("builtins.print") as pr:
+                ev.load_question_set(p)
+            self.assertIn("expected_substrings", "\n".join(str(a) for a in pr.call_args_list))
+
+    def test_answer_context_sources_simulates_budget(self):
+        import evaluate as ev
+        hits = [{"rank": i, "id": f"c{i}", "text": "نص " * 50,
+                 "metadata": {"document": "d"}}
+                for i in range(1, 30)]
+        cfg = SimpleNamespace(ANSWER_CONTEXT_TOKENS=300)
+        sources = ev.answer_context_sources(hits, cfg)
+        self.assertLess(len(sources), len(hits))   # the budget drops sources
+
 
 if __name__ == '__main__':
     unittest.main()
