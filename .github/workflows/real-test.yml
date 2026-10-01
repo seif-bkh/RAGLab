@@ -175,6 +175,28 @@ jobs:
           print(f"::warning::targets-set | {enc}")     # annotation channel
           EOF
 
+      - name: Units index (Phase-4 item 5) — description lines vs the adopted baseline
+        working-directory: raglab
+        run: |
+          set -o pipefail
+          python unit_index.py --live \
+            --baseline results/harness50/real_eval_restructure.json \
+            2>&1 | tee /tmp/raglab_ci/units_index.log
+          cp results/harness50/unit_index_eval.json results/harness50/real_eval_unit_index.json
+
+      - name: Post the units-index numbers as an annotation
+        if: always()
+        working-directory: raglab
+        run: |
+          line=$(grep -h '^ANNO|' /tmp/raglab_ci/units_index.log 2>/dev/null | tail -1 || true)
+          if [ -n "$line" ]; then
+            message=${line#ANNO| }
+            printf '::warning::%s\n' \
+              "$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g')"
+          else
+            echo "no units-index ANNO found"
+          fi
+
       # continue-on-error: the retrieval A/B is the deliverable; an answer-smoke failure is
       # reported as data (below) instead of hiding the tables.
       # NOTE: GitHub wraps run-steps in `bash -e -o pipefail`, so a failing command aborts
@@ -275,6 +297,7 @@ jobs:
             raglab/results/harness50/real_eval_restructure_rerank.json
             raglab/results/harness50/targets_default.json
             raglab/results/harness50/targets_lexicon.json
+            raglab/results/harness50/real_eval_unit_index.json
             raglab/results/harness50/real_answer_murabaha.json
           if-no-files-found: ignore
           retention-days: 30

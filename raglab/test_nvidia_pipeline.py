@@ -2291,6 +2291,85 @@ class LegalNumbersExtraction(unittest.TestCase):
         self.assertEqual(data["law_numbers"], records)
 
 
+class UnitIndexMeasure(unittest.TestCase):
+    """Phase-4 item 5: the units index — the 198 description lines on the
+    EXISTING retrieval machinery in an isolated collection; the 12 law cases
+    judged by the shared normalized-containment rule (expected substring
+    inside the unit's verbatim article text)."""
+
+    def test_law_case_filter(self):
+        import json as _json
+        import unit_index
+        cases = _json.loads((Path(__file__).resolve().parent
+                             / "questions_50.json").read_text(encoding="utf-8"))["cases"]
+        loi = unit_index.law_cases(cases)
+        self.assertEqual(len(loi), 12)
+        self.assertTrue(all(c["expected_document"] == "Loi_2016-48.pdf" for c in loi))
+
+    def test_unit_contains_evidence_rule(self):
+        import unit_index
+        art = "يعاقب بالسجن من ثلاثة اشهر وبخطية من مائة الف دينار"
+        case = {"expected_substring": "بخطية من مائة الف دينار"}
+        self.assertTrue(unit_index.unit_contains_evidence(art, case))
+        case_wrong = {"expected_substring": "غير موجود إطلاقًا"}
+        self.assertFalse(unit_index.unit_contains_evidence(art, case_wrong))
+        case_empty = {"expected_substring": ""}
+        self.assertFalse(unit_index.unit_contains_evidence(art, case_empty))
+
+    def test_end_to_end_with_fake_embedder(self):
+        """Machinery check (not quality): a fake embedder that ranks the
+        article containing 'المرابحة' first for its question must produce
+        hit@1 for that case and full hit metrics."""
+        import tempfile
+        import unit_index
+        units_list = [
+            {"unit_id": "loi-2016-48:art012", "heading": "الفصل12", "path": "p",
+             "description": "يعتبر تمويلا بالمرابحة كل عملية شراء",
+             "text": "يعتبر تمويلا بالمرابحة كل عملية يقوم فيها البنك بشراء منقولات",
+             "type": "definition", "numeric": False},
+            {"unit_id": "loi-2016-48:art013", "heading": "الفصل13", "path": "p",
+             "description": "يعتبر تمويلا بالاجارة",
+             "text": "يعتبر تمويلا بالاجارة كل عملية تملك منقولات او عقارات",
+             "type": "definition", "numeric": False},
+        ]
+        cases = [{"id": "qX", "question": "ما المرابحة؟", "language": "ar",
+                  "category": "verbatim", "expected_document": "Loi_2016-48.pdf",
+                  "expected_lang": "ar",
+                  "expected_substring": "شراء منقولات"}]
+        embedder = SimpleNamespace(
+            embed_texts=lambda ts: [[1.0, 0.0] if "المرابحة" in t else [0.0, 1.0]
+                                    for t in ts],
+            embed_query=lambda t: [1.0, 0.0])
+        with tempfile.TemporaryDirectory() as tmp:
+            result = unit_index.evaluate_units_index(
+                units_list, cases, embedder, Path(tmp) / "chroma")
+        self.assertEqual(result["metrics"]["n"], 1)
+        self.assertEqual(result["questions"][0]["correct_unit_rank"], 1)
+        self.assertTrue(result["questions"][0]["hit_at_1"])
+        self.assertEqual(result["questions"][0]["top_unit"], "loi-2016-48:art012")
+
+    def test_baseline_extraction_from_eval_json(self):
+        import tempfile
+        import unit_index
+        run = {"questions": [
+            {"id": "q10", "hit_at_1": True, "hit_at_3": True, "hit_at_5": True,
+             "is_out_of_scope": False},
+            {"id": "q11", "hit_at_1": False, "hit_at_3": True, "hit_at_5": True,
+             "is_out_of_scope": False},
+            {"id": "q99", "hit_at_1": True, "hit_at_3": True, "hit_at_5": True,
+             "is_out_of_scope": False},
+            {"id": "q28", "hit_at_1": False, "hit_at_3": False, "hit_at_5": False,
+             "is_out_of_scope": True},
+        ]}
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "eval.json"
+            p.write_text(json.dumps(run), encoding="utf-8")
+            base = unit_index.baseline_for_law_questions(p, ["q10", "q11", "q28"])
+        self.assertEqual(base["n"], 2)          # the OOS case never counts
+        self.assertEqual(base["hit@1"], 0.5)
+        self.assertEqual(base["hit@5"], 1.0)
+
+
 class UnitsExtraction(unittest.TestCase):
     """Phase-4 item 1: Loi 2016-48 knowledge units — article-level split from
     the adopted codex through the SHARED marker machinery (restructure.

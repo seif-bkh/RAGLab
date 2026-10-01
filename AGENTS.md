@@ -109,7 +109,13 @@ Current state of the work:
   first sanctioned addition under the §2.7 freeze: read-only, works on an
   empty index, filters unit_id/kind, serves records + corrections; no
   existing endpoint touched). Guarded by `LegalNumbersExtraction` +
-  `test_numbers_endpoint_structured_and_filtered`.
+  `test_numbers_endpoint_structured_and_filtered`. **Item 5 BUILT
+  (live measurement authorized, owner round 7)**: `raglab/unit_index.py` —
+  the 198 description lines indexed on the existing retrieval machinery in
+  an ISOLATED collection; the 12 law cases judged by the shared
+  normalized-containment rule against the same-run restructure baseline;
+  new real-test.yml step (`--live`) posts the units-index ANNO with the
+  automated gate (hit@5 >= baseline). Guarded by `UnitIndexMeasure`.
 - **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
   `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
   query-term coverage in text/heading, exact phrase, degenerate-length penalty;
