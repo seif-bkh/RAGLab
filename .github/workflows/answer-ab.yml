@@ -70,15 +70,12 @@ jobs:
           done
           [ "$missing" -eq 0 ]
 
-      - name: Ingest the adopted corpus (restructure arm, NVIDIA embeddings)
-        working-directory: raglab
-        run: |
-          set -o pipefail
-          export CHUNKING_MODE=restructure
-          mkdir -p /tmp/raglab_ci
-          python main.py ingest --reset --skip-sanity-check \
-            --data-dir ../docs --data-dir data 2>&1 | tee /tmp/raglab_ci/ingest.log
-
+      # NOTE (learned from the first live run): answer_ab runs on the APP
+      # profile's own collection (raglab_app_<embedding>_<mode>), not main.py's
+      # raglab_docs — a main.py ingest step here would populate a collection the
+      # tool never reads. answer_ab self-ingests when its collection is empty
+      # (NVIDIA embeddings, restructure mode from CHUNKING_MODE below).
+      #
       # The step exits 0 even if answer_ab fails mid-way: the annotation and the
       # status-failure steps below still publish everything that was measured
       # (GitHub wraps run steps in bash -e -o pipefail; the || status=$? idiom is
@@ -88,6 +85,7 @@ jobs:
         run: |
           set -o pipefail
           export CHUNKING_MODE=restructure
+          mkdir -p /tmp/raglab_ci
           status=0
           python answer_ab.py --questions questions_50.json \
             --model xkiro/qwen/qwen3.8-max:free \

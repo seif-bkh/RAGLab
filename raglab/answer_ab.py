@@ -251,12 +251,22 @@ def main() -> int:
     state = profiles.default_state()
     local = profiles.build_lab_config(state)
     embedder_obj = embedder_mod.build_embedder(local)
-    collection = _client(local).get_or_create_collection(
-        name=local.CHROMA_COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"})
+
+    def open_collection():
+        # The app profile owns its own collection (raglab_app_<embedding>_<mode>),
+        # NOT main.py's raglab_docs. profiles.ingest(reset=True) DELETES and
+        # recreates it, so the handle must be re-opened after any self-ingest —
+        # a stale handle raises chromadb NotFoundError on first use (caught by
+        # the first live 3.3 run; fixed 2026-10-01).
+        return _client(local).get_or_create_collection(
+            name=local.CHROMA_COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"})
+
+    collection = open_collection()
     if not collection.count():
         print("[answer_ab] index empty — ingesting the corpus first")
         profiles.ingest(local, embedder_obj, state, reset=True)
+        collection = open_collection()
 
     generators = []
     for spec in args.model:
