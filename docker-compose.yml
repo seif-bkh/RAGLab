@@ -33,6 +33,15 @@ services:
       - raglab-index:/app/raglab/chroma_db
       - raglab-embed-cache:/app/raglab/caches
       - raglab-documents:/app/raglab/documents   # pushed docs survive redeploys
+    # Liveness for the platform team's orchestrator: GET /health with the
+    # service token (the token middleware protects /health too, so the check
+    # reads RAGLAB_SERVICE_TOKEN from the container's own environment).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, sys, urllib.request; r = urllib.request.Request('http://127.0.0.1:8000/health', headers={'X-Service-Token': os.environ.get('RAGLAB_SERVICE_TOKEN') or os.environ.get('RAGLAB_TOKEN', '')}); sys.exit(0 if urllib.request.urlopen(r, timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
 volumes:

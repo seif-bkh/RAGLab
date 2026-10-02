@@ -313,6 +313,16 @@ Current state of the work:
   SERVICE.md env table now lists the three gates; .env.example documents
   them for the compose env_file. Guarded by PackagingTest (3). Sandbox
   resets #57/#58 during this work — recovery recipe held both times.
+- **DEPLOYMENT.md handoff (2026-10-02, tag deploy-handoff-20261002)**: a
+  self-contained Arabic deployment document for the owner's platform team
+  (what it is, requirements, literal steps, env table incl. the mandatory
+  token change + CORS restriction, front-facing contract notes incl. the
+  refused-is-correct semantics, daily ops, security, rollback). Compose
+  gained a token-aware healthcheck (/health sits behind the token
+  middleware, so the probe reads RAGLAB_SERVICE_TOKEN from the container
+  env — 30s interval, 3 retries). README points to DEPLOYMENT.md;
+  PackagingTest guards the healthcheck. Sandbox reset #59 mid-round:
+  recovery recipe held again.
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured

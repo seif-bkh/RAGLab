@@ -2605,6 +2605,11 @@ class PackagingTest(unittest.TestCase):
         self.assertIn("raglab/.env", compose)
         for volume in ("raglab-index", "raglab-embed-cache", "raglab-documents"):
             self.assertIn(volume, compose)
+        # the liveness probe is token-aware (/health is behind the token
+        # middleware) and reads the token from the container's own env
+        self.assertIn("healthcheck:", compose)
+        self.assertIn("X-Service-Token", compose)
+        self.assertIn("RAGLAB_SERVICE_TOKEN", compose)
         # the template documents the activated gates (compose env_file target)
         env_example = (self.ROOT / "raglab" / ".env.example").read_text(encoding="utf-8")
         for gate in ("SUFFICIENCY_FIELDS_ENABLED",
