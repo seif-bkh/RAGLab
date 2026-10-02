@@ -422,6 +422,13 @@ Current state of the work:
   targets identical. Demo E2E limits documented
   (stub embedder cannot cross scripts in retrieval — the decisive check is
   the owner's server; their /search reaches المرابحة 5/5).
+- **murabaha case CLOSED (owner's production transcript, 2026-10-02)**:
+  the question now ANSWERS on their server — generated answer, 3 cited
+  claims with verbatim quotes across all three documents, the typed unit
+  id loi-2016-48:art012 on the law citation, كافٍ fields rendered; the OOS
+  question in the same session still refused before the model. Full chain
+  recorded in PHASE7_EXPERIMENTS.md. Standing recommendations: TOP_K 20
+  (they run 5), push only genuinely-new documents.
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured
