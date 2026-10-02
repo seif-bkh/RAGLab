@@ -351,6 +351,20 @@ Current state of the work:
   (trail with per-request evidence states), --numbers (53 records, by-kind
   breakdown), --smoke 25/25. LocalFrontClientTest now 8 tests (fake server
   guards every path with the token like the real service).
+- **Field case from the owner's server (2026-10-02, feeds Exp 5)**: their
+  front-chat English questions all refused before the model. Verified:
+  pub/coffeeshop = CORRECT refusals (Arabic equivalents refuse too — content
+  absent); 'what is murabaha?' = FALSE refusal — df('murabaha')=0 (the Latin
+  word never appears in the corpus) and the cross-script anchor engine is
+  exact-lexical, so murabaha never bridges to المرابحة; single-term questions
+  also need CROSS_ANCHOR_MIN=2 even if bridged. Controlled triple experiment
+  on the demo (same service/corpus): pure-English refused, embedded-Arabic
+  'what is murabaha (المرابحة)?' ANSWERED, Arabic answered كافٍ. The 50set en
+  questions pass only because they carry embedded Arabic terms. Options
+  recorded for the owner in PHASE7_EXPERIMENTS.md (embed the Arabic term
+  today; a declared transliteration-bridge table behind an OFF gate + single-
+  rare-anchor rule; RAGLAB_TOP_K 5->20 to match the measured config). No
+  code changed — the fix paths are declared-rules/threshold territory.
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured
