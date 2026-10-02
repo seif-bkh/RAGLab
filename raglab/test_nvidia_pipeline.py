@@ -2610,6 +2610,12 @@ class PackagingTest(unittest.TestCase):
         self.assertIn("healthcheck:", compose)
         self.assertIn("X-Service-Token", compose)
         self.assertIn("RAGLAB_SERVICE_TOKEN", compose)
+        # the token VALUE must NOT be hardcoded in environment: (compose
+        # `environment:` overrides env_file, so a hardcoded value would
+        # silently defeat the owner's raglab/.env token — the exact 401 trap
+        # the platform team hit). raglab/.env owns it; the service warns at
+        # boot when switching is on with no token.
+        self.assertNotIn("RAGLAB_SERVICE_TOKEN:", compose)
         # the template documents the activated gates (compose env_file target)
         env_example = (self.ROOT / "raglab" / ".env.example").read_text(encoding="utf-8")
         for gate in ("SUFFICIENCY_FIELDS_ENABLED",
@@ -2622,6 +2628,97 @@ class PackagingTest(unittest.TestCase):
         for entry in ("raglab/.env", "raglab/chroma_db", "raglab/results",
                       "raglab/logs"):
             self.assertIn(entry, ignore)
+
+
+class LocalFrontClientTest(unittest.TestCase):
+    """local_front (the owner's console-parity client, stdlib-only) — the
+    token plumbing and the honest 401 guidance that replaced the misleading
+    'not a RAGLab service?' message."""
+
+    @classmethod
+    def setUpClass(cls):
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            expected_token = "front-test-secret"
+            seen_headers = {}
+
+            def do_GET(self):
+                Handler.seen_headers = dict(self.headers)
+                if self.path == "/health":
+                    supplied = self.headers.get("X-Service-Token", "")
+                    if supplied != Handler.expected_token:
+                        self.send_response(401)
+                        self.send_header("Content-Type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(b'{"detail": {"reason": "unauthorized"}}')
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"status": "ok", "version": "1.3.0"}')
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}"
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def test_token_sent_as_header(self):
+        import local_front
+        api = local_front.Api(self.url, token="front-test-secret")
+        status, body = api.get("/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("status"), "ok")
+
+    def test_no_token_means_no_header_and_401(self):
+        import local_front
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RAGLAB_SERVICE_TOKEN", None)
+            api = local_front.Api(self.url)
+            status, _ = api.get("/health")
+        self.assertEqual(status, 401)
+
+    def test_env_var_token_also_works(self):
+        import local_front
+        with patch.dict(os.environ, {"RAGLAB_SERVICE_TOKEN": "front-test-secret"}):
+            api = local_front.Api(self.url)
+            status, _ = api.get("/health")
+        self.assertEqual(status, 200)
+
+    def test_main_401_prints_token_guidance_not_a_misleading_message(self):
+        import io
+        import local_front
+        import contextlib
+        buf = io.StringIO()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RAGLAB_SERVICE_TOKEN", None)
+            with contextlib.redirect_stdout(buf):
+                rc = local_front.main(["--base-url", self.url])
+        self.assertEqual(rc, 2)
+        out = buf.getvalue()
+        self.assertIn("shared secret", out)
+        self.assertIn("--token", out)
+        self.assertIn("docker compose up -d", out)
+        self.assertNotIn("not a RAGLab service", out)
+
+    def test_main_with_token_passes_health(self):
+        import local_front
+        with patch.dict(os.environ, {"RAGLAB_SERVICE_TOKEN": "front-test-secret"}):
+            with patch("local_front.Console") as console_cls:
+                rc = local_front.main(["--base-url", self.url, "--status"])
+        self.assertEqual(rc, 0)
 
 
 class ModelsProbeTest(unittest.TestCase):

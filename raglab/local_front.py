@@ -1508,6 +1508,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL,
                         help=f"service base URL (default {DEFAULT_BASE_URL}; "
                              "or env RAGLAB_SERVICE_URL)")
+    parser.add_argument("--token", default=None,
+                        help="the service's X-Service-Token value (when the "
+                             "service sets RAGLAB_SERVICE_TOKEN; also read "
+                             "from the front's own RAGLAB_SERVICE_TOKEN env)")
     parser.add_argument("--status", action="store_true",
                         help="doctor report over the API, no prompts, exit")
     parser.add_argument("--ask", metavar="QUESTION", dest="ask",
@@ -1535,9 +1539,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    api = Api(args.base_url, timeout=ANSWER_TIMEOUT)
+    api = Api(args.base_url, timeout=ANSWER_TIMEOUT, token=args.token)
     try:
         status, _ = api.get("/health")
+        if status == 401:
+            # A RAGLab service with RAGLAB_SERVICE_TOKEN set answers 401
+            # exactly like this — distinguish it from a non-RAGLab endpoint.
+            print("[front] HTTP 401 — the service requires its shared secret.")
+            print("[front] pass it with --token <value> (or export "
+                  "RAGLAB_SERVICE_TOKEN=<value> in this shell).")
+            print("[front] the value the SERVICE expects lives in "
+                  "raglab/.env on the server (RAGLAB_SERVICE_TOKEN=...); "
+                  "after editing that file recreate the container: "
+                  "docker compose up -d")
+            return 2
         if status != 200:
             print(f"[front] /health answered HTTP {status} — not a RAGLab service?")
             return 2

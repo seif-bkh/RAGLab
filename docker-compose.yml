@@ -15,6 +15,10 @@ services:
     env_file:
       - raglab/.env
     environment:
+      # NOTE precedence: entries HERE override raglab/.env (env_file).
+      # RAGLAB_SERVICE_TOKEN deliberately NOT set here — it must come from
+      # raglab/.env so the owner's value wins. The service prints a loud
+      # boot warning if profile switching is on with no token.
       # Profile defaults = the supported pipeline pair; override per deployment:
       # RAGLAB_EMBEDDING_PROVIDER: nvidia
       # RAGLAB_ANSWER_PROVIDER: xkiro
@@ -23,12 +27,9 @@ services:
       RAGLAB_CACHE_DIR: /app/raglab/caches   # embedding/answer caches -> volume
       RAGLAB_ALLOW_PROFILE_SWITCH: "1"       # the app's console needs POST /profile
                                              # (models/chunking/retrieval at runtime);
-                                             # keep RAGLAB_SERVICE_TOKEN set and the
-                                             # service behind the gateway when enabled
-      RAGLAB_SERVICE_TOKEN: "change-me-before-any-real-deployment"   # X-Service-Token on
-                                              # every request (RAGLAB_TOKEN is an
-                                              # accepted alias); REQUIRED now that
-                                              # profile switching is enabled
+                                             # keep RAGLAB_SERVICE_TOKEN set (in
+                                             # raglab/.env) and the service behind
+                                             # the gateway when enabled
     volumes:
       - raglab-index:/app/raglab/chroma_db
       - raglab-embed-cache:/app/raglab/caches

@@ -73,7 +73,7 @@ curl -H "X-Service-Token: $RAGLAB_SERVICE_TOKEN" http://localhost:8000/health
   - `status: "answered"` → معه `evidence_status` (كافٍ/غير كافٍ…)، `requirements_covered/missing`، و`claims` باقتباساتها الموثقة.
   - `status: "refused"` مع `reason: "evidence_insufficient"` → **هذا سلوك صحيح مقصود** (خارج المدونة): اعرضوا `refusal_reason` و`referral`. لا إعادة محاولة تلقائية.
   - `status: "greeting"` → تحيات محلية بلا نموذج.
-- **المصادقة من الواجهة**: تروسة `X-Service-Token` على كل طلب. تروّكوها على preflight فقط (الخدمة تعفي OPTIONS).
+- **المصادقة من الواجهة**: تروسة `X-Service-Token` على كل طلب (تُترك على preflight فقط — الخدمة تعفي OPTIONS). من `local_front`: ‏`--token <القيمة>` أو `export RAGLAB_SERVICE_TOKEN=<القيمة>`.
 - **الاختبار الشامل جاهز**: `python local_front.py --base-url http://<host>:8000 --smoke` — طقم دخان كامل عبر HTTP (كل النقاط + اتساق الحقول الجديدة).
 - داخل الحاوية أيضًا مسبار النماذج المجانية عند المزودين الثلاثة: `docker compose exec raglab python models_probe.py`.
 
@@ -101,5 +101,14 @@ curl -H "X-Service-Token: $RAGLAB_SERVICE_TOKEN" http://localhost:8000/health
 كل push يمر عبر: الطقم غير المتصل (373 فحصًا) + **بناء صورة الدوكر نفسها واستيراد وحداتها في CI** (`Docker image build + import smoke`). آخر حالة: أخضر على `84e63d8` فأحدث.
 
 ---
+
+## 9) أخطاء شائعة
+
+| العرض | السبب | الحل |
+|---|---|---|
+| `HTTP 401` من الواجهة | الواجهة لم ترسل التوكن، أو أرسلت قيمة مختلفة عن التي في `raglab/.env` بالخادم | `--token <القيمة>` أو `export RAGLAB_SERVICE_TOKEN=...` في شل الواجهة. القيمة المتوقعة = سطر `RAGLAB_SERVICE_TOKEN` في `raglab/.env` على الخادم |
+| عدّلتُ `raglab/.env` و401 مستمر | الحاوية العاملة تحتفظ ببيئة الإقلاع — تعديل `.env` لا يحدّثها | `docker compose up -d` لإعادة إنشاء الحاوية، ثم أعد المحاولة |
+| (تاريخيًا) التوكن في `.env` لا يُحترم أصلًا | كانت compose تثبّت قيمة افتراضية في `environment:` **تتقدم على `.env`** — أُصلح في هذا الإصدار: `raglab/.env` هو المرجع | حدّثوا إلى هذا الوسم وأعيدوا `docker compose up --build -d` |
+| تحذير إقلاع: switching ON بلا توكن | `RAGLAB_ALLOW_PROFILE_SWITCH=1` بلا `RAGLAB_SERVICE_TOKEN` = خدمة مفتوحة | ضعوا التوكن في `raglab/.env` وأعيدوا الإنشاء، أو اضبطوا `RAGLAB_ALLOW_PROFILE_SWITCH=0` |
 
 _لأي سلوك غير متوقع: أرسلوا خرج `local_front.py --smoke` + `docker compose logs --tail 200 raglab` مع الوسم المُشغَّل._

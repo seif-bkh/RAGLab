@@ -323,6 +323,21 @@ Current state of the work:
   env — 30s interval, 3 retries). README points to DEPLOYMENT.md;
   PackagingTest guards the healthcheck. Sandbox reset #59 mid-round:
   recovery recipe held again.
+- **401 fix (2026-10-02, platform team hit it live)**: compose's hardcoded
+  `RAGLAB_SERVICE_TOKEN: change-me…` in environment: OVERRIDES raglab/.env
+  (env_file precedence) — the owner's token never reached the container, and
+  local_front had no --token flag + a misleading 401 message. Fixes: token
+  removed from compose environment: (raglab/.env owns it; PackagingTest
+  asserts `RAGLAB_SERVICE_TOKEN:` is absent from compose); local_front
+  gained --token and honest 401 guidance (where the value lives, that .env
+  edits need `docker compose up -d` to recreate); service prints a loud boot
+  warning when switching is on with no token (preserves the safety intent of
+  the removed hardcode). E2E against the real service with a token on :8001:
+  no-token → guidance, --token/env → full doctor 200. LocalFrontClientTest
+  (5, stdlib fake HTTP server). DEPLOYMENT.md gained a troubleshooting table
+  (401 / .env not hot-reloading / the historical override / open-switching
+  warning). Lesson: compose `environment:` beats `env_file` — never hardcode
+  a secret's default there.
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured

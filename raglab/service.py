@@ -517,6 +517,15 @@ def create_app(profile: dict | None = None, *, generator=None,
     # answered by CORS, and only real requests must present the token.
     if service_token:
         app.add_middleware(ServiceTokenMiddleware, token=service_token)
+    elif allow_profile_switch:
+        # Safety net (compose no longer hardcodes a token — raglab/.env owns
+        # it): switching ON with an open service means anyone who reaches the
+        # port can change providers/models and push keys. Loud, at boot.
+        print("[service] WARNING: RAGLAB_ALLOW_PROFILE_SWITCH=1 with NO "
+              "RAGLAB_SERVICE_TOKEN — the service is OPEN. Anyone who reaches "
+              "the port can switch models, ingest, or set API keys. Set "
+              "RAGLAB_SERVICE_TOKEN in raglab/.env (then recreate the "
+              "container: docker compose up -d) or disable switching.")
     app.add_middleware(CORSMiddleware, allow_origins=cors_origins or ["*"],
                        allow_methods=["*"], allow_headers=["*"])
 
