@@ -429,6 +429,30 @@ Current state of the work:
   question in the same session still refused before the model. Full chain
   recorded in PHASE7_EXPERIMENTS.md. Standing recommendations: TOP_K 20
   (they run 5), push only genuinely-new documents.
+- **PHASE 8 BUILT (2026-10-02, owner: «جميل، ابن الفكرة» after the design
+  discussion)**: demand interrogation — an insufficient practical question
+  is re-expressed as the nearest TECHNICAL question instead of being
+  refused. SEQUENCE architecture (the deterministic path stays free):
+  كافٍ -> answer directly, zero extra calls; غير كافٍ with nothing covered
+  -> ONE bounded interrogation call through the answer model (descriptive
+  questions ABOUT the request; topics chosen VERBATIM from the
+  deterministic corpus topic map — topic_map.py: law typed units + doc
+  section headings, ~265 topics, prompt-bounded 400) -> the paraphrase is
+  RE-EVALUATED by the same retrieval+sufficiency engines -> answered with
+  full disclosure (understood_as/original_question/interrogation in the
+  response + audit + a local_front line «فُهم طلبك كـ») or refused with a
+  better referral (nearest corpus topics). FAIL-CLOSED: malformed output /
+  invented topics (verbatim map containment) / invented requirements
+  (SHAPE_PATTERNS kinds only) / identical paraphrase -> normal refusal.
+  Gate REPHRASE_INTERROGATION_ENABLED default OFF (activation = the
+  owner's, after the live measurement protocol in
+  audits/PHASE8_INTERROGATION.md). Files: topic_map.py, interrogate.py,
+  config.py, service.py (inside the commitment gate's nothing-covered
+  branch; the partial path untouched), local_front.py. Tests:
+  InterrogateTest 6 (service E2E: answered-with-disclosure, zero calls on
+  sufficient, gate-off pure refusal, malformed fail-closed, better
+  referral, injection-inert) + InterrogateTest 8 + TopicMapTest 2
+  (pipeline). Offline gate EXIT=0 (399 tests).
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured

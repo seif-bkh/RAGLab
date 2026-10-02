@@ -296,6 +296,18 @@ SUFFICIENCY_FIELDS_ENABLED = os.getenv("SUFFICIENCY_FIELDS_ENABLED", "1") == "1"
 # always-answer behavior.
 ANSWER_SUFFICIENCY_COMMITMENT = os.getenv("ANSWER_SUFFICIENCY_COMMITMENT", "1") == "1"
 
+# Phase 8 (2026-10-02, owner directives): intelligent DEMAND INTERROGATION.
+# When a question is insufficient (غير كافٍ) AND nothing covers it, ONE
+# bounded call through the answer model re-expresses the request as the
+# nearest TECHNICAL question the corpus covers (choosing from the
+# deterministic corpus topic map — never inventing), then the paraphrase is
+# RE-EVALUATED deterministically by the same retrieval + sufficiency
+# engines. Sufficient -> the paraphrase is answered, fully disclosed
+# (understood_as + the interrogation analysis); still insufficient -> the
+# honest refusal with a better referral. Fail-closed on any malformed
+# output. Default OFF — activation is the owner's, after measurement.
+REPHRASE_INTERROGATION_ENABLED = os.getenv("REPHRASE_INTERROGATION_ENABLED", "0") == "1"
+
 # Experiment 3 (2026-10-01): per-micro retrieval & fusion — retrieval runs
 # per decomposed micro-question and RRF-fuses the pools. Default OFF;
 # measured deterministic-first, then live same-run, before any activation.

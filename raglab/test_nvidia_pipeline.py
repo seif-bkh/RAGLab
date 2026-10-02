@@ -2936,6 +2936,89 @@ class DiagBridgeTest(unittest.TestCase):
         self.assertIn("CROSS_BRIDGE_ENABLED", out)
 
 
+class InterrogateTest(unittest.TestCase):
+    """The demand-interrogation parser (Phase 8): fail-closed validation of
+    the model's analysis — topics must be verbatim corpus topics, requirements
+    declared kinds, the paraphrase must differ; anything else is None."""
+
+    TOPICS_TEXT = "- (Loi_2016-48.pdf [loi-2016-48:art012]) الفصل 12: مرابحة\n- (Guide.docx) التمويل بصيغة المرابحة"
+
+    def _parse(self, raw, question="can i get a financement to open a pub?"):
+        import interrogate
+        return interrogate.parse_interrogation(raw, question, self.TOPICS_TEXT)
+
+    def test_valid_analysis_parsed(self):
+        out = self._parse('{"classification": "procedural", '
+                          '"nearest_topics": ["التمويل بصيغة المرابحة"], '
+                          '"technical_paraphrase": "ما هي صيغ تمويل المشاريع المتاحة؟", '
+                          '"requirements": ["procedural_evidence"], '
+                          '"confidence": 0.8}')
+        self.assertIsNotNone(out)
+        self.assertEqual(out["topics"], ["التمويل بصيغة المرابحة"])
+        self.assertEqual(out["requirements"], ["procedural_evidence"])
+
+    def test_malformed_json_is_none(self):
+        self.assertIsNone(self._parse("not json at all"))
+        self.assertIsNone(self._parse(""))
+        self.assertIsNone(self._parse("[1,2,3]"))
+
+    def test_invented_topics_and_requirements_filtered(self):
+        out = self._parse('{"nearest_topics": ["Quantum Banking"], '
+                          '"technical_paraphrase": "ما هي صيغ التمويل؟", '
+                          '"requirements": ["lasers", "numeric_evidence"], '
+                          '"confidence": 2}')
+        self.assertIsNotNone(out)
+        self.assertEqual(out["topics"], [])          # invented -> dropped
+        self.assertEqual(out["requirements"], ["numeric_evidence"])
+        self.assertEqual(out["confidence"], 1.0)     # clamped
+
+    def test_identical_paraphrase_is_none(self):
+        self.assertIsNone(self._parse(
+            '{"technical_paraphrase": "can i get a financement to open a pub?"}'))
+
+    def test_paraphrase_bounds(self):
+        self.assertIsNone(self._parse('{"technical_paraphrase": "ok"}'))
+        self.assertIsNone(self._parse(
+            '{"technical_paraphrase": "' + "x" * 301 + '"}'))
+
+    def test_declared_requirements_mirror_the_sufficiency_engine(self):
+        import interrogate
+        import sufficiency
+        self.assertEqual(interrogate.DECLARED_REQUIREMENTS,
+                         tuple(sufficiency.SHAPE_PATTERNS.keys()))
+
+
+class TopicMapTest(unittest.TestCase):
+    """The deterministic corpus topic map (Phase 8, item 1)."""
+
+    def test_builds_from_the_real_corpus_with_law_units(self):
+        import topic_map
+        from pathlib import Path
+        docs = Path(__file__).resolve().parent.parent / "docs"
+        entries = topic_map.build_topic_map([docs])
+        self.assertGreater(len(entries), 200)
+        law = [e for e in entries if e["kind"] == "law_article"]
+        sections = [e for e in entries if e["kind"] == "section"]
+        self.assertGreater(len(law), 150)            # the typed law units
+        self.assertTrue(all(e.get("unit_id") for e in law))
+        # the topical titles live in the other documents' sections — e.g.
+        # the guide's murabaha financing section (a real interrogation topic)
+        self.assertTrue(any("المرابحة" in e["heading"] for e in sections))
+        self.assertTrue(any(e["document"].startswith("Guide")
+                            for e in sections))
+        # bounded prompt rendering
+        text = topic_map.for_prompt([docs])
+        self.assertLess(len(text.splitlines()), topic_map.TOPIC_PROMPT_MAX + 1)
+        self.assertIn("Loi_2016-48.pdf", text)
+
+    def test_prompt_bounded_under_the_cap(self):
+        import topic_map
+        from pathlib import Path
+        docs = Path(__file__).resolve().parent.parent / "docs"
+        text = topic_map.for_prompt([docs])
+        self.assertLessEqual(len(text.splitlines()), topic_map.TOPIC_PROMPT_MAX)
+
+
 class ModelsProbeTest(unittest.TestCase):
     """The read-only free-model probe (xKiro / NVIDIA / Google): honest
     per-provider semantics, fail-closed free detection, bounded reads, and

@@ -905,6 +905,10 @@ def create_app(profile: dict | None = None, *, generator=None,
         want_commitment = bool(getattr(local, "ANSWER_SUFFICIENCY_COMMITMENT", False))
         allowed_docs = _collection_documents(collection)
         state_box: dict = {}          # sufficiency state shared with the hook
+        want_rephrase = bool(getattr(local, "REPHRASE_INTERROGATION_ENABLED",
+                                     False))
+        retrieval_mode = (request.mode
+                          or runtime.profile["retrieval"]["mode"])
 
         def _commitment_gate(question, hits):
             import sufficiency
@@ -917,14 +921,59 @@ def create_app(profile: dict | None = None, *, generator=None,
             covered = [r["req"] for r in s["requirements"] if r["covered"]]
             missing = [r["req"] for r in s["requirements"] if not r["covered"]]
             if not covered:
-                # NOTHING covers the plan — refuse BEFORE any model call:
-                # the refusal is tied to evidence absence and carries a
-                # referral (the missing requirements + clarifications).
+                # NOTHING covers the plan. Phase 8: before refusing, ONE
+                # bounded interrogation call may re-express the request as
+                # the nearest technical question the corpus covers; the
+                # paraphrase is then RE-EVALUATED by the same deterministic
+                # engines (fail-closed: a bad interrogation changes nothing).
+                interrogation = None
+                if want_rephrase:
+                    import interrogate
+                    interrogation = interrogate.interrogate(
+                        generator, question,
+                        profiles.data_dirs(runtime.profile))
+                if interrogation is not None:
+                    from evaluate import prepare_query_text
+                    from retrieval import expand_neighbors, retrieve
+                    hits2, _variants = retrieve(
+                        local, embedder, collection,
+                        prepare_query_text(interrogation["paraphrase"]),
+                        language=state_box.get("language"),
+                        translator=None,
+                        top_k=local.ANSWER_TOP_K,
+                        variant_strategy=local.QUERY_VARIANT_STRATEGY,
+                        mode=retrieval_mode,
+                        lang_filter=(request.lang_filter
+                                     if request.lang_filter is not None
+                                     else runtime.profile["retrieval"]["lang_filter"]))
+                    hits2 = expand_neighbors(collection, hits2,
+                                             radius=local.ANSWER_NEIGHBOR_RADIUS)
+                    s2 = sufficiency.check(
+                        interrogation["paraphrase"], hits2,
+                        df=sufficiency.df_for_collection(collection))
+                    state_box["s2"] = s2
+                    if s2["state"] in ("كافٍ", "متعارض"):
+                        # the paraphrase IS answerable — answer IT, fully
+                        # disclosed (the original is never hidden).
+                        reg = generator.answer(interrogation["paraphrase"], hits2,
+                                               state_box.get("language"),
+                                               allowed_documents=allowed_docs)
+                        return {**reg,
+                                "understood_as": interrogation["paraphrase"],
+                                "original_question": question,
+                                "interrogation": {
+                                    "classification": interrogation["classification"],
+                                    "topics": interrogation["topics"],
+                                    "requirements": interrogation["requirements"],
+                                    "confidence": interrogation["confidence"]}}
+                # refuse (before any further model call): the refusal is
+                # tied to evidence absence and carries a referral (the
+                # missing requirements + clarifications).
                 import decompose
                 from answer import REFUSALS
                 d = decompose.decompose(question)
                 language = state_box.get("language") or "ar"
-                return {"status": "refused", "reason": "evidence_insufficient",
+                refusal = {"status": "refused", "reason": "evidence_insufficient",
                         "answer": REFUSALS.get(language, REFUSALS["en"]),
                         "claims": [], "sources": [], "model": "(none — refused before generation)",
                         "language": language, "validation_ok": True, "cached": False,
@@ -933,6 +982,24 @@ def create_app(profile: dict | None = None, *, generator=None,
                         "requirements_missing": missing,
                         "referral": {"missing_requirements": missing,
                                      "clarifications": d["clarifications"]}}
+                if interrogation is not None:
+                    # still insufficient after the paraphrase — the honest
+                    # refusal, but the referral carries what the
+                    # interrogation understood (full disclosure; the
+                    # original question is never hidden).
+                    refusal["understood_as"] = interrogation["paraphrase"]
+                    refusal["original_question"] = question
+                    refusal["interrogation"] = {
+                        "classification": interrogation["classification"],
+                        "topics": interrogation["topics"],
+                        "requirements": interrogation["requirements"],
+                        "confidence": interrogation["confidence"]}
+                    if interrogation["topics"]:
+                        refusal["referral"]["clarifications"] = [
+                            *d["clarifications"],
+                            "أقرب مواضيع المدونة لطلبك: "
+                            + "؛ ".join(interrogation["topics"][:2])]
+                return refusal
             # PARTIAL: some requirements are covered — one bounded
             # regeneration answers ONLY the covered micro-questions, and the
             # response is tagged with what was answered and what was not.
@@ -1033,6 +1100,12 @@ def create_app(profile: dict | None = None, *, generator=None,
                 payload[key] = result[key]
         if result.get("referral"):
             payload["referral"] = result["referral"]
+        # Phase 8 — the interrogation disclosure (additive, gate ON only):
+        # understood_as + the analysis. The original question is never
+        # hidden; the paraphrase is disclosed in every case.
+        for key in ("understood_as", "original_question", "interrogation"):
+            if result.get(key) is not None:
+                payload[key] = result[key]
         # Phase-6 item 3 — the audit trail (operational; never changes the
         # response). The question is scrubbed BEFORE recording.
         try:
@@ -1044,6 +1117,8 @@ def create_app(profile: dict | None = None, *, generator=None,
                 "status": payload.get("status"),
                 "reason": payload.get("reason"),
                 "evidence_status": (s["state"] if s is not None else None),
+                "understood_as": (scrub_pii(payload["understood_as"])
+                                  if payload.get("understood_as") else None),
                 "model": payload.get("model"),
                 "claims": len(payload.get("claims") or []),
                 "sources": len(payload.get("sources") or []),

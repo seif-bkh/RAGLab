@@ -708,6 +708,26 @@ operational bookkeeping: it never changes any response.
               "seconds": 1.8, "error": null}]}
 ```
 
+### 3.17 Demand interrogation on insufficient questions (Phase 8, gated OFF)
+
+With `REPHRASE_INTERROGATION_ENABLED=1`, a question that is insufficient
+(غير كافٍ) with nothing covered triggers ONE bounded interrogation call
+through the answer model: descriptive questions ABOUT the request
+(classification, nearest corpus topics — chosen verbatim from the
+deterministic topic map in `topic_map.py`, never invented —, a technical
+paraphrase, evidence requirements from the sufficiency engine's declared
+kinds). The paraphrase is re-evaluated by the SAME deterministic retrieval
++ sufficiency engines. If it suffices, the paraphrase is ANSWERED and the
+response gains (additively): `understood_as`, `original_question`,
+`interrogation` {classification, topics, requirements, confidence}; if it
+still does not, the honest refusal carries the same disclosure plus a
+referral enriched with the nearest corpus topics. Fail-closed: malformed
+output, invented topics/requirements, or an identical paraphrase behave as
+if the interrogation never ran. Sufficient questions are never interrogated
+(zero extra calls). The audit trail records `understood_as` alongside the
+original question.
+
+
 ## 4.## 4. Error catalog
 
 ### 4.1 Service errors — `{"detail": {"reason": …}}`

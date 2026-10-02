@@ -1181,6 +1181,14 @@ def show_answer(body) -> None:
         print(body)
         return
     print(body.get("answer", ""))
+    # Phase 8 — the interrogation disclosure: how the assistant understood
+    # a practical/non-technical request (always disclosed, never hidden).
+    if body.get("understood_as"):
+        inter = body.get("interrogation") or {}
+        line = f"[فُهم طلبك كـ] {body['understood_as']}"
+        if inter.get("topics"):
+            line += "\n[المواضيع] " + "؛ ".join(inter["topics"])
+        print(line)
     # The understanding & sufficiency layer (owner-activated 2026-10-02,
     # default ON): render the fields when the service sends them. Everything
     # is .get()-guarded so an opted-out service (env "0") renders exactly as

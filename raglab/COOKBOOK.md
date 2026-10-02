@@ -212,6 +212,33 @@ bodies are never exported). `GET /models` on the running service lists the
 REGISTERED models per provider plus whether each key is set — the probe is
 the live-discovery counterpart.
 
+### 2.11 Practical questions, re-expressed technically (Phase 8 — gated OFF)
+
+A practical, non-technical question ("can i get a financement to open a
+pub?") used to be refused outright. With the gate ON it triggers ONE
+bounded interrogation call: the model answers descriptive questions about
+the REQUEST (never answering it), choosing topics verbatim from the
+corpus's own topic map; the technical paraphrase is re-checked by the same
+deterministic engines and — if the corpus can answer it — answered with
+full disclosure:
+
+```
+# start the service with the gate on (or set it in raglab/.env)
+REPHRASE_INTERROGATION_ENABLED=1 python -m uvicorn service:app
+
+POST /answer {"question": "can i get a financement to open a pub?"}
+→ { "status": "answered",
+    "understood_as": "ما هي صيغ التمويل التي يوفرها البنك للمشاريع؟",
+    "original_question": "can i get a financement to open a pub?",
+    "interrogation": {"topics": [...], "confidence": 0.8, ...},
+    "claims": [...cited as always...] }
+```
+
+`local_front` renders the disclosure line «فُهم طلبك كـ …». If the corpus
+still cannot answer the paraphrase, the refusal stays honest — with a
+better referral (the nearest corpus topics). Design, guarantees and the
+measurement protocol: `audits/PHASE8_INTERROGATION.md`.
+
 ## 3. The two side-effect rules (memorize these)
 
 1. **Answer-model or retrieval change → nothing to rebuild.** Next query
