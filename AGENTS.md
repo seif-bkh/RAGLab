@@ -365,6 +365,25 @@ Current state of the work:
   today; a declared transliteration-bridge table behind an OFF gate + single-
   rare-anchor rule; RAGLAB_TOP_K 5->20 to match the measured config). No
   code changed — the fix paths are declared-rules/threshold territory.
+- **Cross-script bridge BUILT & ACTIVATED (2026-10-02, the murabaha field
+  case; owner re-sent the failing question after the build offer — read as
+  the directive)**: sufficiency.CROSS_SCRIPT_BRIDGES (murabaha/mudaraba/
+  musharaka/sukuk/ijara/takaful/riba/salaf/istisna + spelling variants →
+  their Arabic terms). A bridged DISTINCTIVE term anchors SINGLY (curated
+  equivalence) but stays df-checked (<= CROSS_DF_MAX) so bridges onto
+  boilerplate can never anchor; anchoring ONLY — retrieval/matching/
+  citation gate untouched; same-script Arabic unaffected. Measured (BM25
+  arm, gate ON vs OFF): 50set كافٍ 37→38, غير محسوم 4→3 (q42 upgraded to
+  the correct كافٍ), FS=0 FR=0 agree=1.0 BOTH ways; targets identical;
+  df guard verified (df=999 refuses); pub/coffeeshop still refuse. Bridge
+  corpus df all under the bar (مرابحة=17 … مضاربة=28). Gate
+  CROSS_SCRIPT_BRIDGES_ENABLED (default 1; "0" restores exact-lexical).
+  KNOWN demo limitation (honest): the demo's stub embedder cannot cross
+  scripts in RETRIEVAL (0/20 murabaha chunks for the pure-English query),
+  so the demo still refuses that one — on the real NVIDIA arm the evidence
+  arrives (live cross-lingual 73/80/80) and the bridge anchors it; the
+  live CI run is the decisive check (recorded in PHASE7_EXPERIMENTS.md).
+  Guarded by SufficiencyBridgeTest (6).
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured

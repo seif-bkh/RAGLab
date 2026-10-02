@@ -195,6 +195,7 @@ NVIDIA `nvidia/nemotron-3-embed-1b` embeddings + xKiro
 | `SUFFICIENCY_FIELDS_ENABLED` | sufficiency fields on `/answer` (`evidence_status`, `requirements_covered/missing`, `conflicts`, `refusal_reason`) — **owner-activated 2026-10-02** | `1` |
 | `ANSWER_SUFFICIENCY_COMMITMENT` | honest refusal **before any model call** when the evidence is absent (with referral); bounded partial downgrade — **owner-activated 2026-10-02** | `1` |
 | `PER_MICRO_RETRIEVAL_ENABLED` | per-micro retrieval & RRF fusion (rejected by the live A/B — kept for reference) | `0` |
+| `CROSS_SCRIPT_BRIDGES_ENABLED` | declared Latin↔Arabic term bridges for evidence anchoring (murabaha→المرابحة, sukuk→الصكوك, …) — a bridged distinctive term anchors singly, still df-checked | `1` (2026-10-02) |
 | `RAGLAB_CACHE_DIR` | relocate embedding/answer caches (Docker volume) | next to the code |
 | `RAGLAB_HOST` / `RAGLAB_PORT` | used by `python service.py` | `0.0.0.0` / `8000` |
 

@@ -2790,6 +2790,71 @@ class LocalFrontClientTest(unittest.TestCase):
         self.assertEqual(rc, 0)
 
 
+class SufficiencyBridgeTest(unittest.TestCase):
+    """The declared cross-script bridge table (2026-10-02 owner field case:
+    'what is murabaha?' refused although the corpus defines المرابحة —
+    df('murabaha')=0, the engine is exact-lexical). A bridged DISTINCTIVE
+    term anchors singly (curated equivalence) but stays df-checked; the gate
+    env restores the exact-lexical behavior; non-bridged questions and
+    same-script Arabic are untouched."""
+
+    MUR_TEXT = ("تعتبر عملية المرابحة من عمليات التمويل بصيغة المرابحة "
+                "في التمويل التجاري حسب الدليل الارشادي الداخلي")
+    MUD_TEXT = "توجد صيغة المضاربة في 2 شكلين حسب منشور البنك المركزي"
+
+    def _hit(self, text):
+        return {"text": text, "metadata": {"source": "Guide_Interne.docx",
+                                           "heading": "المرابحة"}}
+
+    def _check(self, question, texts, df=None):
+        import sufficiency
+        return sufficiency.check(
+            question, [self._hit(t) for t in texts],
+            df=df if df is not None else {"مرابحة": 17, "مضاربة": 28})
+
+    def test_murabaha_bridges_to_the_arabic_term(self):
+        s = self._check("what is murabaha?", [self.MUR_TEXT])
+        self.assertEqual(s["state"], "كافٍ", s["reason"])
+        self.assertTrue(any(r["covered"] for r in s["requirements"]))
+
+    def test_gate_off_restores_exact_lexical_behavior(self):
+        import sufficiency
+        with patch.object(sufficiency, "CROSS_BRIDGE_ENABLED", False):
+            s = self._check("what is murabaha?", [self.MUR_TEXT])
+        self.assertEqual(s["state"], "غير كافٍ")
+
+    def test_bridged_term_is_df_checked(self):
+        # a bridge onto boilerplate (df above CROSS_DF_MAX) never anchors
+        s = self._check("what is murabaha?", [self.MUR_TEXT],
+                        df={"مرابحة": 999})
+        self.assertEqual(s["state"], "غير كافٍ")
+
+    def test_non_bridged_english_still_refuses(self):
+        s = self._check("can i get a financement to open a pub?",
+                        [self.MUR_TEXT])
+        self.assertEqual(s["state"], "غير كافٍ")
+
+    def test_embedded_term_question_upgrades_escalation_to_sufficient(self):
+        # the q42 pattern: a Latin question carrying ONE embedded Arabic
+        # term — previously غير محسوم (escalated), the bridge anchors it
+        s = self._check(
+            "Under the BCT circular, the investment-deposit mudaraba "
+            "(المضاربة) exists in how many forms?",
+            [self.MUD_TEXT, self.MUR_TEXT])
+        self.assertEqual(s["state"], "كافٍ")
+
+    def test_same_script_arabic_unchanged_by_the_gate(self):
+        import sufficiency
+        question = "ما هي المرابحة؟"
+        texts = [self.MUR_TEXT]
+        on = sufficiency.check(question, [self._hit(t) for t in texts],
+                               df={"مرابحة": 17})
+        with patch.object(sufficiency, "CROSS_BRIDGE_ENABLED", False):
+            off = sufficiency.check(question, [self._hit(t) for t in texts],
+                                    df={"مرابحة": 17})
+        self.assertEqual(on["state"], off["state"])
+
+
 class ModelsProbeTest(unittest.TestCase):
     """The read-only free-model probe (xKiro / NVIDIA / Google): honest
     per-provider semantics, fail-closed free detection, bounded reads, and

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -78,6 +79,34 @@ AR_ANCHOR_SHARE = 0.6
 # required (a single generic Latin word appearing once is noise, not signal).
 CROSS_ANCHOR_MIN = 2
 CROSS_DF_MAX = 30
+
+# Declared cross-script bridges (REVIEW DATA — 2026-10-02, the owner's field
+# case: 'what is murabaha?' was refused although the corpus defines المرابحة
+# in 17 chunks; df('murabaha')=0 because the Latin transliteration never
+# appears in the corpus texts). A question term listed here is equivalent to
+# its Arabic counterpart for ANCHORING (coverage) purposes only — retrieval,
+# matching and the citation gate are untouched. A bridged match anchors
+# SINGLY (a declared, human-curated equivalence is high-precision by
+# construction — unlike incidental lexical overlap, which still needs
+# CROSS_ANCHOR_MIN terms) but remains df-checked (df <= CROSS_DF_MAX) so a
+# bridge onto boilerplate (بنك، تونس) can never anchor. Measured corpus df:
+# مرابحة=17 مضاربة=28 مشاركة=22 صكوك=2 اجارة=17 تكافل=3 ربا=13 استصناع=11.
+CROSS_SCRIPT_BRIDGES: dict[str, str] = {
+    "murabaha": "مرابحة", "morabaha": "مرابحة", "mourabaha": "مرابحة",
+    "murabah": "مرابحة",
+    "mudaraba": "مضاربة", "moudaraba": "مضاربة", "modaraba": "مضاربة",
+    "musharaka": "مشاركة", "mousharaka": "مشاركة",
+    "sukuk": "صكوك",
+    "ijara": "اجارة", "ijarah": "اجارة",
+    "takaful": "تكافل",
+    "riba": "ربا",
+    "salaf": "سلف",
+    "istisna": "استصناع",
+}
+# Owner activation 2026-10-02 (the failing question was re-sent after the
+# build offer — read as the directive). "0" restores the pre-bridge exact-
+# lexical behavior exactly.
+CROSS_BRIDGE_ENABLED = os.getenv("CROSS_SCRIPT_BRIDGES_ENABLED", "1") == "1"
 # A rare term (df <= RARE_DF) carries subject signal; common-term overlap
 # (بنك، تونس، شركة) is boilerplate noise. Used by the escalation rule.
 RARE_DF = 5
@@ -253,19 +282,36 @@ def _anchor_bar(question: str) -> int:
     return min(AR_ANCHOR_MIN, max(1, -(-int(AR_ANCHOR_SHARE * 100 * n) // 100)))
 
 
+def _bridged_terms(question: str) -> set[str]:
+    """Normalized Arabic equivalents of the question's DECLARED bridge terms
+    (empty when the gate is off or the question carries none)."""
+    if not CROSS_BRIDGE_ENABLED:
+        return set()
+    out: set[str] = set()
+    for term in question_terms(question):
+        arabic = CROSS_SCRIPT_BRIDGES.get(term)
+        if arabic:
+            out |= _hit_terms(arabic)   # same normalization as the hit side
+    return out
+
+
 def _anchors(question: str, hit_text: str, df: dict[str, int] | None) -> bool:
     """Does this hit topically anchor the question? (declared rules)"""
     shared = shared_terms(question, hit_text)
-    if not shared:
-        return False
     if _is_cross_script(question):
         if df is None:
             return False
         # digits are df-checked like words — «48»/«2016» sit in 240 chunk
         # headers and carry no subject signal
         distinctive = {t for t in shared if df.get(t, 0) <= CROSS_DF_MAX}
-        return len(distinctive) >= CROSS_ANCHOR_MIN
-    return len(shared) >= _anchor_bar(question)
+        if len(distinctive) >= CROSS_ANCHOR_MIN:
+            return True
+        # declared cross-script bridge: a bridged DISTINCTIVE term anchors
+        # singly (curated equivalence — but still df-checked, so a bridge
+        # onto boilerplate can never anchor)
+        bridged = _bridged_terms(question) & _hit_terms(hit_text)
+        return any(df.get(t, 0) <= CROSS_DF_MAX for t in bridged)
+    return bool(shared) and len(shared) >= _anchor_bar(question)
 
 
 # ---------------------------------------------------------------------------
