@@ -1181,6 +1181,29 @@ def show_answer(body) -> None:
         print(body)
         return
     print(body.get("answer", ""))
+    # The understanding & sufficiency layer (owner-activated 2026-10-02,
+    # default ON): render the fields when the service sends them. Everything
+    # is .get()-guarded so an opted-out service (env "0") renders exactly as
+    # before.
+    if body.get("evidence_status"):
+        line = f"[كفاية الدليل] {body['evidence_status']}"
+        if body.get("requirements_covered"):
+            line += f" · مغطى: {', '.join(body['requirements_covered'])}"
+        if body.get("requirements_missing"):
+            line += f" · ناقص: {', '.join(body['requirements_missing'])}"
+        if body.get("conflicts"):
+            line += f" · تعارضات: {len(body['conflicts'])}"
+        print(line)
+    if body.get("partial"):
+        print("[جزئي] أُجيب عن المطالب المغطاة فقط (إعادة توليد واحدة مقيدة)")
+    if body.get("refusal_reason"):
+        print(f"[سبب الامتناع] {body['refusal_reason']}")
+    referral = body.get("referral") or {}
+    if referral.get("missing_requirements") or referral.get("clarifications"):
+        line = "[إحالة] " + "، ".join(referral.get("missing_requirements") or [])
+        if referral.get("clarifications"):
+            line += " — توضيحات مقترحة: " + "؛ ".join(referral["clarifications"])
+        print(line)
     quotes = {}
     for claim in body.get("claims") or []:
         for evidence in claim.get("evidence") or []:
@@ -1430,6 +1453,18 @@ def run_suite(api: Api, *, spend: bool = True) -> tuple[int, int]:
                       and isinstance(body.get("validation_ok"), bool))
                 suite.check("POST /answer returns a grounded result or a safe refusal",
                             ok, f"status={status} status_field={body.get('status') if isinstance(body, dict) else '?'}")
+                # the activated sufficiency layer (2026-10-02): when the
+                # service sends evidence_status, the commitment fields must
+                # be coherent with it (refusals carry a reason + referral).
+                if ok and isinstance(body, dict) and "evidence_status" in body:
+                    coherent = isinstance(body.get("requirements_covered"), list)
+                    if body.get("status") == "refused":
+                        coherent = (coherent
+                                    and bool(body.get("refusal_reason"))
+                                    and isinstance(body.get("referral"), dict))
+                    suite.check("sufficiency fields coherent with the answer status",
+                                coherent,
+                                f"evidence={body.get('evidence_status')} refused={body.get('status') == 'refused'}")
 
     # documents API — keyless and state-independent; cleans up after itself
     smoke_id = "front-smoke-doc"

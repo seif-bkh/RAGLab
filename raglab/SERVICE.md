@@ -62,6 +62,12 @@ python local_front.py --ingest          # build the index, wait for the job
 python local_front.py --ask "What is Murabaha?"
 python local_front.py --search "murabaha"   # retrieval only, no chat model
 python local_front.py --base-url http://raglab:8000   # against the compose stack
+
+The understanding & sufficiency layer is ON by default since the owner
+activation (2026-10-02): every answer renders its evidence state, and
+out-of-corpus questions are refused before any model call — `local_front`
+renders both, including the referral. Inside the container the read-only
+model probe ships too: `docker compose exec raglab python models_probe.py`.
 ```
 
 The front is stateless except `front_state.json` (its custom model-ID memory,
@@ -182,6 +188,9 @@ NVIDIA `nvidia/nemotron-3-embed-1b` embeddings + xKiro
 | `RAGLAB_ALLOW_PROFILE_SWITCH` | enable `POST /profile` | `1` (compose ships `1` with the token required — the app console needs it) |
 | `RAGLAB_SERVICE_TOKEN` | require `X-Service-Token` on every request (constant-time check, `401 unauthorized` otherwise); `RAGLAB_TOKEN` is an accepted alias | unset = open (local/dev) |
 | `RAGLAB_CORS_ORIGINS` | comma-separated allowed origins | `*` |
+| `SUFFICIENCY_FIELDS_ENABLED` | sufficiency fields on `/answer` (`evidence_status`, `requirements_covered/missing`, `conflicts`, `refusal_reason`) — **owner-activated 2026-10-02** | `1` |
+| `ANSWER_SUFFICIENCY_COMMITMENT` | honest refusal **before any model call** when the evidence is absent (with referral); bounded partial downgrade — **owner-activated 2026-10-02** | `1` |
+| `PER_MICRO_RETRIEVAL_ENABLED` | per-micro retrieval & RRF fusion (rejected by the live A/B — kept for reference) | `0` |
 | `RAGLAB_CACHE_DIR` | relocate embedding/answer caches (Docker volume) | next to the code |
 | `RAGLAB_HOST` / `RAGLAB_PORT` | used by `python service.py` | `0.0.0.0` / `8000` |
 

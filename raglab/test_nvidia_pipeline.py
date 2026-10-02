@@ -2578,6 +2578,47 @@ class ChangeCycleTest(unittest.TestCase):
         self.assertTrue(any("not in the corpus" in b for b in report["blockers"]))
 
 
+class PackagingTest(unittest.TestCase):
+    """The Docker deployment artifact (the owner's documented server):
+    Dockerfile + docker-compose.yml + .dockerignore + the .env template the
+    compose env_file points at. String-level assertions on purpose — no YAML
+    dependency, and drift in these files must fail loudly."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def test_dockerfile_references_real_paths(self):
+        dockerfile = (self.ROOT / "Dockerfile").read_text(encoding="utf-8")
+        for path in ("raglab/requirements.txt",
+                     "raglab/requirements-service.txt", "raglab/", "docs/"):
+            self.assertIn(path, dockerfile)
+        self.assertIn("uvicorn", dockerfile)
+        for path in ("raglab/requirements.txt",
+                     "raglab/requirements-service.txt"):
+            self.assertTrue((self.ROOT / path).exists(), path)
+        self.assertTrue((self.ROOT / "docs").is_dir())
+
+    def test_compose_ships_volumes_and_env_template(self):
+        compose = (self.ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertIn("image: raglab-service", compose)
+        self.assertIn("build: .", compose)
+        self.assertIn("env_file:", compose)
+        self.assertIn("raglab/.env", compose)
+        for volume in ("raglab-index", "raglab-embed-cache", "raglab-documents"):
+            self.assertIn(volume, compose)
+        # the template documents the activated gates (compose env_file target)
+        env_example = (self.ROOT / "raglab" / ".env.example").read_text(encoding="utf-8")
+        for gate in ("SUFFICIENCY_FIELDS_ENABLED",
+                     "ANSWER_SUFFICIENCY_COMMITMENT",
+                     "PER_MICRO_RETRIEVAL_ENABLED"):
+            self.assertIn(gate, env_example)
+
+    def test_dockerignore_keeps_secrets_and_caches_out(self):
+        ignore = (self.ROOT / ".dockerignore").read_text(encoding="utf-8")
+        for entry in ("raglab/.env", "raglab/chroma_db", "raglab/results",
+                      "raglab/logs"):
+            self.assertIn(entry, ignore)
+
+
 class ModelsProbeTest(unittest.TestCase):
     """The read-only free-model probe (xKiro / NVIDIA / Google): honest
     per-provider semantics, fail-closed free detection, bounded reads, and

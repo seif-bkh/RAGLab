@@ -62,3 +62,21 @@ jobs:
 
       - name: Dependency sanity
         run: python -m pip check
+
+  # ------------------------------------------- deployment artifact (Docker)
+  docker-build:
+    name: Docker image build + import smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the service image (repo-root context so docs/ ships in)
+        run: docker build -t raglab-service .
+
+      - name: Import smoke — requirements-service.txt completeness
+        # Proves the image's dependency set satisfies the real module graph
+        # (service builds the app at import time; no keys needed for that).
+        run: >
+          docker run --rm --entrypoint python raglab-service
+          -c "import service, profiles, answer, sufficiency, micro_retrieval, models_probe; print('image imports OK')"

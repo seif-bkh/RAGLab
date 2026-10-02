@@ -300,6 +300,19 @@ Current state of the work:
   reports or error paths. Guarded by ModelsProbeTest (6). COOKBOOK §2.10.
   Companion: service GET /models lists the REGISTERED models (registry, not
   live discovery).
+- **Docker + local_front integration (2026-10-02, owner's deployment shape)**:
+  local_front.py now renders the activated sufficiency layer (evidence state,
+  covered/missing, refusal reason + referral, partial tag — all .get()-guarded
+  so an opted-out service renders as before); its smoke suite checks field
+  coherence. E2E verified through the owner's own front against the demo
+  service: answered question renders '[كفاية الدليل] كافٍ · مغطى: …', OOS
+  question renders the refusal + referral + 'refused before generation'.
+  ci.yml gained a docker-build job (image build + import smoke proving
+  requirements-service.txt satisfies the module graph — docker is NOT
+  available in this sandbox, CI is the honest verification path).
+  SERVICE.md env table now lists the three gates; .env.example documents
+  them for the compose env_file. Guarded by PackagingTest (3). Sandbox
+  resets #57/#58 during this work — recovery recipe held both times.
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured
