@@ -929,9 +929,18 @@ def create_app(profile: dict | None = None, *, generator=None,
                 interrogation = None
                 if want_rephrase:
                     import interrogate
+                    t0 = time.perf_counter()
                     interrogation = interrogate.interrogate(
                         generator, question,
                         profiles.data_dirs(runtime.profile))
+                    # The bounded call's cost is measured & disclosed even
+                    # when the analysis fails validation (fail-closed): the
+                    # audit records interrogation_seconds; the top-level
+                    # "seconds" stays answer-generation-only (refusals stay
+                    # 0.0 — the interrogation cost is reported separately,
+                    # never hidden inside the generation field).
+                    state_box["interrogation_seconds"] = round(
+                        time.perf_counter() - t0, 3)
                 if interrogation is not None:
                     from evaluate import prepare_query_text
                     from retrieval import expand_neighbors, retrieve
@@ -954,7 +963,15 @@ def create_app(profile: dict | None = None, *, generator=None,
                     state_box["s2"] = s2
                     if s2["state"] in ("كافٍ", "متعارض"):
                         # the paraphrase IS answerable — answer IT, fully
-                        # disclosed (the original is never hidden).
+                        # disclosed (the original is never hidden). The
+                        # response's sufficiency fields report the
+                        # PARAPHRASE's verdict (the evidence that justified
+                        # answering) — never the original question's
+                        # insufficiency, which only explains why the
+                        # interrogation ran (live bug 2026-10-02: an
+                        # answered payload carried «غير كافٍ» + a refusal
+                        # reason from the original question's evaluation).
+                        state_box["s"] = s2
                         reg = generator.answer(interrogation["paraphrase"], hits2,
                                                state_box.get("language"),
                                                allowed_documents=allowed_docs)
@@ -965,7 +982,8 @@ def create_app(profile: dict | None = None, *, generator=None,
                                     "classification": interrogation["classification"],
                                     "topics": interrogation["topics"],
                                     "requirements": interrogation["requirements"],
-                                    "confidence": interrogation["confidence"]}}
+                                    "confidence": interrogation["confidence"],
+                                    "seconds": state_box["interrogation_seconds"]}}
                 # refuse (before any further model call): the refusal is
                 # tied to evidence absence and carries a referral (the
                 # missing requirements + clarifications).
@@ -993,7 +1011,8 @@ def create_app(profile: dict | None = None, *, generator=None,
                         "classification": interrogation["classification"],
                         "topics": interrogation["topics"],
                         "requirements": interrogation["requirements"],
-                        "confidence": interrogation["confidence"]}
+                        "confidence": interrogation["confidence"],
+                        "seconds": state_box["interrogation_seconds"]}
                     if interrogation["topics"]:
                         refusal["referral"]["clarifications"] = [
                             *d["clarifications"],
@@ -1119,6 +1138,7 @@ def create_app(profile: dict | None = None, *, generator=None,
                 "evidence_status": (s["state"] if s is not None else None),
                 "understood_as": (scrub_pii(payload["understood_as"])
                                   if payload.get("understood_as") else None),
+                "interrogation_seconds": state_box.get("interrogation_seconds"),
                 "model": payload.get("model"),
                 "claims": len(payload.get("claims") or []),
                 "sources": len(payload.get("sources") or []),

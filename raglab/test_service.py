@@ -748,6 +748,14 @@ class InterrogationTest(unittest.TestCase):
         self.assertEqual(body["interrogation"]["topics"], ["الفصل12"])
         self.assertTrue(body["claims"])               # cited, gated claims
         self.assertEqual(self.client_obj.interrogation_calls, 1)
+        # the sufficiency fields report the PARAPHRASE's verdict — an
+        # answered payload must never carry the original question's
+        # «غير كافٍ» + refusal reason (live bug 2026-10-02, fixed)
+        self.assertEqual(body["evidence_status"], "كافٍ", body)
+        self.assertNotIn("refusal_reason", body)
+        # the bounded call's measured cost is disclosed (generation seconds
+        # stay generation-only)
+        self.assertGreaterEqual(body["interrogation"]["seconds"], 0.0)
 
     def test_sufficient_question_never_interrogates(self):
         # an Arabic question the corpus directly covers: zero extra calls
@@ -788,6 +796,12 @@ class InterrogationTest(unittest.TestCase):
         self.assertEqual(body["understood_as"], "ما هي شروط فتح مقهى في تونس؟")
         self.assertIn("أقرب مواضيع المدونة",
                       " ".join(body["referral"]["clarifications"]))
+        # the refusal stays coherent: evidence_status/refusal_reason reflect
+        # the original question's insufficiency (factually true), the
+        # disclosure carries the paraphrase + the measured call cost
+        self.assertEqual(body["evidence_status"], "غير كافٍ", body)
+        self.assertIn("refusal_reason", body)
+        self.assertGreaterEqual(body["interrogation"]["seconds"], 0.0)
 
     def test_interrogation_prompt_injection_stays_inert(self):
         # the paraphrase itself carries an injection attempt: it is used as

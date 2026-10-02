@@ -1186,6 +1186,11 @@ def show_answer(body) -> None:
     if body.get("understood_as"):
         inter = body.get("interrogation") or {}
         line = f"[فُهم طلبك كـ] {body['understood_as']}"
+        if inter.get("seconds") is not None:
+            # the bounded interrogation call's real cost (the top-level
+            # seconds stay answer-generation-only; a refusal via the
+            # interrogation shows 0.0s generation + this measured cost)
+            line += f" — استنطاق {inter['seconds']}s"
         if inter.get("topics"):
             line += "\n[المواضيع] " + "؛ ".join(inter["topics"])
         print(line)

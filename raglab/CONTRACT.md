@@ -727,6 +727,15 @@ if the interrogation never ran. Sufficient questions are never interrogated
 (zero extra calls). The audit trail records `understood_as` alongside the
 original question.
 
+On the ANSWERED path (live-fix 2026-10-02) the response's sufficiency
+fields (`evidence_status`, requirements, conflicts) report the
+PARAPHRASE's verdict — the evidence that justified answering — never the
+original question's insufficiency; no `refusal_reason` is attached to an
+answered payload. `interrogation.seconds` (and the audit's
+`interrogation_seconds`, recorded even on fail-closed attempts) discloses
+the bounded call's measured cost; the top-level `seconds` stays
+answer-generation-only.
+
 
 ## 4.## 4. Error catalog
 

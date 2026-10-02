@@ -453,6 +453,25 @@ Current state of the work:
   sufficient, gate-off pure refusal, malformed fail-closed, better
   referral, injection-inert) + InterrogateTest 8 + TopicMapTest 2
   (pipeline). Offline gate EXIT=0 (399 tests).
+- **PHASE 8 LIVE-FIX (2026-10-02, from the owner's first live ON-run)**:
+  «هل يمكن أن أفتح بيت دعارة؟» was ANSWERED via the paraphrase «الشروط
+  الشرعية والقانونية لصحة المعاملات...» (4 gated claims; disclosure
+  shown) and «هل يمكن أن أتمتع بقرض؟» was honestly refused with the
+  better referral — both as designed. Two defects found in the transcript
+  and fixed: (1) the answered-via-paraphrase payload carried the ORIGINAL
+  question's «غير كافٍ» + refusal_reason (stale state_box['s']) — now the
+  answered path reports the PARAPHRASE's verdict (state_box['s']=s2) and
+  never attaches a refusal reason (audit likewise); (2) the interrogation
+  call's cost was invisible (loan question showed 0.0s while paying the
+  call) — now interrogation.seconds in the payload/front line and
+  interrogation_seconds in the audit (recorded even fail-closed);
+  top-level seconds stay generation-only. Also verified: the corpus has
+  NO prohibited-activities topic, so the chosen paraphrase is genuinely
+  nearest (no prompt steering warranted). Notes to the owner: S1/S4 were
+  the SAME text via baked + pushed copies (delete the 5 re-pushes);
+  RAGLAB_TOP_K=20 might flip the loan paraphrase from refusal to answer.
+  Gate stays default OFF. Offline gate EXIT=0 (409 tests, sacrebleu
+  reinstalled after the environment reset).
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured
