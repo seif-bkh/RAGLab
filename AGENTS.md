@@ -261,6 +261,26 @@ Current state of the work:
   Known ops note: gh artifact/log downloads (Azure blob) EOF'd for hours
   after this run — check-run annotations API carries the headline
   numbers when that happens.
+- **Sandbox reset #54 (2026-10-02) recovered**: the git dir reverted to
+  the base 6441655 with the working tree intact — recovery is
+  `git fetch origin arena/01a0d2f5-raglab && git reset --soft FETCH_HEAD
+  && git add -A && git commit` (the delta vs the remote was exactly the
+  one unpushed commit). .venv and /home/user/rebuild_venv.sh were wiped
+  and recreated (script restored verbatim; it hard-resets ONLY when HEAD
+  is still 6441655, so it is safe to run after the soft reset).
+- **RAGLab CI (ci.yml) red 9ad538c..d8b9803, fixed at cf8224f**: the
+  offline trio passed locally in every env, but ChangeCycleTest pinned
+  chunks_after_addition == 339 — a fallback-estimator count (offline
+  sandboxes cannot download the tiktoken BPE file; CI can, so chunk
+  counts differ). Lesson: NEVER pin exact chunk counts in tests; assert
+  structure. Second lesson: the ci.yml failure annotation used to RE-RUN
+  the commands — a rerun can pass while the original step failed (and a
+  1400-char tail drowns in trailing store logs). It now tees the actual
+  step output and reports summary + FAIL/ERROR detail + tail.
+- Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
+  the real-test tag real-test-experiments-20261001 stays on fed7b9d —
+  the measured experiments state (nothing after it touches the measured
+  pipeline). Demo service (Exp 7) restarted after the reset.
 - **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
   `raglab/decompose.py` (read-only): the intermediate decomposition layer.
   EVERY question → reformulated micro-questions, each with its partial
