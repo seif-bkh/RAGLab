@@ -384,6 +384,22 @@ Current state of the work:
   arrives (live cross-lingual 73/80/80) and the bridge anchors it; the
   live CI run is the decisive check (recorded in PHASE7_EXPERIMENTS.md).
   Guarded by SufficiencyBridgeTest (6).
+- **Root cause of the 'still refused after rebuild' (2026-10-02, CONFIRMED
+  end-to-end)**: the owner's index has 1713 chunks vs the baked-in 339 — the
+  corpus is duplicated ~5x through pushed documents. df(المرابحة) = 17 x 5
+  ~ 85 > CROSS_DF_MAX=30, so the bridge's honest df guard blocks the anchor
+  (a guard doing its job on a polluted index). Reproduced live on the demo:
+  clean -> answers; +4 pushed Guide copies -> df=57 -> REFUSED (their exact
+  symptom); delete the dups -> answers again. Deliverable:
+  raglab/diag_bridge.py (remote one-shot diagnostic: paginates /chunks for
+  exact bridge-term df + the per-doc rollup, /search window check, verdict
+  with the exact fix; token-aware via local_front.Api). Guarded by
+  DiagBridgeTest (3). Remediation for the owner: menu 14 -> remove the
+  pushed duplicates (DELETE purges chunks immediately), verify with
+  diag_bridge, re-ask. Platform-team process note: do not push documents
+  that are already baked into the image (docs/). If duplication is
+  INTENTIONAL, the declared cap can be made corpus-relative (owner decision,
+  measured first).
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured

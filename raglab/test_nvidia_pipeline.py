@@ -2855,6 +2855,36 @@ class SufficiencyBridgeTest(unittest.TestCase):
         self.assertEqual(on["state"], off["state"])
 
 
+class DiagBridgeTest(unittest.TestCase):
+    """diag_bridge.verdict — the pure verdict logic of the remote bridge
+    diagnostic (the owner's duplicated-index case: df guard blocks the
+    anchor exactly when duplication pushes the term over CROSS_DF_MAX)."""
+
+    def _verdict(self, df, hits_with_term, rollup=None, total=1713):
+        from collections import Counter
+        import diag_bridge
+        return " ".join(diag_bridge.verdict(
+            Counter(df), 5, hits_with_term, rollup or [], total))
+
+    def test_df_blocked_by_duplication(self):
+        out = self._verdict({"مرابحة": 85, "تكافل": 15}, hits_with_term=3,
+                            rollup=[{"source": "pushed-Guide.docx",
+                                     "chunks": 1374}], total=1713)
+        self.assertIn("DUPLICATES", out)
+        self.assertIn("df-blocked", out)
+        self.assertIn("menu 14", out)
+
+    def test_window_too_narrow_when_no_evidence_reaches_topk(self):
+        out = self._verdict({"مرابحة": 17, "تكافل": 6}, 0)
+        self.assertIn("window/retrieval", out)
+        self.assertIn("RAGLAB_TOP_K", out)
+
+    def test_should_answer_with_the_clean_index(self):
+        out = self._verdict({"مرابحة": 17, "تكافل": 6}, 2)
+        self.assertIn("should-answer", out)
+        self.assertIn("CROSS_BRIDGE_ENABLED", out)
+
+
 class ModelsProbeTest(unittest.TestCase):
     """The read-only free-model probe (xKiro / NVIDIA / Google): honest
     per-provider semantics, fail-closed free detection, bounded reads, and
