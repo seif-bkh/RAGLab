@@ -285,6 +285,13 @@ Current state of the work:
   other behaviors pin the pre-activation gates explicitly in their
   overrides) -> live verification run on tag real-test-activation-20261002.
   COOKBOOK §2.9 and PHASE7_DECISION_BRIEF decision-4 updated.
+  LIVE VERIFICATION (run 36964247574, tag real-test-activation-20261002,
+  SUCCESS with the activated defaults): zero regression — 50set 71/80/87,
+  targets 50/70/70, units-index 100/100/100 PASS, OOS separation unchanged
+  (0.286/0.146); the live answer smoke answered with validation_ok=True
+  through the activated path; live commitment outcomes: refused-before-model
+  10/50 (q28,q29,q32,q33,q42,q46,q47,q48,q49,q50) + 2/10 targets, zero
+  partial (q44 كافٍ this run — within the known run-to-run jitter).
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured
