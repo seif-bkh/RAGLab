@@ -2578,6 +2578,108 @@ class ChangeCycleTest(unittest.TestCase):
         self.assertTrue(any("not in the corpus" in b for b in report["blockers"]))
 
 
+class ModelsProbeTest(unittest.TestCase):
+    """The read-only free-model probe (xKiro / NVIDIA / Google): honest
+    per-provider semantics, fail-closed free detection, bounded reads, and
+    no key material ever reaches the report."""
+
+    def _opener(self, payloads):
+        import json as _json
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+            def read(self, n):
+                return _json.dumps(self.payload).encode()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        class FakeOpener:
+            def __init__(self):
+                self.urls = []
+            def open(self, req, timeout=None):
+                self.urls.append(req.full_url)
+                for frag, payload in payloads.items():
+                    if frag in req.full_url:
+                        return FakeResponse(payload)
+                raise OSError("unexpected url")
+
+        return FakeOpener()
+
+    def test_missing_key_is_a_status_not_a_crash(self):
+        import models_probe
+        row = models_probe.probe_provider("nvidia", opener=self._opener({}))
+        self.assertEqual(row["status"], "missing_key")
+        self.assertIn("NVIDIA_API_KEY", row["hint"])
+
+    def test_xkiro_verified_free_requires_tier_and_zero_prices(self):
+        import models_probe
+        catalog = {"data": [
+            {"id": "qwen3.8-max", "access_tier": "free",
+             "pricing": {"currency": "USD", "input": 0, "output": 0,
+                         "cache_read": 0}},
+            {"id": "paid-sibling", "access_tier": "paid",
+             "pricing": {"currency": "USD", "input": 0.002, "output": 0.006}},
+            {"id": "free-tier-nonzero-price", "access_tier": "free",
+             "pricing": {"currency": "USD", "input": 0, "output": 0.001}}]}
+        opener = self._opener({"api.xkiro.com": catalog})
+        with patch.dict(os.environ, {"XKIRO_API_KEY": "secret-1"}):
+            row = models_probe.probe_provider("xkiro", opener=opener)
+        self.assertEqual(row["status"], "listed")
+        self.assertEqual(row["verified_free"], ["qwen3.8-max"])  # fail closed
+        self.assertNotIn("secret-1", str(row))
+
+    def test_nvidia_lists_visibility_only_never_free(self):
+        import models_probe
+        opener = self._opener({"integrate.api.nvidia.com":
+                               {"data": [{"id": "qwen/qwen3-235b-a22b-instruct"}]}})
+        with patch.dict(os.environ, {"NVIDIA_API_KEY": "secret-2"}):
+            row = models_probe.probe_provider("nvidia", opener=opener)
+        self.assertEqual(row["status"], "listed")
+        self.assertEqual(row["model_ids"], ["qwen/qwen3-235b-a22b-instruct"])
+        self.assertNotIn("verified_free", row)   # pricing is not in that catalog
+        self.assertIn("visibility only", row["free_note"])
+
+    def test_google_filters_chat_capable_models(self):
+        import models_probe
+        catalog = {"models": [
+            {"name": "models/gemini-3.1-flash-lite",
+             "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/text-embedding-004",
+             "supportedGenerationMethods": ["embedContent"]}]}
+        opener = self._opener({"generativelanguage": catalog})
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "secret-3"}):
+            row = models_probe.probe_provider("google", opener=opener)
+        self.assertEqual(row["status"], "listed")
+        self.assertEqual(row["chat_capable_models"], ["gemini-3.1-flash-lite"])
+        self.assertNotIn("verified_free", row)
+
+    def test_http_error_reported_without_body(self):
+        import urllib.error
+        import models_probe
+
+        class BoomOpener:
+            def open(self, req, timeout=None):
+                raise urllib.error.HTTPError(
+                    req.full_url, 401, "unauthorized", {}, None)
+
+        with patch.dict(os.environ, {"XKIRO_API_KEY": "secret-4"}):
+            row = models_probe.probe_provider("xkiro", opener=BoomOpener())
+        self.assertEqual(row["status"], "http_error")
+        self.assertEqual(row["error_type"], "HTTPError")
+        self.assertNotIn("secret-4", str(row))
+
+    def test_collect_covers_all_three_providers_read_only(self):
+        import models_probe
+        report = models_probe.collect(opener=self._opener({}))
+        self.assertEqual([r["provider"] for r in report["providers"]],
+                         ["xkiro", "nvidia", "google"])
+        self.assertEqual(report["inference_calls"], 0)
+        self.assertFalse(report["documents_sent"])
+
+
 class MicroRetrievalTest(unittest.TestCase):
     """Experiment 3: per-micro retrieval & fusion behind
     PER_MICRO_RETRIEVAL_ENABLED (default OFF). Fusion is reciprocal-rank

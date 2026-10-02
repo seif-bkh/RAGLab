@@ -188,6 +188,30 @@ POST /answer  {"question": "...", "include_excerpts": false}
 → sources[0].unit_id == "loi-2016-48:art052"   (deep-linkable across chunking changes)
 ```
 
+### 2.10 Which free models does MY key see? (models_probe — 2026-10-02)
+
+A read-only probe of the three answer providers' catalogs — no documents,
+no queries, no inference, one catalog GET per configured key:
+
+```
+python models_probe.py            # human table + results/models_probe/probe.json
+python models_probe.py --json     # JSON only
+```
+
+Honest semantics per provider (a listing proves **visibility**, never price):
+
+| Provider | Key env | The probe reports |
+|---|---|---|
+| xKiro | `XKIRO_API_KEY` | ids + `verified_free` = access_tier `free` AND every declared price exactly 0 (fail closed) |
+| NVIDIA | `NVIDIA_API_KEY` | ids visible to your key; the catalog carries **no pricing** — free usage is account/credit-based (build.nvidia.com) |
+| Google | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | `chat_capable_models` (support `generateContent`); the free tier is rate-limited and account-level |
+
+A missing key is a per-provider status line, not an error; HTTP errors are
+reported by type only (a gateway may echo credentials in error bodies — raw
+bodies are never exported). `GET /models` on the running service lists the
+REGISTERED models per provider plus whether each key is set — the probe is
+the live-discovery counterpart.
+
 ## 3. The two side-effect rules (memorize these)
 
 1. **Answer-model or retrieval change → nothing to rebuild.** Next query

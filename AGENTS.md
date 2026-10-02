@@ -292,6 +292,14 @@ Current state of the work:
   through the activated path; live commitment outcomes: refused-before-model
   10/50 (q28,q29,q32,q33,q42,q46,q47,q48,q49,q50) + 2/10 targets, zero
   partial (q44 كافٍ this run — within the known run-to-run jitter).
+- **models_probe.py (2026-10-02, owner request for personal-machine use)**:
+  read-only free/available-model probe for all three answer providers
+  (xKiro verified_free = tier+zero-price fail closed; NVIDIA visibility-only
+  — its catalog carries no pricing; Google chat_capable filtering). Missing
+  key = status not crash; bounded 2MB reads; no credential material in
+  reports or error paths. Guarded by ModelsProbeTest (6). COOKBOOK §2.10.
+  Companion: service GET /models lists the REGISTERED models (registry, not
+  live discovery).
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured
