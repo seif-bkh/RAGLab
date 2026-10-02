@@ -1,7 +1,7 @@
 # RAGLab service — HTTP contract
 
 **Audience:** the fullstack team building against this service.
-**Service version:** `1.3.0` (reported by `GET /health` → `version`).
+**Service version:** `1.4.0` (reported by `GET /health` → `version`).
 **Machine-readable schema:** FastAPI generates OpenAPI 3 at `/openapi.json` and
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
@@ -201,7 +201,7 @@ this service needs a CLI — if a console claims "configured via CLI", it is
 reading an outdated premise.
 
 ```json
-{"service": "raglab", "version": "1.3.0",
+{"service": "raglab", "version": "1.4.0",
  "chat_model": "xkiro/qwen/qwen3.8-max:free",
  "embedding_model": "nvidia/nvidia/nemotron-3-embed-1b",
  "vector_dimension": 2048,
@@ -232,7 +232,7 @@ The endpoint your UI polls. No secrets — key values never appear, only
 `set`/`missing` per env var.
 
 ```json
-{"status": "ok", "version": "1.3.0",
+{"status": "ok", "version": "1.4.0",
  "profile": {"embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
              "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
              "chunking": {"mode": "restructure", "size": 220, "overlap": 40},
@@ -554,6 +554,19 @@ hard-coded), and — where the governance axis is registered — the document
 must be in force (`gov_status == نافذ`). Deferred documents carry no status
 claim and pass unflagged.
 
+**Demand-interrogation disclosure (1.4.0 — env-gated, default ON,
+additive-only).** When an insufficient question was re-expressed (§3.17), the
+response — answered OR refused — additionally carries `understood_as` (the
+technical paraphrase that was actually evaluated), `original_question` (your
+question verbatim — never hidden) and `interrogation`
+`{classification, topics, requirements, confidence, seconds}`. `topics` are
+verbatim corpus topics from the deterministic topic map; `seconds` is the
+bounded call's measured cost, disclosed separately because the top-level
+`seconds` stays answer-generation-only. On an `answered` payload the
+sufficiency fields report the PARAPHRASE's verdict and no `refusal_reason` is
+attached; on a `refused` payload they stay the original question's facts.
+`REPHRASE_INTERROGATION_ENABLED=0` removes all three fields.
+
 **What is machine-verified before you see an `answered` payload:** every
 evidence quote is a contiguous verbatim member of its cited chunk, AND every
 number in every claim appears in that claim's evidence (normalization covers
@@ -708,9 +721,13 @@ operational bookkeeping: it never changes any response.
               "seconds": 1.8, "error": null}]}
 ```
 
-### 3.17 Demand interrogation on insufficient questions (Phase 8, gated OFF)
+### 3.17 Demand interrogation on insufficient questions (Phase 8, 1.4.0 — default ON)
 
-With `REPHRASE_INTERROGATION_ENABLED=1`, a question that is insufficient
+**Default ON since 1.4.0** (owner decision 2026-10-02, closing Phase 8 after
+its first live measurement — `raglab/audits/PHASE8_INTERROGATION.md`). Set
+`REPHRASE_INTERROGATION_ENABLED=0` to restore the plain refusal exactly.
+
+With the gate ON, a question that is insufficient
 (غير كافٍ) with nothing covered triggers ONE bounded interrogation call
 through the answer model: descriptive questions ABOUT the request
 (classification, nearest corpus topics — chosen verbatim from the
@@ -737,7 +754,7 @@ the bounded call's measured cost; the top-level `seconds` stays
 answer-generation-only.
 
 
-## 4.## 4. Error catalog
+## 4. Error catalog
 
 ### 4.1 Service errors — `{"detail": {"reason": …}}`
 

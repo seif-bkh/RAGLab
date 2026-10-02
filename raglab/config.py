@@ -305,8 +305,23 @@ ANSWER_SUFFICIENCY_COMMITMENT = os.getenv("ANSWER_SUFFICIENCY_COMMITMENT", "1") 
 # engines. Sufficient -> the paraphrase is answered, fully disclosed
 # (understood_as + the interrogation analysis); still insufficient -> the
 # honest refusal with a better referral. Fail-closed on any malformed
-# output. Default OFF — activation is the owner's, after measurement.
-REPHRASE_INTERROGATION_ENABLED = os.getenv("REPHRASE_INTERROGATION_ENABLED", "0") == "1"
+# output.
+# PHASE 8 CLOSED — ACTIVATED BY THE OWNER 2026-10-02, on the first live
+# measurement on their own server (audits/PHASE8_INTERROGATION.md,
+# «القياس الحي الأول»): «هل يمكن أن أفتح بيت دعارة؟» was answered through the
+# paraphrase «ما هي الشروط الشرعية والقانونية لصحة المعاملات المالية...؟» with
+# 4 cited claims and full disclosure (the corpus holds no prohibited-activity
+# topic, so that paraphrase is the nearest one it offers), and «هل يمكن أن
+# أتمتع بقرض؟» produced an excellent paraphrase that the deterministic
+# re-evaluation still found insufficient → the honest refusal with the
+# richer referral. Both outcomes are the designed behavior; the two payload
+# bugs that transcript exposed (original-question sufficiency leaking into an
+# answered payload; the interrogation's cost invisible) were fixed the same
+# day and are pinned by InterrogationTest. Deterministic arm: 409 checks
+# EXIT=0, including the zero-extra-call guarantee on sufficient questions.
+# Default ON: setting REPHRASE_INTERROGATION_ENABLED=0 restores the plain
+# refusal exactly (InterrogationTest.test_gate_off_is_the_pure_refusal).
+REPHRASE_INTERROGATION_ENABLED = os.getenv("REPHRASE_INTERROGATION_ENABLED", "1") == "1"
 
 # Experiment 3 (2026-10-01): per-micro retrieval & fusion — retrieval runs
 # per decomposed micro-question and RRF-fuses the pools. Default OFF;

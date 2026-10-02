@@ -766,6 +766,33 @@ class InterrogationTest(unittest.TestCase):
         self.assertNotIn("understood_as", body)
         self.assertEqual(self.client_obj.interrogation_calls, before)
 
+    def test_gate_default_is_on_and_drives_the_service_without_override(self):
+        """Phase 8 CLOSED 2026-10-02 (owner decision): the interrogation is
+        the DEFAULT behavior of POST /answer, not an opt-in. Proven two ways:
+        config's default is ON, and a service built with NO gate override at
+        all still interrogates and answers the practical question."""
+        import config
+        self.assertTrue(config.REPHRASE_INTERROGATION_ENABLED,
+                        "Phase 8 closed: the gate must default ON")
+        overrides = dict(self.overrides)
+        overrides.pop("REPHRASE_INTERROGATION_ENABLED")   # nothing opts in
+        overrides["ANSWER_CACHE_PATH"] = self.tmp / "answers_default_gate.json"
+        client_obj = self._InterrogatingClient(self.GOOD_INTERROGATION)
+        local = build_lab_config(self.profile)
+        for key, value in overrides.items():
+            setattr(local, key, value)
+        self.assertTrue(local.REPHRASE_INTERROGATION_ENABLED,
+                        "build_lab_config must carry the new default")
+        generator = AnswerGenerator(local, client=client_obj,
+                                    approved_models=(PROFILE_MODEL,))
+        client = TestClient(service.create_app(
+            self.profile, generator=generator, allow_profile_switch=False,
+            config_overrides=overrides))
+        body = client.post("/answer", json={"question": self.QUESTION}).json()
+        self.assertEqual(body["status"], "answered", body)
+        self.assertEqual(body["understood_as"], self.PARAPHRASE)
+        self.assertEqual(client_obj.interrogation_calls, 1)
+
     def test_gate_off_is_the_pure_refusal(self):
         client_obj, client = self._fresh_client(self.GOOD_INTERROGATION,
                                                 enabled=False)

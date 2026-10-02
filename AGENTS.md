@@ -444,9 +444,10 @@ Current state of the work:
   better referral (nearest corpus topics). FAIL-CLOSED: malformed output /
   invented topics (verbatim map containment) / invented requirements
   (SHAPE_PATTERNS kinds only) / identical paraphrase -> normal refusal.
-  Gate REPHRASE_INTERROGATION_ENABLED default OFF (activation = the
-  owner's, after the live measurement protocol in
-  audits/PHASE8_INTERROGATION.md). Files: topic_map.py, interrogate.py,
+  Gate REPHRASE_INTERROGATION_ENABLED default OFF at build time
+  (activation = the owner's, after the live measurement protocol in
+  audits/PHASE8_INTERROGATION.md) — SUPERSEDED: see the PHASE 8 CLOSED
+  entry below. Files: topic_map.py, interrogate.py,
   config.py, service.py (inside the commitment gate's nothing-covered
   branch; the partial path untouched), local_front.py. Tests:
   InterrogateTest 6 (service E2E: answered-with-disclosure, zero calls on
@@ -470,12 +471,37 @@ Current state of the work:
   nearest (no prompt steering warranted). Notes to the owner: S1/S4 were
   the SAME text via baked + pushed copies (delete the 5 re-pushes);
   RAGLAB_TOP_K=20 might flip the loan paraphrase from refusal to answer.
-  Gate stays default OFF. Offline gate EXIT=0 (409 tests, sacrebleu
-  reinstalled after the environment reset).
-- Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
-  the real-test tag real-test-experiments-20261001 stays on fed7b9d —
+  Gate stayed default OFF at that point. Offline gate EXIT=0 (409 tests,
+  sacrebleu reinstalled after the environment reset).
+- **PHASE 8 CLOSED — ACTIVATED (2026-10-02, owner decision)**: the demand
+  interrogation is now the DEFAULT behavior of POST /answer —
+  REPHRASE_INTERROGATION_ENABLED defaults to "1" in config.py;
+  =0 restores the plain refusal byte-for-byte (guard:
+  InterrogationTest.test_gate_off_is_the_pure_refusal). Decision basis: the
+  first live ON-run on the owner's server (both questions took the designed
+  path — see the LIVE-FIX entry + audits/PHASE8_INTERROGATION.md «القياس
+  الحي الأول»), the two transcript defects already fixed and pinned, and
+  the deterministic gate. New test pinning the DEFAULT itself (a service
+  built with NO gate override still interrogates and answers):
+  InterrogationTest.test_gate_default_is_on_and_drives_the_service_without_override
+  — offline gate EXIT=0 (410 tests). SERVICE_VERSION bumped 1.3.0 -> 1.4.0
+  (additive-only: the interrogation disclosure fields understood_as /
+  original_question / interrogation{...,seconds}; CONTRACT §3.17 + the §3.1
+  field notes, SERVICE.md, COOKBOOK §2.11, .env.example all updated).
+  HONEST LIMIT recorded in the audit: the live measurement covered TWO
+  practical questions, not the full protocol set (pub/coffeeshop/aviation/
+  "bank services"), and the two control classes (a sufficient question
+  unchanged, an out-of-scope question still refused) are pinned
+  deterministically but were NOT re-measured live after activation —
+  recommended as the owner's first post-deploy check. Deploy: code +
+  default changed, so `git pull && docker compose up --build -d`.
+- Current heads: this session works on **arena/01a0fcfb-raglab**, branched
+  from 330b85e ("last session chat history" — the previous session's whole
+  tree, remote arena/01a0d2f5-raglab sits at the same SHA; the Phase-8
+  live-fix code is inside it). Push only to arena/01a0fcfb-raglab.
+  The real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured
-  pipeline). Demo service (Exp 7) restarted after the reset.
+  pipeline).
 - **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
   `raglab/decompose.py` (read-only): the intermediate decomposition layer.
   EVERY question → reformulated micro-questions, each with its partial

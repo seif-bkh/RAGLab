@@ -212,10 +212,10 @@ bodies are never exported). `GET /models` on the running service lists the
 REGISTERED models per provider plus whether each key is set — the probe is
 the live-discovery counterpart.
 
-### 2.11 Practical questions, re-expressed technically (Phase 8 — gated OFF)
+### 2.11 Practical questions, re-expressed technically (Phase 8 — default ON, 1.4.0)
 
-A practical, non-technical question ("can i get a financement to open a
-pub?") used to be refused outright. With the gate ON it triggers ONE
+A practical, non-technical question ("can i get a financing to open a
+pub?") used to be refused outright. It now triggers ONE
 bounded interrogation call: the model answers descriptive questions about
 the REQUEST (never answering it), choosing topics verbatim from the
 corpus's own topic map; the technical paraphrase is re-checked by the same
@@ -223,8 +223,9 @@ deterministic engines and — if the corpus can answer it — answered with
 full disclosure:
 
 ```
-# start the service with the gate on (or set it in raglab/.env)
-REPHRASE_INTERROGATION_ENABLED=1 python -m uvicorn service:app
+# the gate is ON by default since 1.4.0 (owner decision 2026-10-02);
+# REPHRASE_INTERROGATION_ENABLED=0 in raglab/.env restores the plain refusal
+python -m uvicorn service:app
 
 POST /answer {"question": "can i get a financement to open a pub?"}
 → { "status": "answered",
