@@ -61,6 +61,10 @@ python local_front.py --status          # one-shot doctor (profile, index, keys)
 python local_front.py --ingest          # build the index, wait for the job
 python local_front.py --ask "What is Murabaha?"
 python local_front.py --search "murabaha"   # retrieval only, no chat model
+python local_front.py --audit 20           # the request trail — each entry with
+                                           # its evidence state (كافٍ/غير كافٍ)
+python local_front.py --numbers            # the structured legal numbers
+                                           # (filters: --unit-id / --kind)
 python local_front.py --base-url http://raglab:8000   # against the compose stack
 
 The understanding & sufficiency layer is ON by default since the owner

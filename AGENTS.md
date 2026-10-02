@@ -338,6 +338,19 @@ Current state of the work:
   (401 / .env not hot-reloading / the historical override / open-switching
   warning). Lesson: compose `environment:` beats `env_file` — never hardcode
   a secret's default there.
+- **local_front full-surface verification (2026-10-02, owner asked whether
+  the front covers the session's updates)**: three gaps found and closed —
+  the front had no --audit (phase-6 trail), no --numbers (phase-4 legal
+  numbers), and did not render 1.3.0 unit ids. Added: show_audit/show_numbers
+  renderers + --audit [LIMIT] / --numbers (--unit-id/--kind filters) +
+  unit ids on source headers. Also the demo service root is now
+  content-negotiated (browser -> Arabic page, API client -> standard JSON)
+  so --smoke passes 25/25 against it. E2E verified every front command
+  against the running service: --ask legal (fields + unit id
+  loi-2016-48:art140), --ask OOS (refusal + referral), --search, --audit
+  (trail with per-request evidence states), --numbers (53 records, by-kind
+  breakdown), --smoke 25/25. LocalFrontClientTest now 8 tests (fake server
+  guards every path with the token like the real service).
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured

@@ -153,14 +153,22 @@ def main() -> int:
                              config_overrides=overrides)
 
     # a minimal owner-facing page (relative URLs only — works behind the
-    # live preview proxy). The demo page REPLACES the service's plain "/"
-    # listing so the owner lands on it directly.
+    # live preview proxy). Content-negotiated: a BROWSER (Accept: text/html)
+    # gets the demo page; API clients (local_front --smoke expects the
+    # service JSON at "/") still get the standard root payload.
+    original_root = next(
+        r.endpoint for r in app.router.routes
+        if getattr(r, "path", None) == "/" and "GET" in getattr(r, "methods", set()))
     app.router.routes = [r for r in app.router.routes
                          if not (getattr(r, "path", None) == "/"
                                  and "GET" in getattr(r, "methods", set()))]
 
+    from fastapi import Header
+
     @app.get("/", include_in_schema=False)
-    def _index():
+    def _index(accept: str = Header(default="")):
+        if "text/html" not in accept:
+            return original_root()   # the standard service JSON self-listing
         from fastapi.responses import HTMLResponse
         return HTMLResponse("""<!doctype html><html lang="ar" dir="rtl"><head>
 <meta charset="utf-8"><title>RAGLab — خدمة تجريبية حتمية</title>

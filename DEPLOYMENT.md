@@ -75,6 +75,7 @@ curl -H "X-Service-Token: $RAGLAB_SERVICE_TOKEN" http://localhost:8000/health
   - `status: "greeting"` → تحيات محلية بلا نموذج.
 - **المصادقة من الواجهة**: تروسة `X-Service-Token` على كل طلب (تُترك على preflight فقط — الخدمة تعفي OPTIONS). من `local_front`: ‏`--token <القيمة>` أو `export RAGLAB_SERVICE_TOKEN=<القيمة>`.
 - **الاختبار الشامل جاهز**: `python local_front.py --base-url http://<host>:8000 --smoke` — طقم دخان كامل عبر HTTP (كل النقاط + اتساق الحقول الجديدة).
+- **لمراقبة السلوك الجديد من الواجهة**: ‏`--audit 20` (مسار الطلبات مع حالة الكفاية لكل طلب) و`--numbers` (الأرقام القانونية المنظمة مع معرفات الوحدات، مع مرشحات `--unit-id`/`--kind`).
 - داخل الحاوية أيضًا مسبار النماذج المجانية عند المزودين الثلاثة: `docker compose exec raglab python models_probe.py`.
 
 ## 6) العمليات اليومية

@@ -1211,7 +1211,9 @@ def show_answer(body) -> None:
     for source in body.get("sources") or []:
         used = quotes.get(source.get("source_id")) or []
         if used or source.get("text"):
-            print(f"\n[{source['source_id']}] {source.get('document')} — {source.get('chunk_id')}")
+            # 1.3.0: typed law chunks carry a stable unit id — render it
+            unit = f" — {source['unit_id']}" if source.get("unit_id") else ""
+            print(f"\n[{source['source_id']}] {source.get('document')} — {source.get('chunk_id')}{unit}")
             if source.get("text"):
                 print(source["text"])
             else:
@@ -1220,6 +1222,48 @@ def show_answer(body) -> None:
           f" · model={body.get('model')} · {body.get('seconds', 0)}s"
           f" · retrieved={body.get('retrieved', 0)} · cached={body.get('cached', False)}"
           + (f" · failed check: {body.get('error')}" if body.get("error") else ""))
+
+
+def show_audit(body) -> None:
+    """GET /audit — the Phase-6 request trail (PII-scrubbed questions)."""
+    if not isinstance(body, dict):
+        print(body)
+        return
+    print(f"[front] مسار التدقيق — retention={body.get('retention')} · "
+          f"آخر {len(body.get('entries') or [])} طلبًا (الأحدث أولًا):")
+    for e in body.get("entries") or []:
+        line = (f"\n· {e.get('ts', '?')}  {e.get('endpoint', '?')}"
+                f" → {e.get('status', '?')}"
+                + (f"/{e.get('reason')}" if e.get("reason") else ""))
+        if e.get("evidence_status"):
+            line += f"  [كفاية: {e.get('evidence_status')}]"
+        if e.get("claims") is not None:
+            line += f"  claims={e.get('claims')}"
+        print(line)
+        if e.get("question"):
+            print(f"  «{e.get('question')}»")
+    if not body.get("entries"):
+        print("(لا مدخلات بعد — اسأل أولًا)")
+
+
+def show_numbers(body) -> None:
+    """GET /numbers — the structured legal-numbers layer (deterministic)."""
+    if not isinstance(body, dict):
+        print(body)
+        return
+    print(f"[front] الأرقام القانونية المنظمة — count={body.get('count')}")
+    by_kind = body.get("by_kind") or {}
+    if by_kind:
+        print("حسب النوع: " + " · ".join(f"{k}={v}" for k, v in by_kind.items()))
+    for r in body.get("records") or []:
+        unit = f" [{r.get('unit_id')}]" if r.get("unit_id") else ""
+        text = r.get("text") or r.get("value") or ""
+        print(f"\n· {r.get('kind', '?')}{unit}: {text}")
+    corrections = body.get("circulaire_corrections") or []
+    if corrections:
+        print(f"\nتصحيحات المنشور المعتمدة: {len(corrections)}")
+    if body.get("note"):
+        print(f"\nملاحظة: {body['note']}")
 
 
 def show_search(body) -> None:
@@ -1508,6 +1552,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL,
                         help=f"service base URL (default {DEFAULT_BASE_URL}; "
                              "or env RAGLAB_SERVICE_URL)")
+    parser.add_argument("--audit", type=int, nargs="?", const=20, default=None,
+                        metavar="LIMIT",
+                        help="show the request audit trail (default last 20)")
+    parser.add_argument("--numbers", action="store_true",
+                        help="show the structured legal-numbers layer")
+    parser.add_argument("--unit-id", default=None, dest="unit_id",
+                        help="filter --numbers by unit id (e.g. loi-2016-48:art032)")
+    parser.add_argument("--kind", default=None,
+                        help="filter --numbers by kind (Arabic kind string)")
     parser.add_argument("--token", default=None,
                         help="the service's X-Service-Token value (when the "
                              "service sets RAGLAB_SERVICE_TOKEN; also read "
@@ -1564,6 +1617,21 @@ def main(argv=None) -> int:
 
     console = Console(api, load_front_state())
     try:
+        if args.audit is not None:
+            status, body = api.get("/audit", params={"limit": args.audit})
+            if status != 200:
+                print(f"[front] /audit answered HTTP {status}: {body}")
+                return 1
+            show_audit(body)
+            return 0
+        if args.numbers:
+            status, body = api.get("/numbers", params={
+                "unit_id": args.unit_id, "kind": args.kind})
+            if status != 200:
+                print(f"[front] /numbers answered HTTP {status}: {body}")
+                return 1
+            show_numbers(body)
+            return 0
         if args.status:
             console.action_status()
             return 0

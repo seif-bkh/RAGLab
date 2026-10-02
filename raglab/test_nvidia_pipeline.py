@@ -2644,23 +2644,41 @@ class LocalFrontClientTest(unittest.TestCase):
             expected_token = "front-test-secret"
             seen_headers = {}
 
+            def _json(self, status, payload):
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(payload, ensure_ascii=False).encode())
+
             def do_GET(self):
                 Handler.seen_headers = dict(self.headers)
-                if self.path == "/health":
-                    supplied = self.headers.get("X-Service-Token", "")
-                    if supplied != Handler.expected_token:
-                        self.send_response(401)
-                        self.send_header("Content-Type", "application/json")
-                        self.end_headers()
-                        self.wfile.write(b'{"detail": {"reason": "unauthorized"}}')
-                        return
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(b'{"status": "ok", "version": "1.3.0"}')
+                # like the real service: the token guards EVERY endpoint
+                if self.headers.get("X-Service-Token", "") != Handler.expected_token:
+                    self._json(401, {"detail": {"reason": "unauthorized"}})
                     return
-                self.send_response(404)
-                self.end_headers()
+                path = self.path.split("?")[0]
+                if path == "/health":
+                    self._json(200, {"status": "ok", "version": "1.3.0"})
+                elif path == "/audit":
+                    self._json(200, {"retention": 500, "entries": [
+                        {"ts": "2026-10-02T09:00:00+00:00", "endpoint": "/answer",
+                         "status": "refused", "reason": "evidence_insufficient",
+                         "evidence_status": "غير كافٍ", "claims": 0,
+                         "question": "كيف احجز تذكرة طائرة؟"},
+                        {"ts": "2026-10-02T08:59:00+00:00", "endpoint": "/answer",
+                         "status": "answered", "reason": "supported",
+                         "evidence_status": "كافٍ", "claims": 2,
+                         "question": "ما هي عملية المرابحة؟"}]})
+                elif path == "/numbers":
+                    self._json(200, {"count": 1, "by_kind": {"حد مالي": 1},
+                                     "records": [{"kind": "حد مالي",
+                                                  "unit_id": "loi-2016-48:art032",
+                                                  "text": "مائة ألف دينار"}],
+                                     "circulaire_corrections": [],
+                                     "note": "deterministic extraction"})
+                else:
+                    self.send_response(404)
+                    self.end_headers()
 
             def log_message(self, *args):
                 pass
@@ -2712,6 +2730,57 @@ class LocalFrontClientTest(unittest.TestCase):
         self.assertIn("--token", out)
         self.assertIn("docker compose up -d", out)
         self.assertNotIn("not a RAGLab service", out)
+
+    def test_audit_command_renders_the_trail(self):
+        import io
+        import contextlib
+        import local_front
+        buf = io.StringIO()
+        with patch.dict(os.environ, {"RAGLAB_SERVICE_TOKEN": "front-test-secret"}):
+            with contextlib.redirect_stdout(buf):
+                rc = local_front.main(["--base-url", self.url, "--audit"])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("مسار التدقيق", out)
+        self.assertIn("retention=500", out)
+        self.assertIn("evidence_insufficient", out)
+        self.assertIn("كافٍ", out)          # the evidence state on the trail
+        self.assertIn("تذكرة", out)         # the (scrubbed) question text
+
+    def test_numbers_command_renders_records(self):
+        import io
+        import contextlib
+        import local_front
+        buf = io.StringIO()
+        with patch.dict(os.environ, {"RAGLAB_SERVICE_TOKEN": "front-test-secret"}):
+            with contextlib.redirect_stdout(buf):
+                rc = local_front.main(["--base-url", self.url, "--numbers"])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("الأرقام القانونية", out)
+        self.assertIn("حد مالي", out)
+        self.assertIn("loi-2016-48:art032", out)
+        self.assertIn("مائة ألف دينار", out)
+
+    def test_show_answer_renders_unit_ids(self):
+        import io
+        import contextlib
+        import local_front
+        body = {"answer": "ok", "status": "answered",
+                "evidence_status": "كافٍ",
+                "requirements_covered": ["definition_or_purpose_unit"],
+                "claims": [{"text": "claim", "evidence": [
+                    {"source_id": "S1", "quote": "quote text",
+                     "unit_id": "loi-2016-48:art004"}]}],
+                "sources": [{"source_id": "S1", "document": "Loi_2016-48.pdf",
+                             "chunk_id": "Loi_2016-48.pdf::chunk_0001",
+                             "unit_id": "loi-2016-48:art004"}]}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            local_front.show_answer(body)
+        out = buf.getvalue()
+        self.assertIn("[كفاية الدليل] كافٍ", out)
+        self.assertIn("loi-2016-48:art004", out)   # the 1.3.0 unit id
 
     def test_main_with_token_passes_health(self):
         import local_front
