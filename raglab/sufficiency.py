@@ -80,6 +80,29 @@ AR_ANCHOR_SHARE = 0.6
 CROSS_ANCHOR_MIN = 2
 CROSS_DF_MAX = 30
 
+# The df cap is CALIBRATED on the adopted 339-chunk corpus (fallback token
+# estimator) but must SCALE with the live corpus size: df counts grow with
+# (a) finer token estimators — tiktoken counts ~2.5x more tokens for Arabic,
+# so the same corpus chunks into ~2.5x more pieces (the owner's server:
+# 858 baked-in chunks, df(المرابحة) ≈ 40 even WITHOUT duplicates), and
+# (b) legitimate corpus growth. Rarity is a SHARE, not an absolute count:
+# duplication and finer chunking scale every term equally (بنك sits in ~70%
+# of chunks however many copies exist; مرابحة ~5%). cap = max(CROSS_DF_MAX,
+# ceil(CROSS_DF_MAX * N / 339)) — on the calibrated corpus this is EXACTLY
+# CROSS_DF_MAX (measured: both adopted sets byte-identical).
+CROSS_DF_CALIBRATION_N = 339
+
+
+def _df_cap(df: dict[str, int] | None) -> int:
+    """The anchor df cap for THIS corpus (see CROSS_DF_CALIBRATION_N).
+    Hand-built dicts (tests) carry no size -> the calibrated corpus ->
+    the historical absolute cap."""
+    n = (df or {}).get("__corpus_size__") if df else None
+    if not isinstance(n, int) or n <= CROSS_DF_CALIBRATION_N:
+        return CROSS_DF_MAX
+    return max(CROSS_DF_MAX,
+               -(-CROSS_DF_MAX * n // CROSS_DF_CALIBRATION_N))
+
 # Declared cross-script bridges (REVIEW DATA — 2026-10-02, the owner's field
 # case: 'what is murabaha?' was refused although the corpus defines المرابحة
 # in 17 chunks; df('murabaha')=0 because the Latin transliteration never
@@ -267,11 +290,14 @@ def df_for_collection(collection) -> dict[str, int]:
 
 def build_df(texts: list[str]) -> dict[str, int]:
     """Document frequency of every term over the corpus texts (declared
-    distinctiveness signal for cross-script anchoring)."""
+    distinctiveness signal for cross-script anchoring). Carries the corpus
+    size under __corpus_size__ so the df cap can scale (never a term:
+    tokenization cannot yield that key)."""
     df: dict[str, int] = {}
     for text in texts:
         for term in _hit_terms(text):
             df[term] = df.get(term, 0) + 1
+    df["__corpus_size__"] = len(texts)
     return df
 
 
@@ -303,14 +329,15 @@ def _anchors(question: str, hit_text: str, df: dict[str, int] | None) -> bool:
             return False
         # digits are df-checked like words — «48»/«2016» sit in 240 chunk
         # headers and carry no subject signal
-        distinctive = {t for t in shared if df.get(t, 0) <= CROSS_DF_MAX}
+        cap = _df_cap(df)
+        distinctive = {t for t in shared if df.get(t, 0) <= cap}
         if len(distinctive) >= CROSS_ANCHOR_MIN:
             return True
         # declared cross-script bridge: a bridged DISTINCTIVE term anchors
         # singly (curated equivalence — but still df-checked, so a bridge
         # onto boilerplate can never anchor)
         bridged = _bridged_terms(question) & _hit_terms(hit_text)
-        return any(df.get(t, 0) <= CROSS_DF_MAX for t in bridged)
+        return any(df.get(t, 0) <= cap for t in bridged)
     return bool(shared) and len(shared) >= _anchor_bar(question)
 
 
@@ -521,8 +548,9 @@ def check(question: str, hits: list[dict], df: dict[str, int] | None = None,
             for h in pool:
                 shared_any |= shared_terms(question, h.get("text", ""))
             if _is_cross_script(question):
+                cap = _df_cap(df)
                 distinctive = {t for t in shared_any
-                               if (df or {}).get(t, 0) <= CROSS_DF_MAX}
+                               if (df or {}).get(t, 0) <= cap}
                 # one tantalizing DELIBERATE signal — an embedded Arabic term,
                 # a specific number, or a non-generic technical word — is an
                 # honest escalation; a generic domain word or nothing at all

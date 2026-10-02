@@ -2843,6 +2843,41 @@ class SufficiencyBridgeTest(unittest.TestCase):
             [self.MUD_TEXT, self.MUR_TEXT])
         self.assertEqual(s["state"], "كافٍ")
 
+    def test_scaled_cap_anchors_on_a_larger_corpus(self):
+        # tiktoken envs chunk the same corpus ~2.5x finer, so df counts
+        # scale; the cap scales with the corpus (a SHARE, not a count).
+        # 500 chunks, 40 carrying المرابحة: absolute cap 30 would block;
+        # the scaled cap is ceil(30*500/339)=45 -> anchors.
+        import sufficiency
+        texts = [self.MUR_TEXT] * 40 + ["نص آخر لا يحمل المصطلح"] * 460
+        df = sufficiency.build_df(texts)
+        self.assertEqual(df["__corpus_size__"], 500)
+        self.assertGreater(df["مرابحة"], 30)          # over the OLD cap
+        s = self._check("what is murabaha?", [self.MUR_TEXT], df=df)
+        self.assertEqual(s["state"], "كافٍ")
+
+    def test_calibrated_corpus_keeps_the_absolute_cap(self):
+        # at the calibrated size (<= 339 chunks) the cap is EXACTLY 30 —
+        # no loosening on the measured corpora (byte-identical results).
+        import sufficiency
+        texts = [self.MUR_TEXT] * 31 + ["نص آخر"] * 308
+        df = sufficiency.build_df(texts)
+        self.assertEqual(len(texts), 339)
+        self.assertEqual(sufficiency._df_cap(df), 30)
+        s = self._check("what is murabaha?", [self.MUR_TEXT], df=df)
+        self.assertEqual(s["state"], "غير كافٍ")      # 31 > 30 -> guarded
+
+    def test_boilerplate_stays_blocked_at_any_scale(self):
+        # rarity is a share: a term in ~70% of chunks never anchors, at
+        # any corpus size — the scaled cap (152 at 1713 chunks) stays far
+        # below a boilerplate df (1200).
+        import sufficiency
+        texts = [self.MUR_TEXT] * 1200 + ["نص آخر"] * 513
+        df = sufficiency.build_df(texts)
+        self.assertGreater(df["مرابحة"], sufficiency._df_cap(df))
+        s = self._check("what is murabaha?", [self.MUR_TEXT], df=df)
+        self.assertEqual(s["state"], "غير كافٍ")      # share, not count
+
     def test_same_script_arabic_unchanged_by_the_gate(self):
         import sufficiency
         question = "ما هي المرابحة؟"
@@ -2866,13 +2901,29 @@ class DiagBridgeTest(unittest.TestCase):
         return " ".join(diag_bridge.verdict(
             Counter(df), 5, hits_with_term, rollup or [], total))
 
-    def test_df_blocked_by_duplication(self):
-        out = self._verdict({"مرابحة": 85, "تكافل": 15}, hits_with_term=3,
-                            rollup=[{"source": "pushed-Guide.docx",
+    def test_scaled_cap_lifts_duplication_off_the_guard(self):
+        # the owner's exact numbers: 1713 chunks, df=67. Scaled cap =
+        # ceil(30*1713/339)=152 -> NOT blocked; the question should answer
+        # (the duplicates are still flagged for quality).
+        out = self._verdict({"مرابحة": 67, "تكافل": 24}, hits_with_term=3,
+                            rollup=[{"source": "Guide.docx", "chunks": 339},
+                                    {"source": "pushed-Guide.docx",
                                      "chunks": 1374}], total=1713)
-        self.assertIn("DUPLICATES", out)
-        self.assertIn("df-blocked", out)
+        self.assertIn("should-answer", out)
+        self.assertIn("DUPLICATES", out)          # quality flag remains
         self.assertIn("menu 14", out)
+
+    def test_boilerplate_blocked_at_scale(self):
+        # a term in a huge SHARE of the index is boilerplate at any size
+        out = self._verdict({"مرابحة": 1200, "تكافل": 24}, hits_with_term=3,
+                            rollup=[], total=1713)
+        self.assertIn("df-blocked", out)
+
+    def test_hand_built_df_defaults_to_the_calibrated_cap(self):
+        import diag_bridge
+        self.assertEqual(diag_bridge.df_cap(339), 30)
+        self.assertEqual(diag_bridge.df_cap(1713), 152)
+        self.assertEqual(diag_bridge.df_cap(100), 30)
 
     def test_window_too_narrow_when_no_evidence_reaches_topk(self):
         out = self._verdict({"مرابحة": 17, "تكافل": 6}, 0)

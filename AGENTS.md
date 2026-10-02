@@ -400,6 +400,23 @@ Current state of the work:
   that are already baked into the image (docs/). If duplication is
   INTENTIONAL, the declared cap can be made corpus-relative (owner decision,
   measured first).
+- **Scaled df cap (2026-10-02, from the owner's diag output)**: their
+  numbers (1713 chunks, df(المرابحة)=67, retrieval 5/5) revealed a deeper
+  layer than duplication — their env downloads tiktoken, chunking the same
+  corpus into 858 pieces (vs 339 with the fallback estimator), so df counts
+  scale ~2.5x and the ABSOLUTE cap 30 would break even on a deduplicated
+  index. Fix: rarity is a SHARE — cap = max(30, ceil(30*N/339)) with N
+  carried by build_df (__corpus_size__); on the calibrated corpora the cap
+  is EXACTLY 30 (measured byte-identical: 38/9/3 FS=FR=0 agree=1.0, targets
+  8/2). At the owner's size: cap 152 -> df 67 passes. Boundary measured:
+  CONCENTRATED duplication (one doc x5) legitimately still blocks (share
+  10.6% > 8.9%). diag_bridge now computes the scaled cap, splits pushed
+  docs into re-pushes-of-baked (delete; they are often DEGRADED
+  re-extractions — their pushed law copy: visual-order, no codex, 543 vs
+  233 chunks) vs genuinely-new (keep — their tarif-2026.md). Tests:
+  SufficiencyBridgeTest 9, DiagBridgeTest 5. Demo E2E limits documented
+  (stub embedder cannot cross scripts in retrieval — the decisive check is
+  the owner's server; their /search reaches المرابحة 5/5).
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured

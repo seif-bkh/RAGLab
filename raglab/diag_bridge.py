@@ -35,40 +35,63 @@ from local_front import Api, DEFAULT_BASE_URL
 # would tie the client to the lab's version)
 BRIDGE_ARABIC = ["مرابحة", "مضاربة", "مشاركة", "صكوك", "اجارة",
                  "تكافل", "ربا", "سلف", "استصناع"]
-DF_MAX = 30          # sufficiency.CROSS_DF_MAX (declared)
-EXPECTED_CLEAN = 339  # the baked-in corpus (docs/ in the image)
+DF_MAX = 30          # sufficiency.CROSS_DF_MAX (declared floor)
+CALIBRATION_N = 339   # the calibrated corpus (fallback token estimator);
+                      # tiktoken envs chunk the same corpus finer (~2.5x)
+
+
+def df_cap(total_chunks: int) -> int:
+    """The scaled anchor cap for this index size (mirrors
+    sufficiency._df_cap): max(30, ceil(30 * N / 339))."""
+    if total_chunks <= CALIBRATION_N:
+        return DF_MAX
+    return max(DF_MAX, -(-DF_MAX * total_chunks // CALIBRATION_N))
 
 
 def verdict(df: Counter, k: int, hits_with_term: int, rollup: list[dict],
             total_chunks: int) -> list[str]:
     """Pure verdict logic — unit-tested."""
     notes: list[str] = []
+    cap = df_cap(total_chunks)
+    baked = {str(d.get("source", "")) for d in rollup
+             if not str(d.get("source", "")).startswith("pushed-")}
+    def _base(name):
+        return str(name).removeprefix("pushed-")
+
     duplicates = [d for d in rollup
-                  if str(d.get("source", "")).startswith("pushed-")]
+                  if str(d.get("source", "")).startswith("pushed-")
+                  and _base(d.get("source")) in baked]
+    extra_pushed = [d for d in rollup
+                    if str(d.get("source", "")).startswith("pushed-")
+                    and _base(d.get("source")) not in baked]
     if duplicates:
-        pushed = sum(int(d.get("chunks", 0)) for d in duplicates)
         names = ", ".join(sorted(str(d["source"])[:44] for d in duplicates))
+        pushed = sum(int(d.get("chunks", 0)) for d in duplicates)
         notes.append(
-            f"DUPLICATES: {len(duplicates)} pushed document(s) adding "
-            f"{pushed} chunks on top of the baked-in corpus "
-            f"(index total {total_chunks} vs {EXPECTED_CLEAN} expected)\n"
+            f"DUPLICATES: {len(duplicates)} pushed document(s) RE-PUSHING "
+            f"baked-in documents (+{pushed} chunks; total {total_chunks}; "
+            f"the baked-in corpus is {CALIBRATION_N} chunks under the "
+            f"fallback estimator, ~2.5x more with tiktoken)\n"
             f"      → {names}\n"
-            f"      fix: local_front menu 14 → remove each pushed document\n"
+            f"      fix: local_front menu 14 → remove each of these. The "
+            f"pushed copies are often DEGRADED re-extractions (a pushed "
+            f"visual-order law copy chunks worse than the baked-in one).\n"
             f"      (DELETE /documents purges its chunks immediately; no "
             f"reingest needed)")
+    if extra_pushed:
+        names = ", ".join(sorted(str(d["source"])[:44] for d in extra_pushed))
+        notes.append(f"NEW PUSHED (kept — not duplicates of baked-in docs): "
+                     f"{names}")
     for term in ("مرابحة", "تكافل"):
         df_t = df.get(term, 0)
-        flag = "OK " if df_t <= DF_MAX else "BLOCKED"
-        notes.append(f"df({term}) = {df_t} [{flag}] (bridge guard: "
-                     f"df <= {DF_MAX})")
-    if df.get("مرابحة", 0) > DF_MAX:
+        flag = "OK " if df_t <= cap else "BLOCKED"
+        notes.append(f"df({term}) = {df_t} [{flag}] (scaled bridge guard: "
+                     f"df <= {cap} for {total_chunks} chunks)")
+    if df.get("مرابحة", 0) > cap:
         notes.append(
-            "VERDICT: df-blocked — the bridge refuses to anchor المرابحة "
-            "because duplication pushed it over the guard. Remove the "
-            "pushed duplicates (above) and the question answers. (If the "
-            "duplicates are INTENTIONAL and permanent, the declared cap "
-            "can be made relative to corpus size — an owner decision, "
-            "measured before activation.)")
+            "VERDICT: df-blocked — المرابحة behaves like boilerplate in "
+            "THIS index (present in a huge share of chunks). This is not "
+            "normal duplication; inspect the index contents.")
     elif hits_with_term == 0:
         notes.append(
             "VERDICT: window/retrieval — the top-k results do not contain "
