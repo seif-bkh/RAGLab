@@ -151,8 +151,61 @@ def main() -> int:
     app = service.create_app(state, generator=generator,
                              allow_profile_switch=False,
                              config_overrides=overrides)
-    print("[demo] serving on 0.0.0.0:8000 — try POST /answer, GET /audit, "
-          "GET /numbers, GET /docs")
+
+    # a minimal owner-facing page (relative URLs only — works behind the
+    # live preview proxy). The demo page REPLACES the service's plain "/"
+    # listing so the owner lands on it directly.
+    app.router.routes = [r for r in app.router.routes
+                         if not (getattr(r, "path", None) == "/"
+                                 and "GET" in getattr(r, "methods", set()))]
+
+    @app.get("/", include_in_schema=False)
+    def _index():
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse("""<!doctype html><html lang="ar" dir="rtl"><head>
+<meta charset="utf-8"><title>RAGLab — خدمة تجريبية حتمية</title>
+<style>body{font-family:system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;background:#fafaf7;color:#1a1a1a}
+h1{font-size:1.3rem}small{color:#666}input[type=text]{width:100%;padding:10px;font-size:1.05rem;border:1px solid #bbb;border-radius:8px}
+button{margin-top:8px;padding:10px 22px;font-size:1rem;border:0;border-radius:8px;background:#0b5d3b;color:#fff;cursor:pointer}
+.out{margin-top:16px;border:1px solid #ddd;border-radius:10px;padding:14px;white-space:pre-wrap;line-height:1.9}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:.85rem;margin-inline-end:6px}
+.ok{background:#dcf5e5}.no{background:#fbe3e3}.wait{background:#eee}
+.q{margin:6px 0;padding:6px 10px;border-radius:8px;background:#fff;border:1px solid #eee;cursor:pointer;display:inline-block}
+blockquote{border-inline-start:3px solid #0b5d3b;margin:6px 0;padding-inline-start:10px;color:#333;font-size:.95rem}
+code{background:#f0f0ec;padding:1px 6px;border-radius:6px}</style></head><body>
+<h1>خدمة RAGLab التجريبية <small>(v1.3.0 — حتمية بالكامل، بلا مفاتيح)</small></h1>
+<p><small>نموذج العرض «روبوت اقتباس»: يجيب <b>باقتباس حرفي من المصدر</b> عبر بوابة الاستشهاد الحقيقية (عضوية الاقتباس + توثيق الأرقام + مسموح/نافذ). حقول الكفاية والالتزام مفعّلة: أسئلة خارج المدونة تُرفض قبل أي نموذج. الذراع المنشورة الحقيقية (تضمين حي + نموذج حي) هي التي يقيسها CI.</small></p>
+<input id="q" type="text" placeholder="اكتب سؤالك… مثال: ما هي عملية المرابحة على معنى القانون عدد 48 لسنة 2016؟">
+<button onclick="ask()">اسأل</button>
+<div id="samples"></div>
+<div id="out" class="out" hidden></div>
+<script>
+const SAMPLES=["ما هي عملية المرابحة على معنى القانون عدد 48 لسنة 2016؟","ما التعريف القانوني للبنك في تونس؟","ما شروط فتح حساب مصرفي إسلامي؟","السلام عليكم","كيف احجز تذكرة طائرة من تونس الى دبي؟"];
+const samplesEl=document.getElementById('samples');
+SAMPLES.forEach(s=>{const b=document.createElement('span');b.className='q';b.textContent=s;b.onclick=()=>{document.getElementById('q').value=s;ask()};samplesEl.appendChild(b);});
+async function ask(){
+ const q=document.getElementById('q').value.trim();if(!q)return;
+ const out=document.getElementById('out');out.hidden=false;out.textContent='…جارٍ';
+ try{
+  const r=await fetch('answer',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({question:q,k:6})});
+  const b=await r.json();
+  let h='';
+  const cls=b.status==='answered'?'ok':(b.status==='refused'?'no':'wait');
+  h+=`<span class="badge ${cls}">${b.status}${b.reason?'/'+b.reason:''}</span>`;
+  if(b.evidence_status)h+=`<span class="badge ${b.evidence_status==='كافٍ'?'ok':'no'}">كفاية الدليل: ${b.evidence_status}</span>`;
+  if(b.model)h+=`<small> — ${b.model}</small>`;
+  (b.claims||[]).forEach(c=>{h+=`<div>◆ ${c.text}</div>`;(c.evidence||[]).forEach(e=>{h+=`<blockquote>${e.quote}<br><small>— ${e.source_id} ${e.unit_id||''} ${e.in_force===false?'(غير نافذ)':''}</small></blockquote>`;});});
+  if(b.refusal_reason)h+=`<div>⛔ ${b.refusal_reason}</div>`;
+  if(b.referral)h+=`<div>↪ الحالة مناسبة للإحالة إلى مختص.</div>`;
+  if(b.greeting_reply)h+=`<div>${b.greeting_reply}</div>`;
+  h+='<hr><small>المصادر: '+(b.sources||[]).map(s=>s.source_id).join('، ')+'</small>';
+  out.innerHTML=h;
+ }catch(e){out.textContent='تعذر الاتصال: '+e;}
+}
+</script></body></html>""")
+
+    print("[demo] serving on 0.0.0.0:8000 — open / in a browser, or POST "
+          "/answer, GET /audit, GET /numbers, GET /docs")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
     return 0
 
