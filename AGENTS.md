@@ -414,7 +414,12 @@ Current state of the work:
   docs into re-pushes-of-baked (delete; they are often DEGRADED
   re-extractions — their pushed law copy: visual-order, no codex, 543 vs
   233 chunks) vs genuinely-new (keep — their tarif-2026.md). Tests:
-  SufficiencyBridgeTest 9, DiagBridgeTest 5. Demo E2E limits documented
+  SufficiencyBridgeTest 9, DiagBridgeTest 5. LIVE VERIFIED (run
+  36996279416, tag real-test-relcap-20261002, SUCCESS): on the tiktoken-
+  chunked live arm the scaled cap FIXED a live false refusal — q42 left
+  the disagreement list (FR 4->3, agree 0.86->0.88, refused-before-model
+  10->9, كافٍ 37->38) with FS unchanged at 3 (zero new false sufficiency);
+  targets identical. Demo E2E limits documented
   (stub embedder cannot cross scripts in retrieval — the decisive check is
   the owner's server; their /search reaches المرابحة 5/5).
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
