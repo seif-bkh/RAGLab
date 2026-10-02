@@ -154,8 +154,10 @@ return `409 ingest_in_progress`.
 
 ### 2.9 Understanding & sufficiency layers (1.3.0 — env-gated, additive-only)
 
-Three independent service-side switches; none changes a pre-existing field,
-all default **off**:
+Three independent service-side switches; none changes a pre-existing field.
+**Owner activation 2026-10-02** («شغلها», after the measured trial in
+audits/PHASE7_EXPERIMENTS.md): the first two now default **on** and can be
+turned off with `0`; `RELATIONAL_EXPANSION_ENABLED` stays off:
 
 | Env var | Effect when `1` |
 |---|---|
@@ -166,7 +168,8 @@ all default **off**:
 Worked sequence (fields + audit):
 
 ```
-# 1) ask with the fields on (service started with SUFFICIENCY_FIELDS_ENABLED=1)
+# 1) ask with the fields on (the default since the 2026-10-02 activation;
+#    SUFFICIENCY_FIELDS_ENABLED=0 restores the pre-activation response)
 POST /answer  {"question": "ما هي عملية المرابحة على معنى القانون عدد 48 لسنة 2016؟"}
 → {..., "evidence_status": "كافٍ", "requirements_covered": ["definition_or_purpose_unit"],
      "requirements_missing": []}

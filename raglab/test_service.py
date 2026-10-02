@@ -94,6 +94,11 @@ class ServiceTest(unittest.TestCase):
             "NVIDIA_EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
             "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
             "RESULTS_DIR": cls.tmp,
+            # Pre-activation contract pinned: this suite tests retrieval/
+            # citation behavior; the owner-activated default (2026-10-02)
+            # has its own dedicated test below.
+            "SUFFICIENCY_FIELDS_ENABLED": False,
+            "ANSWER_SUFFICIENCY_COMMITMENT": False,
         }
         # The injected generator must share the service's lab config (same
         # cache paths), so build it from the same profile + overrides.
@@ -207,14 +212,77 @@ class ServiceTest(unittest.TestCase):
                                       "include_excerpts": True}).json()
         self.assertIn("text", body["sources"][0])
 
-    def test_answer_has_no_sufficiency_fields_by_default(self):
-        # §2.7 freeze regression: SUFFICIENCY_FIELDS_ENABLED defaults OFF —
-        # the /answer response must not gain any Phase-5 item-5 field.
-        body = self.client.post("/answer", json={"question": QUESTION}).json()
-        self.assertEqual(body["status"], "answered", body)
-        for field in ("evidence_status", "requirements_covered",
-                      "requirements_missing", "conflicts", "refusal_reason"):
-            self.assertNotIn(field, body)
+    def test_answer_sufficiency_fields_follow_the_activation_default(self):
+        # Owner activation 2026-10-02 («شغلها»): with NO gate overrides the
+        # service runs with the activated defaults (fields + commitment ON);
+        # the documented opt-out restores the pre-activation response exactly.
+        # The tiny English corpus cannot satisfy the Arabic shape patterns, so
+        # sufficiency is mocked كافٍ here (same technique as
+        # SufficiencyCommitmentTest) — the wiring is what is under test.
+        from unittest.mock import patch
+        fake = {"state": "كافٍ", "reason": "all requirements covered",
+                "requirements": [{"req": "definition_or_purpose_unit",
+                                  "covered": True, "by": ["note.md::chunk_0001"]}],
+                "missing": [], "guided_rounds": []}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "note.md").write_text(CORPUS, encoding="utf-8")
+            profile = _service_profile(root)
+            overrides = {
+                "CHROMA_DIR": root / "chroma",
+                "EMBEDDING_CACHE_PATH": root / "emb.json",
+                "NVIDIA_EMBEDDING_CACHE_PATH": root / "emb.json",
+                "ANSWER_CACHE_PATH": root / "answers.json",
+                "RESULTS_DIR": root,
+            }
+            local = build_lab_config(profile)
+            for key, value in overrides.items():
+                setattr(local, key, value)
+            generator = AnswerGenerator(local, client=_FakeChatClient(),
+                                        approved_models=(PROFILE_MODEL,))
+            client = TestClient(service.create_app(
+                profile, generator=generator, allow_profile_switch=False,
+                config_overrides=overrides))
+            client.post("/ingest")
+            deadline = time.monotonic() + 60
+            status = {"state": "running"}
+            while time.monotonic() < deadline:
+                status = client.get("/ingest/status").json()
+                if status["state"] != "running":
+                    break
+                time.sleep(0.2)
+            self.assertEqual(status["state"], "done", status)
+            with patch("sufficiency.check", return_value=fake):
+                body = client.post("/answer", json={"question": QUESTION}).json()
+            self.assertEqual(body["status"], "answered", body)
+            self.assertIn("evidence_status", body)
+            self.assertIn("requirements_covered", body)
+
+            opt = dict(overrides)
+            opt["SUFFICIENCY_FIELDS_ENABLED"] = False
+            opt["ANSWER_SUFFICIENCY_COMMITMENT"] = False
+            local2 = build_lab_config(profile)
+            for key, value in opt.items():
+                setattr(local2, key, value)
+            generator2 = AnswerGenerator(local2, client=_FakeChatClient(),
+                                         approved_models=(PROFILE_MODEL,))
+            client2 = TestClient(service.create_app(
+                profile, generator=generator2, allow_profile_switch=False,
+                config_overrides=opt))
+            client2.post("/ingest")
+            deadline = time.monotonic() + 60
+            status = {"state": "running"}
+            while time.monotonic() < deadline:
+                status = client2.get("/ingest/status").json()
+                if status["state"] != "running":
+                    break
+                time.sleep(0.2)
+            self.assertEqual(status["state"], "done", status)
+            body = client2.post("/answer", json={"question": QUESTION}).json()
+            self.assertEqual(body["status"], "answered", body)
+            for field in ("evidence_status", "requirements_covered",
+                          "requirements_missing", "conflicts", "refusal_reason"):
+                self.assertNotIn(field, body)
 
     def test_answer_greeting_short_circuits_without_model(self):
         body = self.client.post("/answer", json={"question": "bonjour"}).json()
@@ -322,6 +390,7 @@ class SufficiencyFieldsTest(unittest.TestCase):
             "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
             "RESULTS_DIR": cls.tmp,
             "SUFFICIENCY_FIELDS_ENABLED": True,   # the item-5 gate ON
+            "ANSWER_SUFFICIENCY_COMMITMENT": False,  # pinned: fields-only suite
         }
         local = build_lab_config(cls.profile)
         for key, value in overrides.items():
@@ -574,6 +643,11 @@ class AdversarialGateTest(unittest.TestCase):
             "NVIDIA_EMBEDDING_CACHE_PATH": tmp / "emb.json",
             "ANSWER_CACHE_PATH": tmp / "answers.json",
             "RESULTS_DIR": tmp,
+            # Pre-activation contract pinned: the attack must REACH the model
+            # and the citation gate; the owner-activated commitment default
+            # (2026-10-02) would refuse these questions even earlier.
+            "SUFFICIENCY_FIELDS_ENABLED": False,
+            "ANSWER_SUFFICIENCY_COMMITMENT": False,
         }
         local = build_lab_config(profile)
         for key, value in overrides.items():
@@ -1131,7 +1205,10 @@ class OutputGuardsTest(unittest.TestCase):
                      "EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
                      "NVIDIA_EMBEDDING_CACHE_PATH": cls.tmp / "emb.json",
                      "ANSWER_CACHE_PATH": cls.tmp / "answers.json",
-                     "RESULTS_DIR": cls.tmp}
+                     "RESULTS_DIR": cls.tmp,
+                     # Pre-activation contract pinned (owner activation 2026-10-02)
+                     "SUFFICIENCY_FIELDS_ENABLED": False,
+                     "ANSWER_SUFFICIENCY_COMMITMENT": False}
         sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
         sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
 
@@ -1481,7 +1558,10 @@ class ProviderFailureTest(unittest.TestCase):
                      "EMBEDDING_CACHE_PATH": tmp / "emb.json",
                      "NVIDIA_EMBEDDING_CACHE_PATH": tmp / "emb.json",
                      "ANSWER_CACHE_PATH": tmp / "answers.json",
-                     "RESULTS_DIR": tmp}
+                     "RESULTS_DIR": tmp,
+                     # Pre-activation contract pinned (owner activation 2026-10-02)
+                     "SUFFICIENCY_FIELDS_ENABLED": False,
+                     "ANSWER_SUFFICIENCY_COMMITMENT": False}
         sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
         sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
         try:
@@ -1631,7 +1711,10 @@ class InternalErrorNeverPlainTextTest(unittest.TestCase):
                      "EMBEDDING_CACHE_PATH": tmp / "emb.json",
                      "NVIDIA_EMBEDDING_CACHE_PATH": tmp / "emb.json",
                      "ANSWER_CACHE_PATH": tmp / "answers.json",
-                     "RESULTS_DIR": tmp}
+                     "RESULTS_DIR": tmp,
+                     # Pre-activation contract pinned (owner activation 2026-10-02)
+                     "SUFFICIENCY_FIELDS_ENABLED": False,
+                     "ANSWER_SUFFICIENCY_COMMITMENT": False}
         sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
         sys.modules["sentence_transformers"].SentenceTransformer = _FakeSentenceTransformer
         try:

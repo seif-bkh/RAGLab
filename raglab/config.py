@@ -276,19 +276,25 @@ RERANK_ENABLED = os.getenv("RERANK_ENABLED", "1") == "1"
 # Default OFF — activation is the owner's data-driven gate (the plan's item 6).
 RELATIONAL_EXPANSION_ENABLED = os.getenv("RELATIONAL_EXPANSION_ENABLED", "0") == "1"
 
-# Phase-5 item 5: optional sufficiency fields on POST /answer (additive-only,
-# §2.7 freeze). OFF by default — flipping it to "1" ADDS evidence_status /
-# requirements_covered / requirements_missing / conflicts / refusal_reason to
-# the response; "0" keeps the response byte-identical to today's.
-SUFFICIENCY_FIELDS_ENABLED = os.getenv("SUFFICIENCY_FIELDS_ENABLED", "0") == "1"
+# Phase-5 item 5: sufficiency fields on POST /answer (additive-only, §2.7).
+# ACTIVATED BY THE OWNER 2026-10-02 (directive «شغلها») after the measured
+# trial (audits/PHASE7_EXPERIMENTS.md: local 20-question trial zero false
+# refusals; live run 36939129036 refused-before-model 11/50 with the
+# refusals concentrated on OOS + retrieval-miss questions). Default ON:
+# /answer carries evidence_status / requirements_covered /
+# requirements_missing / conflicts / refusal_reason. Setting
+# SUFFICIENCY_FIELDS_ENABLED=0 restores the pre-activation response exactly.
+SUFFICIENCY_FIELDS_ENABLED = os.getenv("SUFFICIENCY_FIELDS_ENABLED", "1") == "1"
 
-# Phase-6 item 2: the answer's COMMITMENT to the sufficiency state (default
-# OFF — activation is the owner's). ON means: an insufficient question is
-# refused BEFORE any model call (refusal tied to evidence absence, with a
-# referral listing the missing requirements); a PARTIALLY covered question is
-# downgraded — one bounded regeneration answers ONLY the covered
-# micro-questions and the response is tagged partial.
-ANSWER_SUFFICIENCY_COMMITMENT = os.getenv("ANSWER_SUFFICIENCY_COMMITMENT", "0") == "1"
+# Phase-6 item 2: the answer's COMMITMENT to the sufficiency state.
+# ACTIVATED BY THE OWNER 2026-10-02 (directive «شغلها», same trial data as
+# above). ON means: an insufficient question is refused BEFORE any model
+# call (refusal tied to evidence absence, with a referral listing the
+# missing requirements); a PARTIALLY covered question is downgraded — one
+# bounded regeneration answers ONLY the covered micro-questions and the
+# response is tagged partial. ANSWER_SUFFICIENCY_COMMITMENT=0 restores the
+# always-answer behavior.
+ANSWER_SUFFICIENCY_COMMITMENT = os.getenv("ANSWER_SUFFICIENCY_COMMITMENT", "1") == "1"
 
 # Experiment 3 (2026-10-01): per-micro retrieval & fusion — retrieval runs
 # per decomposed micro-question and RRF-fuses the pools. Default OFF;

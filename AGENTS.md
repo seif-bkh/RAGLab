@@ -277,6 +277,14 @@ Current state of the work:
   the commands — a rerun can pass while the original step failed (and a
   1400-char tail drowns in trailing store logs). It now tees the actual
   step output and reports summary + FAIL/ERROR detail + tail.
+- **OWNER ACTIVATION 2026-10-02 (directive «شغلها»)**: SUFFICIENCY_FIELDS_ENABLED
+  and ANSWER_SUFFICIENCY_COMMITMENT now default ON in config.py (env "0"
+  restores the pre-activation response; PER_MICRO stays OFF — rejected by
+  data; RELATIONAL_EXPANSION stays OFF — neutral). Protocol executed:
+  flip -> full offline gate EXIT=0 (64 service + 364 total; suites that test
+  other behaviors pin the pre-activation gates explicitly in their
+  overrides) -> live verification run on tag real-test-activation-20261002.
+  COOKBOOK §2.9 and PHASE7_DECISION_BRIEF decision-4 updated.
 - Current heads: cf8224f (arena/01a0d2f5-raglab, both ci.yml green);
   the real-test tag real-test-experiments-20261001 stays on fed7b9d —
   the measured experiments state (nothing after it touches the measured
