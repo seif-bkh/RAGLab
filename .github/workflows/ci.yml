@@ -34,22 +34,26 @@ jobs:
 
       - name: Offline regression tests (no API, stubbed HF provider)
         run: |
-          python tests_offline.py
-          python -m unittest -v test_nvidia_pipeline test_hard_harness test_service
+          set -o pipefail
+          python tests_offline.py 2>&1 | tee /tmp/offline_main.txt
+          python -m unittest -v test_nvidia_pipeline test_hard_harness test_service 2>&1 | tee -a /tmp/offline_main.txt
         working-directory: raglab
 
       # This sandbox cannot fetch workflow logs, and that cost a whole round trip once already: a
-      # failure-only annotation carrying the reproduction is readable through the API instead. It re-runs
-      # the same two offline commands, so it spends nothing and changes nothing.
+      # failure-only annotation carrying the ACTUAL captured output is readable through the API
+      # instead. (An earlier version re-ran the commands; the rerun could pass while the original
+      # step failed, hiding the real cause — this one reports the captured output.)
       - name: Report which offline test failed, for a runner whose logs cannot be fetched
         if: failure()
         run: |
           cd raglab
           set +e
-          { python tests_offline.py; python -m unittest test_nvidia_pipeline test_hard_harness test_service; } \
-            > /tmp/offline.txt 2>&1
-          message=$(tail -c 1400 /tmp/offline.txt | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
-          echo "::error::offline reproduction: $message"
+          summary=$(grep -aE "^(FAIL|ERROR:|Ran |OK$|FAILED)" /tmp/offline_main.txt | tail -30)
+          detail=$(grep -aA 15 -E "^(FAIL|ERROR:)" /tmp/offline_main.txt | tail -c 1800)
+          tail_full=$(tail -c 900 /tmp/offline_main.txt)
+          message=$(printf 'summary:\n%s\n----detail----\n%s\n----tail----\n%s' "$summary" "$detail" "$tail_full" \
+            | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+          echo "::error::offline failure: $message"
         shell: bash
 
       - name: Offline inspect (load + chunk only, zero API calls)
