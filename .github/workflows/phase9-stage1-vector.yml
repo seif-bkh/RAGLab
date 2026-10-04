@@ -1,0 +1,131 @@
+name: Phase 9 Stage 1 vector retrieval
+
+# Retrieval-only validation for the provisional Stage-1 evidence cases.
+# Manual dispatch is intentional: it embeds the adopted corpus through the
+# NVIDIA API. It never calls the answer-generation provider.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase9-stage1-vector
+  cancel-in-progress: false
+
+jobs:
+  vector-retrieval:
+    name: Stage 1 vector retrieval — no answer generation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: raglab/requirements.txt
+
+      - name: Install core dependencies
+        working-directory: raglab
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Fail fast if the NVIDIA embedding secret is unavailable
+        shell: bash
+        run: |
+          if [ -z "${NVIDIA_API_KEY:-}" ]; then
+            echo "::error::Actions secret NVIDIA_API_KEY is empty; no model calls were made."
+            exit 1
+          fi
+          echo "NVIDIA_API_KEY present (value not displayed)."
+
+      - name: Ingest the adopted corpus once (restructure)
+        working-directory: raglab
+        env:
+          CHUNKING_MODE: restructure
+          LEXICON_ENABLED: "0"
+          QUERY_TRANSLATION_ENABLED: "0"
+          RELATIONAL_EXPANSION_ENABLED: "0"
+          PER_MICRO_RETRIEVAL_ENABLED: "0"
+          RERANK_ENABLED: "0"
+        run: |
+          set -o pipefail
+          mkdir -p results/phase9_stage1
+          python main.py ingest --reset --skip-sanity-check \
+            --data-dir ../docs --data-dir data \
+            2>&1 | tee /tmp/phase9_stage1_ingest.log
+          cp /tmp/phase9_stage1_ingest.log results/phase9_stage1/ingest.log
+
+      - name: Build an isolated evaluator view of evidence-bearing cases
+        working-directory: raglab
+        run: python audits/PHASE9_STRUCTURE/build_stage1_vector_questions.py
+
+      - name: Evaluate dense vector retrieval (reranker off)
+        working-directory: raglab
+        env:
+          CHUNKING_MODE: restructure
+          LEXICON_ENABLED: "0"
+          QUERY_TRANSLATION_ENABLED: "0"
+          RELATIONAL_EXPANSION_ENABLED: "0"
+          PER_MICRO_RETRIEVAL_ENABLED: "0"
+          RERANK_ENABLED: "0"
+        run: |
+          set -o pipefail
+          python main.py evaluate --skip-sanity-check --no-translation \
+            --top-k 20 --questions results/phase9_stage1/stage1_vector_questions.json \
+            2>&1 | tee /tmp/phase9_stage1_vector_only.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/phase9_stage1/stage1_vector_only.json
+
+      - name: Evaluate deployed vector retrieval (deterministic reranker on)
+        working-directory: raglab
+        env:
+          CHUNKING_MODE: restructure
+          LEXICON_ENABLED: "0"
+          QUERY_TRANSLATION_ENABLED: "0"
+          RELATIONAL_EXPANSION_ENABLED: "0"
+          PER_MICRO_RETRIEVAL_ENABLED: "0"
+          RERANK_ENABLED: "1"
+        run: |
+          set -o pipefail
+          python main.py evaluate --skip-sanity-check --no-translation \
+            --top-k 20 --questions results/phase9_stage1/stage1_vector_questions.json \
+            2>&1 | tee /tmp/phase9_stage1_vector_default.log
+          newest=$(ls -t results/eval_*.json | head -1)
+          cp "$newest" results/phase9_stage1/stage1_vector_default.json
+
+      - name: Publish concise results
+        if: always()
+        working-directory: raglab
+        shell: bash
+        run: |
+          set +e
+          python audits/PHASE9_STRUCTURE/summarize_stage1_vector.py \
+            | tee /tmp/phase9_stage1_summary.md
+          if [ -f results/phase9_stage1/stage1_vector_summary.md ]; then
+            cat results/phase9_stage1/stage1_vector_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          msg=$(grep '^ANNO| phase9-stage1-vector | ' /tmp/phase9_stage1_summary.md | tail -1)
+          if [ -n "$msg" ]; then
+            msg=${msg#ANNO| phase9-stage1-vector | }
+            escaped=$(python -c 'import sys; s=sys.stdin.read(); print(s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"), end="")' <<< "$msg")
+            echo "::warning::phase9-stage1-vector | $escaped"
+          else
+            echo "::warning::phase9-stage1-vector | no evaluation summary available"
+          fi
+
+      - name: Upload retrieval-only artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase9-stage1-vector-retrieval
+          if-no-files-found: warn
+          path: |
+            raglab/results/phase9_stage1/stage1_vector_questions.json
+            raglab/results/phase9_stage1/stage1_vector_only.json
+            raglab/results/phase9_stage1/stage1_vector_default.json
+            raglab/results/phase9_stage1/stage1_vector_summary.md
+            raglab/results/phase9_stage1/ingest.log
