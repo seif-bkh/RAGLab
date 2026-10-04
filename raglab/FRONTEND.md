@@ -3,7 +3,12 @@
 **Audience:** the fullstack team building the app that drives this agent.
 **Behavior truth:** `raglab/CONTRACT.md` (endpoints, states, errors). This doc
 maps every capability to screens, components and UX rules — the reference
-client is `raglab/local_front.py` (its 14 menus = your screens).
+client is `raglab/local_front.py` (its 15 menus = your screens).
+
+**Written against service `1.4.0`** (the version `GET /health` and
+`GET /config` report). Read `GET /config` at boot: it names the version, the
+active models, what is editable, the exact call behind every mutation
+(`capabilities`) and the doc set (`docs`) — never hard-code any of it.
 
 The agent is **fully controllable over HTTP**: models, chunking, retrieval,
 corpus, API keys, document feed, indexing, evaluations. Nothing below needs a
@@ -34,6 +39,10 @@ with its side effects — feed that to whoever builds the Settings screens.
 | embedding sanity check | **Settings → API keys → Test** | `POST /embeddings/sanity` |
 | evaluate a question set | **Evaluations** | `POST /evaluate` |
 | diagnostics | **Evaluations → Diagnostics** | `/diagnostics/*` |
+| chunk browser | **Retrieval lab → Stored chunks** (paginated list + full-chunk view: text, metadata, neighbours, overlap) | `GET /chunks?source=&limit=1..100&offset=`, `GET /chunks/{chunk_id}` |
+| request trail | **Evaluations → Request trail** (newest first; every `/answer` + `/search` with its evidence state) | `GET /audit?limit=1..500` |
+| structured legal numbers | **Retrieval lab → Numbers** (filter by unit / kind) | `GET /numbers?unit_id=&kind=` |
+| *(bootstrap)* | **App boot + status bar** (version, models, dimension, editability, capabilities) | `GET /config`, `GET /health` |
 
 ## 2. Shell & navigation
 
@@ -71,6 +80,33 @@ last error). During an ingest the whole app enters "sealed" mode (§4.3).
   styling, never red/error — show `answer` + the reason taxonomy, and the
   collapsible "what the model said, not accepted" from `raw_preview`), 
   **greeting** (plain bubble, hide the citation UI).
+* **Evidence state — on by default (`SUFFICIENCY_FIELDS_ENABLED=1`).** Every
+  answered/refused payload that retrieved anything also carries
+  `evidence_status` (`كافٍ` / `غير كافٍ` / `متعارض`), `requirements_covered`,
+  `requirements_missing` and, when sources disagree, `conflicts`. Render it as
+  one badge + two chip rows (covered / missing) — it is the user's trust
+  signal, not a debug field. A `غير كافٍ` refusal additionally carries
+  `refusal_reason` (which declared requirement lacked evidence) and a
+  `referral` `{missing_requirements, clarifications}` — show both, and never
+  auto-retry. `partial: true` means only the covered micro-questions were
+  answered: show `answered_requirements` / `unanswered_requirements` as the
+  honest scope of the reply. All of these are additive — `.get()`-guard them
+  so an opted-out service (`=0`) renders exactly as before.
+* **Demand-interrogation disclosure — on by default since `1.4.0`
+  (`REPHRASE_INTERROGATION_ENABLED=1`).** A practical/non-technical question
+  the corpus cannot answer as asked is re-expressed into the nearest technical
+  question (ONE bounded model call) and the payload then adds three fields:
+  `understood_as` (the paraphrase actually evaluated), `original_question`
+  (the user's words, verbatim — never hidden) and `interrogation`
+  `{classification, topics, requirements, confidence, seconds}`. Render a
+  disclosure strip **above** the answer: "Understood your request as: …",
+  `topics` as chips (they are verbatim corpus topics), and the cost as
+  "interrogation Ns" — `interrogation.seconds` is separate from the top-level
+  `seconds`, which stays answer-generation-only (a refusal through this path
+  legitimately shows `seconds: 0.0`). On an **answered** payload the evidence
+  fields above describe the PARAPHRASE and no `refusal_reason` is attached; on
+  a **refused** one they describe the original question and `referral`
+  is enriched with the nearest corpus topics.
 * Badges: `cached` ("served from cache"), `inference_performed=false`
   ("answered without an AI call"), `seconds`.
 * Chat = client-side history; each turn is an independent `/answer` call.
@@ -168,6 +204,15 @@ last error). During an ingest the whole app enters "sealed" mode (§4.3).
 * Diagnostics: harness50 (offline, up to 900 s — background job in YOUR
   backend with a long timeout; show `output_tail` lines as a console) and
   the xKiro catalog viewer.
+* **Request trail** (`GET /audit?limit=1..500`, free, newest first): the
+  operational log of every `/answer` + `/search` — `trace_id`, UTC `ts`, the
+  **PII-scrubbed** question, `status`/`reason`, `evidence_status`,
+  `understood_as` + `interrogation_seconds` when the request was re-expressed,
+  model, claims/sources counts, `retrieved`, `validation_ok`, `seconds`,
+  `error`. Render as a table with the evidence state as a colour chip and a
+  filter by status; it is the fastest way for an operator to see what the
+  product actually did. Retention is bounded (`AUDIT_LOG_MAX_ENTRIES`,
+  default 500) — never present it as a complete history.
 
 ## 4. Cross-cutting rules (where RAG consoles go wrong)
 
@@ -181,10 +226,20 @@ last error). During an ingest the whole app enters "sealed" mode (§4.3).
 | otherwise | everything enabled |
 
 ### 4.2 Refusals are 200s — never render them as errors
-`status:"refused"` with a reason (`insufficient_evidence`, `no_context`,
-`invalid_output`, `unsourced_number`, `private_or_live_request`) is the
-product working. Copy per reason, calm styling, no auto-retry (they are
-deterministic for the same question + corpus).
+`status:"refused"` with a reason (`evidence_insufficient`,
+`insufficient_evidence`, `no_context`, `invalid_output`, `unsourced_number`,
+`private_or_live_request`) is the product working. Copy per reason, calm
+styling, no auto-retry (they are deterministic for the same question +
+corpus).
+
+`evidence_insufficient` is now the **most common** one — it is the
+pre-generation commitment refusing *before* any model call because a declared
+evidence requirement has nothing in the corpus (`seconds` is then `0.0`,
+`model` is `"(none — refused before generation)"`). It is the only refusal
+that carries `refusal_reason` + `referral` (§3.1) and, since `1.4.0`, the
+interrogation disclosure when the request was re-expressed. Do not confuse it
+with `insufficient_evidence`, which means the model did answer but no claim
+survived the citation gate.
 
 ### 4.3 Single writer: sealed mode during ingest
 While `ingest.state == "running"`: disable Ask, Retrieval search, Settings

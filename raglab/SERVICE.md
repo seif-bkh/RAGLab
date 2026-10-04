@@ -48,9 +48,10 @@ python -m uvicorn service:app --host 0.0.0.0 --port 8000
 ```
 
 Test it from another terminal — `local_front.py` is the console's twin over
-REST: same 13 menus as `app.py` (status/doctor, providers & models, API keys,
+REST: `app.py`'s 13 menus (status/doctor, providers & models, API keys,
 inspect, chunk search, sanity, ingest, retrieval, answer, chat, evaluate,
-settings, diagnostics), every action an endpoint call. It imports nothing
+settings, diagnostics) plus the two the service adds — documents and the
+chunk browser (15 in total), every action an endpoint call. It imports nothing
 from the lab (pure stdlib HTTP), so it exercises exactly the boundary another
 microservice would:
 

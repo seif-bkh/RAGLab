@@ -3,6 +3,14 @@
 _الإصدار المسلَّم: الوسم `deploy-handoff-20261002` — كل الأرقام والمسارات أدناه تشير إليه._
 _هذه الوثيقة self-contained: لا تحتاجون شيئًا آخر غيرها لتشغيل الخدمة. المرجع التفصيلي الكامل عند الحاجة: `raglab/SERVICE.md`._
 
+> **تنبيه إصدار (2026-10-04):** الوسم المسلَّم أعلاه يسبق إغلاق المرحلة 8.
+> أحدث خدمة في المستودع هي **`1.4.0`** (الكوميت `07a2f82` على فرع العمل
+> `arena/01a0fcfb-raglab` — لم يُوسم بعد) وتضيف حقول الإفصاح
+> عن «فهم الطلب» على `POST /answer` — معلّمة أدناه بـ **(1.4.0)** — وهي
+> مفعّلة افتراضيًا (`REPHRASE_INTERROGATION_ENABLED=1`). الوسم المسلَّم لا
+> يحتويها، فلا تتوقعوها من حاوية مبنية عليه؛ تصلكم مع الوسم التالي. العقد
+> الكامل: `raglab/CONTRACT.md` §3.10 و§3.17، ومخطط الواجهة: `raglab/FRONTEND.md`.
+
 ---
 
 ## 1) ما الذي ستشغلونه
@@ -63,6 +71,7 @@ curl -H "X-Service-Token: $RAGLAB_SERVICE_TOKEN" http://localhost:8000/health
 | `RAGLAB_CORS_ORIGINS` | **قيّدوها على أصل الواجهة عندكم** (مثال: `https://front.example.tn`) | `*` |
 | `SUFFICIENCY_FIELDS_ENABLED` | حالة الكفاية على كل جواب (مفعّلة بقرار المالك 2026-10-02) | `1` |
 | `ANSWER_SUFFICIENCY_COMMITMENT` | الامتناع قبل النموذج عند غياب الدليل + الإحالة (مفعّلة) | `1` |
+| `REPHRASE_INTERROGATION_ENABLED` | **(1.4.0)** إعادة التعبير عن سؤال عملي غير كافٍ كأقرب سؤال تقني (نداء واحد محدود + إفصاح كامل `understood_as`/`interrogation`) — مفعّلة بقرار المالك 2026-10-02؛ `0` يعيد الرفض المجرد حرفيًا | `1` |
 | `RAGLAB_ALLOW_PROFILE_SWITCH` | `POST /profile` لتبديل النماذج وقت التشغيل (تحت التوكن) | `1` في compose |
 | `RAGLAB_DATA_DIRS` | مجلد المدونة (داخل الصورة `/app/docs`) | جاهز |
 
@@ -73,6 +82,17 @@ curl -H "X-Service-Token: $RAGLAB_SERVICE_TOKEN" http://localhost:8000/health
   - `status: "answered"` → معه `evidence_status` (كافٍ/غير كافٍ…)، `requirements_covered/missing`، و`claims` باقتباساتها الموثقة.
   - `status: "refused"` مع `reason: "evidence_insufficient"` → **هذا سلوك صحيح مقصود** (خارج المدونة): اعرضوا `refusal_reason` و`referral`. لا إعادة محاولة تلقائية.
   - `status: "greeting"` → تحيات محلية بلا نموذج.
+  - **(1.4.0) الإفصاح عن فهم الطلب** — يُضاف إلى الحمولتين (answered وrefused)
+    عندما يُعاد التعبير عن سؤال عملي/غير تقني كسؤال تقني أقرب للمدونة (نداء
+    نموذجي واحد محدود): ‏`understood_as` (الصياغة التي قُيّمت فعلًا)،
+    `original_question` (سؤال المستخدم حرفيًا — لا يُخفى أبدًا)، و`interrogation`
+    `{classification, topics, requirements, confidence, seconds}`. اعرضوه كسطر
+    إفصاح فوق الجواب («فُهم طلبك كـ…» + المواضيع كرقائق)، وكلفة الاستنطاق
+    `interrogation.seconds` منفصلة عن `seconds` العلوي (الذي يبقى زمن التوليد
+    فقط — رفضٌ عبر هذا المسار يُظهر `seconds: 0.0` بشكل صحيح). في حمولة
+    `answered` تصف حقول الكفاية حكم **الصياغة** ولا يُلحق `refusal_reason`؛ وفي
+    `refused` تبقى حقائق السؤال الأصلي مع إحالة أغنى. الحقول إضافية بحتة —
+    `REPHRASE_INTERROGATION_ENABLED=0` يزيلها كلها.
 - **المصادقة من الواجهة**: تروسة `X-Service-Token` على كل طلب (تُترك على preflight فقط — الخدمة تعفي OPTIONS). من `local_front`: ‏`--token <القيمة>` أو `export RAGLAB_SERVICE_TOKEN=<القيمة>`.
 - **الاختبار الشامل جاهز**: `python local_front.py --base-url http://<host>:8000 --smoke` — طقم دخان كامل عبر HTTP (كل النقاط + اتساق الحقول الجديدة).
 - **لمراقبة السلوك الجديد من الواجهة**: ‏`--audit 20` (مسار الطلبات مع حالة الكفاية لكل طلب) و`--numbers` (الأرقام القانونية المنظمة مع معرفات الوحدات، مع مرشحات `--unit-id`/`--kind`).
@@ -99,7 +119,7 @@ curl -H "X-Service-Token: $RAGLAB_SERVICE_TOKEN" http://localhost:8000/health
 
 ## 8) ما الذي يتحقق تلقائيًا قبل وصول أي إصدار إليكم
 
-كل push يمر عبر: الطقم غير المتصل (373 فحصًا) + **بناء صورة الدوكر نفسها واستيراد وحداتها في CI** (`Docker image build + import smoke`). آخر حالة: أخضر على `84e63d8` فأحدث.
+كل push يمر عبر: الطقم غير المتصل — **531 فحصًا** (121 فحصًا في `tests_offline.py` + 410 اختبار وحدة عبر `test_nvidia_pipeline`/`test_hard_harness`/`test_service`، أحدها يشغّل طقم دخان الواجهة: 26 نداء HTTP حقيقيًا) — + **بناء صورة الدوكر نفسها واستيراد وحداتها في CI** (`Docker image build + import smoke`). آخر حالة مقاسة (2026-10-04 على `07a2f82`، خدمة `1.4.0`): ‏`./run_tests.sh --offline` → `EXIT=0` و`Ran 410 tests … OK`، وCI خضراء على نفس الكوميت.
 
 ---
 
