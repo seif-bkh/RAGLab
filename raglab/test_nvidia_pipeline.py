@@ -3364,16 +3364,26 @@ class ConceptVocabularyTest(unittest.TestCase):
 
     def test_a_mapped_boilerplate_term_cannot_anchor(self):
         """«حول» is what «كحول» normalizes to, and it is everywhere. The df
-        guard must keep it from manufacturing an anchor."""
-        df, sufficiency = self._corpus_df()
-        self.assertGreater(df.get("حول", 0), 0)
-        with patch.dict(sufficiency.CONCEPT_VOCABULARY,
-                        {"حانة": "كحول"}, clear=False):
+        guard must keep it from manufacturing an anchor.
+
+        The df here is SYNTHETIC on purpose. The first version of this test
+        read the real corpus, and CI failed it: at 339 chunks the cap is 30 and
+        df(حول)=33 is over it, but on CI's 858-chunk corpus the cap is 76 and
+        the same word falls UNDER it, so the guard correctly let it through and
+        the assertion inverted. The invariant is "over the cap cannot anchor",
+        not "this word is over the cap on whatever corpus happens to be here" —
+        so pin the invariant with a declared df, both sides of the cap."""
+        import sufficiency
+        hit = "نص يتحدث حول امور عامة فقط"
+        over = {"حول": sufficiency.CROSS_DF_MAX + 1}
+        under = {"حول": 3}
+        with patch.dict(sufficiency.CONCEPT_VOCABULARY, {"حانة": "كحول"}):
             self.assertEqual(sufficiency._concept_terms(self.BAR),
                              sufficiency._hit_terms("حول"))
-            self.assertFalse(sufficiency._anchors(
-                self.BAR, "نص يتحدث حول امور عامة فقط", df),
-                "a mapping onto boilerplate must not anchor")
+            self.assertFalse(sufficiency._anchors(self.BAR, hit, over),
+                             "a mapping onto boilerplate must not anchor")
+            self.assertTrue(sufficiency._anchors(self.BAR, hit, under),
+                            "the same mapping must anchor when distinctive")
 
     def test_gate_off_restores_the_previous_behavior_exactly(self):
         import sufficiency
