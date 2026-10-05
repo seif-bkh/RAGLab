@@ -165,14 +165,26 @@ class SufficiencyPassTrace:
                 if math.isfinite(float(value)):
                     score_key, score = key, round(float(value), 6)
                     break
+        rerank = hit.get("rerank") if isinstance(hit.get("rerank"), dict) else {}
+        rerank_score = rerank.get("score")
+        if (not isinstance(rerank_score, (int, float)) or isinstance(rerank_score, bool)
+                or not math.isfinite(float(rerank_score))):
+            rerank_score = None
+        else:
+            rerank_score = round(float(rerank_score), 6)
+        # The service's deterministic reranker reorders candidates but preserves
+        # their original retriever rank. Record both that rank and this pool position.
+        retrieval_rank = hit.get("rank")
         return {
-            "rank": hit.get("rank") if isinstance(hit.get("rank"), int) else position,
+            "input_position": position,
+            "retrieval_rank": retrieval_rank if isinstance(retrieval_rank, int) else None,
             "document": document,
             "heading": str(metadata.get("heading") or "")[:140] or None,
             "unit_id": str(metadata.get("unit_id") or "")[:140] or None,
             "chunk_id": str(chunk_id or "")[:220] or None,
             "score_key": score_key,
             "score": score,
+            "rerank_score": rerank_score,
         }
 
     @staticmethod
@@ -266,24 +278,41 @@ def _expected_documents(case: dict, by_id: dict[str, dict]) -> list[str]:
     return sorted(doc for doc in docs if doc and doc != "None")
 
 
+def _target_document_rank_maps(item: dict, expected_documents: list[str] | None = None
+                               ) -> tuple[dict, dict]:
+    expected = ((item.get("expected_documents")
+                 or list(item.get("retrieved_target_document_ranks") or {}))
+                if expected_documents is None else expected_documents)
+    positions, ranks = {}, {}
+    for index, hit in enumerate(item.get("hits") or [], start=1):
+        if not isinstance(hit, dict) or hit.get("document") not in expected:
+            continue
+        position = hit.get("input_position")
+        if not isinstance(position, int) or isinstance(position, bool):
+            # Older saved reports kept array order but not the explicit pool position.
+            position = index
+        rank = hit.get("retrieval_rank", hit.get("rank"))
+        if not isinstance(rank, int) or isinstance(rank, bool):
+            rank = None
+        document = hit["document"]
+        positions[document] = min(positions.get(document, position), position)
+        if rank is not None:
+            ranks[document] = min(ranks.get(document, rank), rank)
+    return positions, ranks
+
+
 def _enrich_pass_diagnostics(passes: list[dict], expected_documents: list[str]) -> list[dict]:
     enriched = []
     for item in passes:
         row = {key: item.get(key) for key in
                ("case_id", "pass", "query_sha256", "requested_top_k", "input_hit_count",
                 "hits", "sufficiency")}
-        hits = row.get("hits") or []
-        ranks = {}
-        for document in expected_documents:
-            matching = [hit.get("rank") for hit in hits
-                        if isinstance(hit, dict) and hit.get("document") == document
-                        and isinstance(hit.get("rank"), int)]
-            if matching:
-                ranks[document] = min(matching)
         row["expected_documents"] = list(expected_documents)
+        positions, ranks = _target_document_rank_maps(row, expected_documents)
+        row["retrieved_target_document_positions"] = positions
         row["retrieved_target_document_ranks"] = ranks
         row["retrieved_target_document_hit"] = (
-            bool(ranks) if expected_documents else None)
+            bool(positions) if expected_documents else None)
         enriched.append(row)
     return enriched
 
@@ -467,19 +496,25 @@ def _clip(value, limit: int) -> str:
 
 def _pass_summary(item: dict) -> dict:
     sufficiency = item.get("sufficiency") or {}
+    positions, ranks = _target_document_rank_maps(item)
     return {
         "pass": item.get("pass"),
         "requested_top_k": item.get("requested_top_k"),
         "input_hit_count": item.get("input_hit_count"),
-        "retrieved_target_document_hit": item.get("retrieved_target_document_hit"),
-        "retrieved_target_document_ranks": item.get("retrieved_target_document_ranks", {}),
+        "retrieved_target_document_hit": (
+            bool(positions) if item.get("expected_documents") else
+            item.get("retrieved_target_document_hit")),
+        "retrieved_target_document_positions": positions,
+        "retrieved_target_document_ranks": ranks,
         "sufficiency_state": sufficiency.get("state"),
-        "requirements_missing": (sufficiency.get("requirements_missing") or [])[:8],
+        "requirements_missing": list(dict.fromkeys(
+            sufficiency.get("requirements_missing") or []))[:8],
     }
 
 
 def _pass_annotation(case_id: str, item: dict) -> dict:
     sufficiency = item.get("sufficiency") or {}
+    target_positions, target_ranks = _target_document_rank_maps(item)
     requirements = []
     for row in (sufficiency.get("requirements") or [])[:3]:
         if not isinstance(row, dict):
@@ -503,20 +538,27 @@ def _pass_annotation(case_id: str, item: dict) -> dict:
         "pass": item.get("pass"),
         "requested_top_k": item.get("requested_top_k"),
         "input_hit_count": item.get("input_hit_count"),
-        "retrieved_target_document_hit": item.get("retrieved_target_document_hit"),
-        "retrieved_target_document_ranks": item.get("retrieved_target_document_ranks", {}),
+        "retrieved_target_document_hit": (
+            bool(target_positions) if item.get("expected_documents") else
+            item.get("retrieved_target_document_hit")),
+        "retrieved_target_document_positions": target_positions,
+        "retrieved_target_document_ranks": target_ranks,
         "sufficiency_state": sufficiency.get("state"),
         "sufficiency_reason": _clip(sufficiency.get("reason"), 160) or None,
-        "requirements_missing": [_clip(value, 64)
-                                 for value in (sufficiency.get("requirements_missing") or [])[:8]],
+        "requirements_missing": [_clip(value, 64) for value in list(dict.fromkeys(
+            sufficiency.get("requirements_missing") or []))[:8]],
         "requirements": requirements,
         "guided_rounds": guided_rounds,
         "hits": [{
-            "rank": hit.get("rank"),
+            "input_position": (hit.get("input_position")
+                               if isinstance(hit.get("input_position"), int) else position),
+            "retrieval_rank": hit.get("retrieval_rank", hit.get("rank")),
+            "rerank_score": hit.get("rerank_score"),
             "document": _clip(hit.get("document"), 90) or None,
             "heading": _clip(hit.get("heading"), 80) or None,
             "chunk_id": _clip(hit.get("chunk_id"), 120) or None,
-        } for hit in (item.get("hits") or [])[:5] if isinstance(hit, dict)],
+        } for position, hit in enumerate((item.get("hits") or [])[:5], start=1)
+            if isinstance(hit, dict)],
     }
 
 
@@ -656,18 +698,25 @@ def render_markdown(report: dict) -> str:
                     f"- `{diagnostic.get('pass')}`: pool "
                     f"`{diagnostic.get('input_hit_count')}`/"
                     f"`{diagnostic.get('requested_top_k')}`; retrieved target document "
-                    f"`{diagnostic.get('retrieved_target_document_hit')}` at "
-                    f"`{diagnostic.get('retrieved_target_document_ranks')}`; "
+                    f"`{diagnostic.get('retrieved_target_document_hit')}` at input positions "
+                    f"`{diagnostic.get('retrieved_target_document_positions')}` "
+                    f"(retrieval ranks `{diagnostic.get('retrieved_target_document_ranks')}`); "
                     f"sufficiency `{suff.get('state')}`, missing "
                     f"`{suff.get('requirements_missing', [])}`, reason "
                     f"`{suff.get('reason')}`.")
-                for hit in (diagnostic.get("hits") or [])[:5]:
+                for position, hit in enumerate((diagnostic.get("hits") or [])[:5], start=1):
                     location = " — ".join(filter(None, [hit.get("document"),
                                                          hit.get("heading"),
                                                          hit.get("chunk_id")]))
-                    score = (f" ({hit.get('score_key')}={hit.get('score')})"
+                    input_position = hit.get("input_position", position)
+                    retrieval_rank = hit.get("retrieval_rank", hit.get("rank"))
+                    score = (f" {hit.get('score_key')}={hit.get('score')}"
                              if hit.get("score") is not None else "")
-                    lines.append(f"  - rank `{hit.get('rank')}` `{location}`{score}")
+                    rerank = (f" rerank={hit.get('rerank_score')}"
+                              if hit.get("rerank_score") is not None else "")
+                    lines.append(
+                        f"  - input position `{input_position}`, retrieval rank "
+                        f"`{retrieval_rank}`{score}{rerank} `{location}`")
         if row.get("understood_as"):
             inter = row.get("interrogation") or {}
             lines.extend([

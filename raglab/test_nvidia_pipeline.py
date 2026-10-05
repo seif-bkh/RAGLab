@@ -3257,7 +3257,8 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
         self.assertEqual([row["pass"] for row in passes],
                          ["original", "after_interrogation"])
         self.assertEqual(passes[0]["hits"][0]["document"], "Guide.docx")
-        self.assertEqual(passes[0]["hits"][0]["rank"], 1)
+        self.assertEqual(passes[0]["hits"][0]["input_position"], 1)
+        self.assertEqual(passes[0]["hits"][0]["retrieval_rank"], 1)
         self.assertEqual(passes[1]["sufficiency"]["state"], "كافٍ")
         self.assertEqual(passes[0]["sufficiency"]["requirements_missing"],
                          ["wide_evidence"])
@@ -3268,16 +3269,18 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
         probe = self._probe()
         passes = probe._enrich_pass_diagnostics([
             {"pass": "original", "hits": [
-                {"rank": 1, "document": "Other.pdf"},
-                {"rank": 2, "document": "Guide.docx"}],
+                {"input_position": 1, "retrieval_rank": 1, "document": "Other.pdf"},
+                {"input_position": 2, "retrieval_rank": 14, "document": "Guide.docx"}],
              "sufficiency": {"state": "غير كافٍ"}},
             {"pass": "after_interrogation", "hits": [
                 {"rank": 1, "document": "Other.pdf"}],
              "sufficiency": {"state": "غير كافٍ"}},
         ], ["Guide.docx"])
         self.assertTrue(passes[0]["retrieved_target_document_hit"])
-        self.assertEqual(passes[0]["retrieved_target_document_ranks"],
+        self.assertEqual(passes[0]["retrieved_target_document_positions"],
                          {"Guide.docx": 2})
+        self.assertEqual(passes[0]["retrieved_target_document_ranks"],
+                         {"Guide.docx": 14})
         self.assertFalse(passes[1]["retrieved_target_document_hit"])
 
     def test_pass_annotations_show_ranked_documents_without_exceeding_limit(self):
@@ -3323,8 +3326,11 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
         self.assertNotIn("hits", case_event["retrieval_sufficiency_passes"][0])
         self.assertEqual(case_event["retrieval_sufficiency_passes"][0]
                          ["retrieved_target_document_ranks"], {document: 1})
+        self.assertEqual(case_event["retrieval_sufficiency_passes"][0]
+                         ["retrieved_target_document_positions"], {document: 1})
         self.assertEqual(len(pass_events), 2)
-        self.assertEqual(pass_events[0]["hits"][3]["rank"], 4)
+        self.assertEqual(pass_events[0]["hits"][3]["input_position"], 4)
+        self.assertEqual(pass_events[0]["hits"][3]["retrieval_rank"], 4)
         self.assertEqual(pass_events[0]["requirements"][0]["covering_chunk_ids"],
                          [hits[0]["chunk_id"]])
         self.assertEqual(pass_events[0]["guided_rounds"][0]["new_hit_count"], 5)
@@ -3429,7 +3435,8 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
                         ["retrieved_target_document_hit"])
         self.assertNotIn("hits", case["retrieval_sufficiency_passes"][0])
         self.assertEqual(pass_event["pass"], "original")
-        self.assertEqual(pass_event["hits"][1]["rank"], 2)
+        self.assertEqual(pass_event["hits"][1]["input_position"], 2)
+        self.assertEqual(pass_event["hits"][1]["retrieval_rank"], 2)
         self.assertEqual(answer["text"], "A grounded answer [S1]")
         self.assertEqual(evidence["evidence"][0]["quote"],
                          "Verbatim evidence quote.")
