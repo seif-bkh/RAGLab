@@ -34,7 +34,14 @@ from local_front import Api, DEFAULT_BASE_URL
 # diagnostic only needs the Arabic terms, and importing sufficiency here
 # would tie the client to the lab's version)
 BRIDGE_ARABIC = ["مرابحة", "مضاربة", "مشاركة", "صكوك", "اجارة",
-                 "تكافل", "ربا", "سلف", "استصناع"]
+                 "تكافل", "ربا", "سلف", "استصناع",
+                 # 2026-10-05 field-vocabulary bridges (sufficiency
+                 # .FIELD_BRIDGE_TERMS / FIELD_BRIDGE_PHRASES, gated by
+                 # SUFFICIENCY_FIELD_BRIDGES_ENABLED). Their df matters for
+                 # the TM03/TM04 arm, so the diagnostic has to measure them
+                 # on the deployment's own index — a duplicated corpus
+                 # multiplies every df and the scaled cap may not keep up.
+                 "اعتماد", "مستندي", "صرف", "عمليات"]
 DF_MAX = 30          # sufficiency.CROSS_DF_MAX (declared floor)
 CALIBRATION_N = 339   # the calibrated corpus (fallback token estimator);
                       # tiktoken envs chunk the same corpus finer (~2.5x)
@@ -139,6 +146,16 @@ def run(api: Api) -> int:
 
     print(f"[diag] index: {total} chunks | search top-{k_used}: "
           f"{max(hits_with_term, 0)} hit(s) contain المرابحة")
+    # Per-term df against THIS index's scaled cap, so the 2026-10-05 field
+    # bridges can be judged on the deployment's own corpus (a duplicated
+    # index multiplies every df; the cap only scales with the chunk count).
+    cap = df_cap(total)
+    print(f"[diag] bridge-term df over the live index (scaled cap = {cap}):")
+    for term in BRIDGE_ARABIC:
+        n = df.get(term, 0)
+        state = ("anchors" if 0 < n <= cap
+                 else "DF-BLOCKED" if n > cap else "absent")
+        print(f"  {term:<10} df={n:<6} {state}")
     for note in verdict(df, k_used, hits_with_term, rollup, total):
         print(f"  {note}")
     return 0
