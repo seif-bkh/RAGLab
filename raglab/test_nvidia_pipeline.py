@@ -3259,6 +3259,8 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
                 "evidence_status": "كافٍ", "retrieved": 2,
                 "sources": [{"source_id": "S1", "document": "Guide.docx",
                              "heading": "Section 1", "unit_id": None}],
+                "expected_documents": ["Guide.docx"],
+                "requirements_missing": ["definition_or_purpose_unit"],
                 "citation_target_document_hit": True,
                 "interrogation": {"classification": "definitional",
                                   "topics": ["Topic"], "requirements": [],
@@ -3289,6 +3291,8 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
         evidence = next(value for kind, value in rendered if kind == "evidence")
         self.assertEqual(summary["max_logical_chat_calls"], 18)
         self.assertEqual(case["id"], "TM-test")
+        self.assertEqual(case["expected_documents"], ["Guide.docx"])
+        self.assertEqual(case["requirements_missing"], ["definition_or_purpose_unit"])
         self.assertEqual(answer["text"], "A grounded answer [S1]")
         self.assertEqual(evidence["evidence"][0]["quote"],
                          "Verbatim evidence quote.")
