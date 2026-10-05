@@ -642,6 +642,7 @@ def check(question: str, hits: list[dict], df: dict[str, int] | None = None,
     rows, anchored_all = evaluate_pool(plan)
 
     # bounded guided rounds: only while evidence is missing
+    searched_terms: set[str] = set()
     r = 0
     while (search_fn is not None and r < MAX_GUIDED_ROUNDS
            and any(not x["covered"] for x in rows)):
@@ -660,10 +661,16 @@ def check(question: str, hits: list[dict], df: dict[str, int] | None = None,
             # rarest first — the same governed table the anchor uses.
             rest = [t for t in _bridged_terms(question)
                     if (df is None or df.get(t, 0) > 0)]
+        # drop what an earlier round already searched BEFORE truncating, so
+        # round 2 takes the NEXT rarest terms instead of repeating round 1
+        # (measured 2026-10-05 on the owner's index: two identical rounds,
+        # «صرف عمليات» twice, the second retrieving nothing new).
+        rest = [t for t in rest if t not in searched_terms]
         rest.sort(key=lambda t: (df.get(t, 0) if df else 0))
         batch = rest[:GUIDED_TERMS_PER_ROUND]
         if not batch:
             break
+        searched_terms.update(batch)
         new_hits = search_fn(" ".join(batch), ROUND_K) or []
         seen = {h["id"] for h in pool}
         added = [h for h in new_hits if h["id"] not in seen]

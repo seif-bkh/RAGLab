@@ -490,6 +490,33 @@ Current state of the work:
   SufficiencyCheck.test_inert_layer_no_deployed_imports caught the first
   attempt. Guarded by DiagSufficiencyTest (5) plus two tests pinning that the
   round needs a search_fn and that BOTH check() call sites forward one.
+- **ROOT CAUSE of TM03 was intent classification, not the bridge arm
+  (2026-10-05, found from the owner's rebuild).** intent.py's تعريفي rule
+  carried a BARE r"Quelle", and re.search finds it inside «Quelles» — so
+  «Quelles sont les étapes et modalités de réalisation d'une opération de
+  change…» classified as تعريفي (fired_rules: 'Quelle'), the plan demanded
+  definition_or_purpose_unit, and the guide's 5.3 section is PROCEDURAL, so it
+  could never cover it. The anchored r"Quel\b" beside it already refused to
+  match; the bare form is now anchored, and إجرائی gained the French procedural
+  markers it was missing ENTIRELY (étapes/modalités/procédure/comment). No
+  bridge, shape or guided round can fix a misclassified intent — sections 9-14
+  were all treating a symptom of this. Measured: TM03 goes to إجرائي /
+  procedural_evidence and is now كافٍ in all three columns (one-shot, guided,
+  gate-probe), i.e. it no longer needs the round at all; TM04 still does. Both
+  frozen sets byte-identical (FS=0 FR=0 agreement=1.0; 38/9/3 and 8/2), and the
+  French SINGULAR still classifies تعريفي — anchoring narrows, it does not
+  remove. NOT gated: this is a wrong-pattern fix with measured zero regression.
+- **Two bugs the owner's run exposed in my own tooling.** diag_sufficiency.py
+  printed "service.py passes no search_fn" UNCONDITIONALLY, so it printed that
+  on a container already rebuilt with the wiring; deployed_forwards_search_fn()
+  now reads the installed service.py and picks the message, degrading to
+  "could not read" rather than asserting. And the guided round re-issued the
+  SAME query every round (owner's output: two rounds, both «صرف عمليات»);
+  searched_terms now drops already-searched terms BEFORE truncating, so round 2
+  takes the next rarest terms or stops. Cost: fewer retrievals, not more.
+  test_guided_rounds_bounded_and_rescuing pinned len(rounds)==MAX_GUIDED_ROUNDS
+  exactly — it was pinning that waste; it now pins <= the cap and that no two
+  rounds search the same terms.
 - **Root cause of the 'still refused after rebuild' (2026-10-02, CONFIRMED
   end-to-end)**: the owner's index has 1713 chunks vs the baked-in 339 — the
   corpus is duplicated ~5x through pushed documents. df(المرابحة) = 17 x 5

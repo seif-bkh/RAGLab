@@ -54,10 +54,10 @@ INTENT_RULES: list[tuple[str, list[str]]] = [
     ("تعريفي", [r"ما هو", r"ما هي", r"عرّف", r"عرف ", r"تعريف", r"ماذا يعني",
                 r"ما معنى", r"المقصود", r"ماذا يهدف", r"إلى ماذا", r"^ما\s+\S+",
                 r"متى", r"أين ", r"تاريخ", r"What is", r"what is", r"What does",
-                r"what does", r"Which ", r"which ", r"Quelle", r"quelle",
-                r"Quel\b", r"quel\b", r"Quels", r"quels", r"Qu'est", r"Quand",
-                r"quand", r"When ", r"when ", r"Where ", r"where ", r"Who ",
-                r"who "]),
+                r"what does", r"Which ", r"which ", r"Quelle\b", r"quelle\b",
+                r"Quel\b", r"quel\b", r"Quels\b", r"quels\b", r"Qu'est",
+                r"Quand\b", r"quand\b", r"When ", r"when ", r"Where ",
+                r"where ", r"Who ", r"who "]),
     ("إجرائي", [r"كيف", r"إجراءات", r"اجراءات", r"شروط", r"الشرط", r"خطوات",
                 r"من يملك", r"من يعين", r"من يتولى", r"من يتحمل", r"على عاتق من",
                 r"على من ", r"ماذا يحدث", r"هل يمكن", r"هل يجب", r"هل يحق",
@@ -65,7 +65,14 @@ INTENT_RULES: list[tuple[str, list[str]]] = [
                 r"ما الإجراء", r"ما الاجراء", r"Who must", r"who must",
                 r"Who gives", r"who gives", r"Qui doit", r"qui doit",
                 r"Que doivent", r"que doivent", r"charge-t-elle",
-                r"must approve"]),
+                r"must approve",
+                # French procedural markers — measured 2026-10-05: without
+                # these, «Quelles sont les étapes et modalités…» had no
+                # procedural rule to fire and the definitional rule took it,
+                # so the plan demanded a definition the guide's 5.3 procedure
+                # section can never supply.
+                r"\bétapes?\b", r"\bmodalités?\b", r"\bprocédures?\b",
+                r"\bcomment\b", r"\bComment\b"]),
 ]
 
 # Personal framing (advisory to a person — OOS-prone; the default is عام)

@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from diag_bridge import df_cap
 from local_front import Api, DEFAULT_BASE_URL
@@ -91,6 +92,27 @@ def analyse(question: str, texts: list[str], hits: list[dict],
     }
 
 
+def deployed_forwards_search_fn() -> bool | None:
+    """Does the INSTALLED service forward a search_fn to sufficiency.check?
+
+    Read from the source beside this script, so the verdict states a fact about
+    the code that is actually deployed instead of repeating the state the
+    message was written in. The 2026-10-05 owner run showed why that matters:
+    the probe printed "service.py passes no search_fn" on a container that had
+    already been rebuilt with the wiring. None = could not read the file.
+    """
+    import re
+    try:
+        src = (Path(__file__).resolve().parent
+               / "service.py").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    calls = re.findall(r"sufficiency\.check\((?:[^()]|\([^()]*\))*\)", src)
+    if not calls:
+        return None
+    return all("search_fn=" in c for c in calls)
+
+
 def _verdict(rep: dict) -> list[str]:
     """Plain-language notes. Pure — unit-tested."""
     notes: list[str] = []
@@ -114,11 +136,24 @@ def _verdict(rep: dict) -> list[str]:
         notes.append("  partial coverage, so the interrogation branch is "
                      "SKIPPED and the refusal is immediate.")
     if a["guided_rounds"] == [] and w["guided_rounds"]:
-        notes.append("  GUIDED ROUND UNREACHABLE ON /answer: with a search_fn "
-                     f"it runs {len(w['guided_rounds'])} round(s) "
-                     f"({', '.join(r['query'] for r in w['guided_rounds'])}) "
-                     f"and the verdict becomes {w['state']}. service.py passes "
-                     "no search_fn, so the deployed path can never reach it.")
+        rounds = ", ".join(r["query"] for r in w["guided_rounds"])
+        wired = deployed_forwards_search_fn()
+        if wired is False:
+            notes.append("  GUIDED ROUND UNREACHABLE ON /answer: with a "
+                         f"search_fn it runs {len(w['guided_rounds'])} round(s) "
+                         f"({rounds}) and the verdict becomes {w['state']}, but "
+                         "the installed service.py passes no search_fn, so the "
+                         "deployed path can never reach it.")
+        elif wired:
+            notes.append("  the round IS wired into /answer (the installed "
+                         "service.py forwards search_fn), so the deployed path "
+                         f"runs {len(w['guided_rounds'])} round(s) ({rounds}) "
+                         f"and ends at {w['state']} — the same as with_rounds.")
+        else:
+            notes.append("  a search_fn changes the verdict to "
+                         f"{w['state']} over {len(w['guided_rounds'])} round(s) "
+                         f"({rounds}); could not read service.py to say whether "
+                         "the deployed path forwards one.")
     elif w["state"] == a["state"]:
         notes.append("  the guided round changes nothing here — the rescue is "
                      "not what this question needs.")

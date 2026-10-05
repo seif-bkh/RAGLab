@@ -2394,6 +2394,40 @@ class IntentClassification(unittest.TestCase):
             self.assertEqual(r["intent_type"], expected, q)
             self.assertTrue(r["fired_rules"], q)          # explained decisions
 
+    def test_french_plural_interrogative_is_not_a_definition_request(self):
+        """Regression (owner's live run 2026-10-05): the تعريفي rule carried a
+        BARE r"Quelle", and re.search matches it inside «Quelles» — so
+        «Quelles sont les étapes et modalités…» classified as تعريفي
+        (fired_rules: 'Quelle'), the plan demanded definition_or_purpose_unit,
+        and the guide's 5.3 PROCEDURE section could never cover it. No bridge,
+        shape or guided round can fix a misclassified intent. The anchored
+        r"Quel\b" beside it already refused to match; the bare form is now
+        anchored too, and إجرائی gained the French procedural markers it was
+        missing entirely."""
+        import evidence_plan
+        import intent
+        q = ("Quelles sont les étapes et modalités de réalisation d'une "
+             "opération de change (vente et achat de devises) pour un client ?")
+        r = intent.classify(q)
+        self.assertEqual(r["intent_type"], "إجرائي", r["fired_rules"])
+        self.assertEqual([x["req"] for x in
+                          evidence_plan.derive_plan(q)["requirements"]],
+                         ["procedural_evidence"])
+        # the singular must still classify as definitional — anchoring has to
+        # narrow the match, not remove it
+        for singular, expected in (
+                ("Quelle est la définition de la murabaha ?", "تعريفي"),
+                ("Quelle structure supervise les banques ?", "تعريفي"),
+                ("Comment le bank réalise-t-il une opération de change ?",
+                 "إجرائي")):
+            self.assertEqual(intent.classify(singular)["intent_type"], expected,
+                             singular)
+        # Arabic classification is untouched by a French-only pattern change
+        self.assertEqual(intent.classify("ما هو الأساس الشرعي؟")["intent_type"],
+                         "تعريفي")
+        self.assertEqual(intent.classify("هل يمكنني فتح حساب؟")["intent_type"],
+                         "إجرائي")
+
     def test_unclassifiable_gets_the_declared_default_path(self):
         import intent
         r = intent.classify("اشتريت سيارة أمس وذهبت إلى السوق")
@@ -3300,13 +3334,32 @@ class DiagSufficiencyTest(unittest.TestCase):
                 "with_rounds": {"state": with_state, "missing": [],
                                 "guided_rounds": with_rounds}}
 
-    def test_verdict_names_the_unreachable_round(self):
+    def test_verdict_tracks_whether_the_round_is_actually_wired(self):
+        """The message must state a fact about the INSTALLED service.py, not
+        about the state the text was written in: the owner's 2026-10-05 run
+        printed "service.py passes no search_fn" on a container that had
+        already been rebuilt with the wiring. Both branches are pinned."""
         import diag_sufficiency as ds
-        notes = "\n".join(ds._verdict(self._rep(
-            "غير كافٍ", [], "كافٍ", [{"query": "صرف عمليات", "new_hits": 20}])))
-        self.assertIn("GUIDED ROUND UNREACHABLE ON /answer", notes)
-        self.assertIn("صرف عمليات", notes)
-        self.assertIn("كافٍ", notes)
+        rep = self._rep("غير كافٍ", [], "كافٍ",
+                        [{"query": "صرف عمليات", "new_hits": 20}])
+        with patch.object(ds, "deployed_forwards_search_fn", lambda: False):
+            off = "\n".join(ds._verdict(rep))
+        self.assertIn("GUIDED ROUND UNREACHABLE ON /answer", off)
+        self.assertIn("صرف عمليات", off)
+        with patch.object(ds, "deployed_forwards_search_fn", lambda: True):
+            on = "\n".join(ds._verdict(rep))
+        self.assertIn("the round IS wired into /answer", on)
+        self.assertNotIn("UNREACHABLE", on)
+        self.assertIn("كافٍ", on)
+        # unreadable source must degrade to "could not read", never to a claim
+        with patch.object(ds, "deployed_forwards_search_fn", lambda: None):
+            self.assertIn("could not read service.py",
+                          "\n".join(ds._verdict(rep)))
+
+    def test_the_installed_service_forwards_a_search_fn(self):
+        """The probe reads the real file, so pin what it finds here."""
+        import diag_sufficiency as ds
+        self.assertTrue(ds.deployed_forwards_search_fn())
 
     def test_verdict_says_when_the_round_is_not_what_is_needed(self):
         import diag_sufficiency as ds
@@ -3366,8 +3419,11 @@ class DiagSufficiencyTest(unittest.TestCase):
         queries = " ".join(r["query"] for r in rounds)
         self.assertIn("صرف", queries)
         self.assertNotIn("change", queries)
-        self.assertIn("GUIDED ROUND UNREACHABLE ON /answer",
-                      "\n".join(ds._verdict(rep)))
+        # the probe reports the asymmetry against the INSTALLED service.py,
+        # which does forward a search_fn — so it must not claim unreachable
+        notes = "\n".join(ds._verdict(rep))
+        self.assertIn("the round IS wired into /answer", notes)
+        self.assertNotIn("UNREACHABLE", notes)
 
 
 class InterrogateTest(unittest.TestCase):
@@ -4479,7 +4535,15 @@ class SufficiencyCheck(unittest.TestCase):
 
         res2 = S.check(q, [weak], search_fn=junk_fn)
         self.assertEqual(res2["state"], "غير كافٍ")
-        self.assertEqual(len(res2["guided_rounds"]), S.MAX_GUIDED_ROUNDS)
+        # Bounded by the declared cap — and it now stops as soon as there is
+        # no UNSEARCHED term left, instead of re-issuing the same query. The
+        # owner's 2026-10-05 run measured the old waste directly: two rounds,
+        # both «صرف عمليات», the second retrieving nothing new. Pinning the
+        # exact round count would pin that accident; pin that it is bounded
+        # and that no two rounds search the same terms.
+        self.assertLessEqual(len(res2["guided_rounds"]), S.MAX_GUIDED_ROUNDS)
+        queries = [r["query"] for r in res2["guided_rounds"]]
+        self.assertEqual(len(set(queries)), len(queries), queries)
 
     def test_multi_requirement_differentiation(self):
         import sufficiency as S
