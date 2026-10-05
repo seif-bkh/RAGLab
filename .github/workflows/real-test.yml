@@ -701,11 +701,22 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-service.txt httpx==0.28.1
 
-      - name: Validate both map targets and the six unchanged answer cases (no API)
+      - name: Validate six unchanged cases and active targets (no API)
         working-directory: raglab
+        shell: bash
         run: |
-          python audits/PHASE9_STRUCTURE/run_topic_map_live_probe.py --validate-only
-          python audits/PHASE9_STRUCTURE/run_phase9_answer_probe.py --validate-only
+          set -o pipefail
+          mkdir -p /tmp/phase9_answer_probe
+          status=0
+          python audits/PHASE9_STRUCTURE/run_phase9_answer_probe.py --validate-only \
+            2>&1 | tee /tmp/phase9_answer_probe/validation.log || status=$?
+          echo "$status" > /tmp/phase9_answer_probe/validation_status
+          if [ "$status" -ne 0 ]; then
+            tail_text=$(tail -c 1800 /tmp/phase9_answer_probe/validation.log \
+              | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+            echo "::error::Phase-9 answer preflight failed: $tail_text"
+            exit "$status"
+          fi
 
       - name: Fail fast if an approved provider secret is missing
         shell: bash
@@ -742,6 +753,15 @@ jobs:
         working-directory: raglab
         shell: bash
         run: |
+          mkdir -p results/phase9_answer_probe
+          if [ -f /tmp/phase9_answer_probe/validation.log ]; then
+            cp /tmp/phase9_answer_probe/validation.log \
+              results/phase9_answer_probe/validation.log 2>/dev/null || true
+            if [ "$(cat /tmp/phase9_answer_probe/validation_status 2>/dev/null || echo 0)" != "0" ]; then
+              echo '### Preflight failure log' >> "$GITHUB_STEP_SUMMARY"
+              tail -n 60 /tmp/phase9_answer_probe/validation.log >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
           if [ -f results/phase9_answer_probe/live_answer_results.md ]; then
             cat results/phase9_answer_probe/live_answer_results.md >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -776,5 +796,6 @@ jobs:
             raglab/results/phase9_answer_probe/live_answer_results.json
             raglab/results/phase9_answer_probe/live_answer_results.md
             raglab/results/phase9_answer_probe/live_answer.log
+            raglab/results/phase9_answer_probe/validation.log
           if-no-files-found: warn
           retention-days: 30
