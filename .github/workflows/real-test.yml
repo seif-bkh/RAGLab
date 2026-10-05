@@ -20,9 +20,10 @@ name: RAGLab real test
 # topic-selection diagnostic; phase9-answer-* runs the six fixed Phase-9 questions
 # through POST /answer with NVIDIA embeddings and the pinned free-verified xKiro
 # answer model (top_k=5 by default; phase9-answer-topk12-* / -topk20-* select
-# bounded diagnostic arms, and phase9-answer-xfix-* additionally turns on the
+# bounded diagnostic arms, and any tag carrying -xfix additionally turns on the
 # gated cross-script coverage arm — SUFFICIENCY_FIELD_BRIDGES_ENABLED +
-# SUFFICIENCY_DEFINITION_SHAPE_ENABLED, both OFF everywhere else).
+# SUFFICIENCY_DEFINITION_SHAPE_ENABLED, both OFF everywhere else. The two
+# combine: phase9-answer-topk20-xfix-<date> runs the arm at top_k=20).
 # Neither frozen question set is changed. real-test-* triggers the
 # full historical workflow. The regular push CI (.github/workflows/ci.yml) stays API-free.
 #
@@ -702,11 +703,15 @@ jobs:
       RAGLAB_ALLOW_PROFILE_SWITCH: "0"
       PHASE9_ANSWER_TOP_K: ${{ (github.event_name == 'workflow_dispatch' && inputs.phase9_answer_top_k) || (startsWith(github.ref, 'refs/tags/phase9-answer-topk20-') && '20') || (startsWith(github.ref, 'refs/tags/phase9-answer-topk12-') && '12') || '5' }}
       # Gated cross-script coverage arm (2026-10-05). OFF unless this dispatch
-      # asks for it or the tag is phase9-answer-xfix-*; the sufficiency gates
-      # default to "0" in code, so every other job in this workflow and the
-      # deployed service keep the exact pre-change behavior.
-      SUFFICIENCY_FIELD_BRIDGES_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && inputs.phase9_cross_script_fix) || startsWith(github.ref, 'refs/tags/phase9-answer-xfix-')) && '1' || '0' }}
-      SUFFICIENCY_DEFINITION_SHAPE_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && inputs.phase9_cross_script_fix) || startsWith(github.ref, 'refs/tags/phase9-answer-xfix-')) && '1' || '0' }}
+      # asks for it or the tag carries -xfix; the sufficiency gates default to
+      # "0" in code, so every other job in this workflow and the deployed
+      # service keep the exact pre-change behavior.
+      # `contains` (not `startsWith`) so the arm COMBINES with a top-k tag:
+      #   phase9-answer-xfix-<date>             -> gates 1, top_k 5
+      #   phase9-answer-topk20-xfix-<date>      -> gates 1, top_k 20
+      #   phase9-answer-<date>                  -> gates 0, top_k 5 (control)
+      SUFFICIENCY_FIELD_BRIDGES_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && inputs.phase9_cross_script_fix) || contains(github.ref, '-xfix')) && '1' || '0' }}
+      SUFFICIENCY_DEFINITION_SHAPE_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && inputs.phase9_cross_script_fix) || contains(github.ref, '-xfix')) && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
         with:

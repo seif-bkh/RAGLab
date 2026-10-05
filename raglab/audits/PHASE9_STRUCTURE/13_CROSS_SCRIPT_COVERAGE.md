@@ -25,7 +25,7 @@
 | `raglab/lexicon.py` | ثلاثة صفوف عبارات: `documentary credit`، `crédit documentaire`، `opération de change`. **لم** تُضف «change» مفردة هنا: توسيع الاسترجاع غير مفحوص بـ`df`، بينما صف المفرد في `sufficiency.py` مفحوص به. هذا التباين مقصود ومعلن |
 | `raglab/test_nvidia_pipeline.py` | صنف `FieldBridgeAndDefinitionShapeTest` — 10 اختبارات تثبّت العلمين في الاتجاهين |
 | `raglab/.env.example` | توثيق العلمَين بقيمة `0` |
-| `.github/workflows/real-test.yml` | إدخال `phase9_cross_script_fix` ووسم `phase9-answer-xfix-*`، وخطوة قياس غير متصلة (بلا API، غير مميتة) داخل مهمة المسبار |
+| `.github/workflows/real-test.yml` | إدخال `phase9_cross_script_fix` وأي وسم يحوي `-xfix` (يُكتشف بـ`contains` لا `startsWith` فيجتمع مع وسم `top_k`)، وخطوة قياس غير متصلة (بلا API، غير مميتة) داخل مهمة المسبار |
 | `audits/PHASE9_STRUCTURE/measure_cross_script_coverage.py` | المشغل الجديد: يفصل الاسترجاع عن الإرساء عن الصيغة عن التغطية، ويعيد تنفيذ نفسه لكل تركيبة علمَين |
 
 **العلمان:** `SUFFICIENCY_FIELD_BRIDGES_ENABLED=1` و`SUFFICIENCY_DEFINITION_SHAPE_ENABLED=1`. كلاهما `0` افتراضيًا، والقرار نفسه (قواعد الإرساء والكفاية والاستشهاد) لم يتغير — أُضيفت بيانات مراجعة معلنة فقط.
@@ -101,7 +101,15 @@ SUFFICIENCY_FIELD_BRIDGES_ENABLED=1 SUFFICIENCY_DEFINITION_SHAPE_ENABLED=1 \
   python3 audits/PHASE9_STRUCTURE/measure_cross_script_coverage.py
 ```
 
-حيًا: Actions → «RAGLab real test» → `phase9_answer_probe=true` و`phase9_cross_script_fix=true`، أو وسم `phase9-answer-xfix-*`. خطوة القياس غير المتصلة تعمل في كل تشغيل وتُرفع في الـartifact `phase9-answer-probe`.
+حيًا — ثلاث أذرع، كل واحدة وسم (و`workflow_dispatch` بديلًا: `phase9_answer_probe=true` مع `phase9_cross_script_fix` و`phase9_answer_top_k`):
+
+| الوسم | العلمان | `top_k` | الغاية |
+|---|---|---|---|
+| `phase9-answer-xfix-<date>` | 1 | 5 | ذراع الإصلاح عند الإعداد الافتراضي |
+| `phase9-answer-<date>` | 0 | 5 | **ضابط** على الالتزام نفسه (بدونه لا تُنسب فروق الإجابة إلى الإصلاح) |
+| `phase9-answer-topk20-xfix-<date>` | 1 | 20 | اختياري: ذراع الإصلاح على عمق أوسع |
+
+الاكتشاف بـ`contains(github.ref, '-xfix')` لا `startsWith`، ولهذا يجتمع الوسمان. خطوة القياس غير المتصلة (2×2 + الانحدار) تعمل في **كل** تشغيل وتُرفع في الـartifact `phase9-answer-probe` بملفَّي `cross_script_coverage.json/.log`؛ وهي أيضًا ما يتحقق من حدّ التراخي النسبي في بيئة tokenizer الحقيقية (858 مقطعًا).
 
 ## 7. القرار المطلوب
 

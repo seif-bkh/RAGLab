@@ -421,8 +421,12 @@ Current state of the work:
   sets are identical in all four arms (FS=0 FR=0 agreement=1.0; 50set
   38/9/3, targets 8/2). Gates SUFFICIENCY_FIELD_BRIDGES_ENABLED and
   SUFFICIENCY_DEFINITION_SHAPE_ENABLED, both default "0" — the deployed
-  behavior is byte-identical to before. Live arm: phase9-answer-xfix-* tag or
-  phase9_cross_script_fix=true (NOT yet run). STILL OPEN, out of the approved
+  behavior is byte-identical to before. Live arm: any tag carrying -xfix
+  (matched with `contains`, so it COMBINES with a top-k tag —
+  phase9-answer-topk20-xfix-<date> runs the arm at top_k=20) or
+  phase9_cross_script_fix=true. Run phase9-answer-<date> at the SAME commit as
+  the control, or the answer differences cannot be attributed to the arm. NOT
+  yet run. STILL OPEN, out of the approved
   scope: the guided round is dead for cross-lingual questions (every question
   term has df=0 in an Arabic corpus, so `rest` is empty and the loop breaks —
   guided_rounds=[] on both cases), and one hard-coded REFUSALS string serves
