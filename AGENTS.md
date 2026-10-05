@@ -420,8 +420,9 @@ Current state of the work:
   the empirical proof that anchoring was the first failure. The two frozen
   sets are identical in all four arms (FS=0 FR=0 agreement=1.0; 50set
   38/9/3, targets 8/2). Gates SUFFICIENCY_FIELD_BRIDGES_ENABLED and
-  SUFFICIENCY_DEFINITION_SHAPE_ENABLED, both default "0" — the deployed
-  behavior is byte-identical to before. Live arm: any tag carrying -xfix
+  SUFFICIENCY_DEFINITION_SHAPE_ENABLED, default "0" WHEN THIS PARAGRAPH WAS
+  WRITTEN — the deployed behavior was byte-identical to then. Superseded
+  below: the owner activated the arm the same day. Live arm: any tag carrying -xfix
   (matched with `contains`, so it COMBINES with a top-k tag —
   phase9-answer-topk20-xfix-<date> runs the arm at top_k=20) or
   phase9_cross_script_fix=true. Run phase9-answer-<date> at the SAME commit as

@@ -22,7 +22,9 @@ name: RAGLab real test
 # answer model (top_k=5 by default; phase9-answer-topk12-* / -topk20-* select
 # bounded diagnostic arms, and any tag carrying -xfix additionally turns on the
 # gated cross-script coverage arm — SUFFICIENCY_FIELD_BRIDGES_ENABLED +
-# SUFFICIENCY_DEFINITION_SHAPE_ENABLED, both OFF everywhere else. The two
+# SUFFICIENCY_DEFINITION_SHAPE_ENABLED + SUFFICIENCY_GUIDED_BRIDGED_ENABLED.
+# Since 3d2f2f4 those three default to "1" in code, so a plain
+# phase9-answer-<date> tag is the explicit OFF control. The tags
 # combine: phase9-answer-topk20-xfix-<date> runs the arm at top_k=20).
 # Neither frozen question set is changed. real-test-* triggers the
 # full historical workflow. The regular push CI (.github/workflows/ci.yml) stays API-free.
@@ -702,16 +704,18 @@ jobs:
       SUFFICIENCY_FIELDS_ENABLED: "1"
       RAGLAB_ALLOW_PROFILE_SWITCH: "0"
       PHASE9_ANSWER_TOP_K: ${{ (github.event_name == 'workflow_dispatch' && inputs.phase9_answer_top_k) || (startsWith(github.ref, 'refs/tags/phase9-answer-topk20-') && '20') || (startsWith(github.ref, 'refs/tags/phase9-answer-topk12-') && '12') || '5' }}
-      # Gated cross-script coverage arm (2026-10-05). OFF unless this dispatch
-      # asks for it or the tag carries -xfix; the sufficiency gates default to
-      # "0" in code, so every other job in this workflow and the deployed
-      # service keep the exact pre-change behavior.
+      # Gated cross-script coverage arm (2026-10-05). Set EXPLICITLY in both
+      # directions: since 3d2f2f4 the three gates default to "1" in code (owner
+      # decision, measured 2/2 answered vs 2/2 refused on their own index), so
+      # the control arm must ask for "0" instead of inheriting it.
       # `contains` (not `startsWith`) so the arm COMBINES with a top-k tag:
-      #   phase9-answer-xfix-<date>             -> gates 1, top_k 5
-      #   phase9-answer-topk20-xfix-<date>      -> gates 1, top_k 20
-      #   phase9-answer-<date>                  -> gates 0, top_k 5 (control)
+      #   phase9-answer-xfix-<date>             -> all three gates 1, top_k 5
+      #   phase9-answer-topk20-xfix-<date>      -> all three gates 1, top_k 20
+      #   phase9-answer-<date>                  -> all three gates 0, top_k 5
+      #                                        (pre-change control)
       SUFFICIENCY_FIELD_BRIDGES_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && inputs.phase9_cross_script_fix) || contains(github.ref, '-xfix')) && '1' || '0' }}
       SUFFICIENCY_DEFINITION_SHAPE_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && inputs.phase9_cross_script_fix) || contains(github.ref, '-xfix')) && '1' || '0' }}
+      SUFFICIENCY_GUIDED_BRIDGED_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && inputs.phase9_cross_script_fix) || contains(github.ref, '-xfix')) && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -768,6 +772,7 @@ jobs:
           echo "PHASE9_ANSWER_TOP_K=$PHASE9_ANSWER_TOP_K"
           echo "SUFFICIENCY_FIELD_BRIDGES_ENABLED=$SUFFICIENCY_FIELD_BRIDGES_ENABLED"
           echo "SUFFICIENCY_DEFINITION_SHAPE_ENABLED=$SUFFICIENCY_DEFINITION_SHAPE_ENABLED"
+          echo "SUFFICIENCY_GUIDED_BRIDGED_ENABLED=$SUFFICIENCY_GUIDED_BRIDGED_ENABLED"
 
       - name: Measure the cross-script coverage gate offline (no API)
         working-directory: raglab
