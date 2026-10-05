@@ -554,6 +554,33 @@ Current state of the work:
   to requests that were already refusing. Guarded by
   DocumentsApiTest.test_push_of_baked_corpus_content_is_rejected_409 and
   test_baked_match_is_content_keyed_not_name_keyed.
+- **Off-topic re-aiming: the label exists, is measured, and is IGNORED
+  (2026-10-06).** «هل يمكنني فتح حانة؟» came back answered/supported with five
+  claims about bank LICENSING. interrogate.py asks the model for
+  `non_banking` (lines 63/70) and the harnesses score `classification_match`,
+  but service.py only COPIES the label into the payload (1018, 1047) — no
+  branch acts on it. intent.py's `personal` flag is likewise computed and never
+  read in the deployed path. Owner decisions (both_parts + rows_minimal):
+  (a) CONCEPT_VOCABULARY — 8 declared Arabic colloquial->corpus rows behind
+  SUFFICIENCY_CONCEPT_VOCABULARY_ENABLED, applied in _anchors' SAME-SCRIPT
+  branch (the cross-script branch never fires for an Arabic question) under the
+  same df guard, and added to the guided round's terms. Measured: the users'
+  words are absent (حانة/خمارة/بار/ملهى/قمار/كازينو/رهان/مخدرات all df=0) while
+  the corpus's own are present (خمر 3, ميسر 2, محرمات 6).
+  (b) scope_note + answered_reaimed_question (additive), printed by
+  local_front.show_answer BEFORE the claims — the live case printed five
+  authoritative claims and only then disclosed the re-aim.
+  MEASUREMENT CORRECTION: I had reported «كحول» as present in 33 chunks. False
+  — _hit_terms strips the leading «ك» as a prefix, so it normalizes to «حول»
+  (tokenized df 33, SUBSTRING df 0): the word is absent and the 33 was the
+  common word «حول». It is therefore NOT a table target, and
+  test_every_declared_target_is_really_present_and_distinctive now pins every
+  declared target to be genuinely present AND under the scaled cap.
+  SCOPE LIMIT, declared in the code: the rows make evidence REACHABLE, they do
+  not make the corpus answer the question asked — the guide regulates whether a
+  BANK may finance an activity involving prohibited elements, not whether a
+  person may open a venue. Both frozen sets identical, all six probes
+  unchanged.
 - **Root cause of the 'still refused after rebuild' (2026-10-02, CONFIRMED
   end-to-end)**: the owner's index has 1713 chunks vs the baked-in 339 — the
   corpus is duplicated ~5x through pushed documents. df(المرابحة) = 17 x 5

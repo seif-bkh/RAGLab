@@ -1180,6 +1180,12 @@ def show_answer(body) -> None:
     if not isinstance(body, dict):
         print(body)
         return
+    # Scope disclosure FIRST (owner decision 2026-10-06): when the request was
+    # re-aimed, the reader must know BEFORE reading claims that look
+    # authoritative. Live case: «هل يمكنني فتح حانة؟» came back with five
+    # supported claims about bank licensing and `understood_as` trailed them.
+    if body.get("answered_reaimed_question") and body.get("scope_note"):
+        print(f"[تنبيه] {body['scope_note']}")
     print(body.get("answer", ""))
     # Phase 8 — the interrogation disclosure: how the assistant understood
     # a practical/non-technical request (always disclosed, never hidden).

@@ -3317,6 +3317,99 @@ class DiagBridgeTest(unittest.TestCase):
         self.assertIn("CROSS_BRIDGE_ENABLED", out)
 
 
+class ConceptVocabularyTest(unittest.TestCase):
+    """Owner decision 2026-10-06 (both_parts + rows_minimal): a declared
+    Arabic colloquial -> corpus-term table, because the user's words are
+    absent from the corpus while its own equivalents are present (measured:
+    حانة 0, خمارة 0, بار 0, ملهى 0, قمار 0, كازينو 0, مخدرات 0 vs خمر 3,
+    محرمات 6, ميسر 2). The live case was «هل يمكنني فتح حانة؟»."""
+
+    BAR = "هل يمكنني فتح حانة؟"
+
+    def _corpus_df(self):
+        import sufficiency
+        from loader import load_all
+        cfg = make_config(CHUNKING_MODE="restructure")
+        texts = [c.text for c in chunker.chunk_all(load_all(DOCS_DIRS), cfg)]
+        return sufficiency.build_df(texts), sufficiency
+
+    def test_every_declared_target_is_really_present_and_distinctive(self):
+        """The pin that would have caught «كحول»: _hit_terms strips the leading
+        «ك» as a prefix, so it normalizes to «حول» — measured tokenized df 33
+        but SUBSTRING df 0, i.e. the word is not in the corpus at all and the
+        33 was the common word «حول» ("about"). A target must be genuinely
+        present AND under the scaled cap, or it points the anchor at
+        boilerplate (or at nothing)."""
+        df, sufficiency = self._corpus_df()
+        cap = sufficiency._df_cap(df)
+        for word, target in sufficiency.CONCEPT_VOCABULARY.items():
+            for term in sufficiency._hit_terms(target):
+                self.assertGreater(df.get(term, 0), 0,
+                                   "%s -> %s is not in the corpus (it "
+                                   "normalizes to %r)" % (word, target, term))
+                self.assertLessEqual(df.get(term, 0), cap,
+                                     "%s -> %s (df %s) exceeds the cap %s and "
+                                     "could never anchor" % (word, term,
+                                                            df.get(term, 0), cap))
+
+    def test_colloquial_term_anchors_its_declared_equivalent(self):
+        df, sufficiency = self._corpus_df()
+        self.assertEqual(sufficiency._concept_terms(self.BAR),
+                         sufficiency._hit_terms("خمر"))
+        self.assertTrue(sufficiency._anchors(
+            self.BAR, "يشترط الا تنص الشركة على التعامل في الخمر", df))
+        # a chunk that shares nothing still does not anchor
+        self.assertFalse(sufficiency._anchors(
+            self.BAR, "نص لا علاقة له بالموضوع المطروح", df))
+
+    def test_a_mapped_boilerplate_term_cannot_anchor(self):
+        """«حول» is what «كحول» normalizes to, and it is everywhere. The df
+        guard must keep it from manufacturing an anchor."""
+        df, sufficiency = self._corpus_df()
+        self.assertGreater(df.get("حول", 0), 0)
+        with patch.dict(sufficiency.CONCEPT_VOCABULARY,
+                        {"حانة": "كحول"}, clear=False):
+            self.assertEqual(sufficiency._concept_terms(self.BAR),
+                             sufficiency._hit_terms("حول"))
+            self.assertFalse(sufficiency._anchors(
+                self.BAR, "نص يتحدث حول امور عامة فقط", df),
+                "a mapping onto boilerplate must not anchor")
+
+    def test_gate_off_restores_the_previous_behavior_exactly(self):
+        import sufficiency
+        with patch.object(sufficiency, "CONCEPT_VOCABULARY_ENABLED", False):
+            self.assertEqual(sufficiency._concept_terms(self.BAR), set())
+            self.assertFalse(sufficiency._anchors(
+                self.BAR, "يشترط الا تنص الشركة على التعامل في الخمر",
+                sufficiency.build_df(["يشترط الا تنص الشركة على التعامل في الخمر"])))
+
+    def test_scope_note_is_per_language_and_falls_back(self):
+        """The disclosure that keeps the re-aimed answer honest. Additive:
+        `scope_note` + `answered_reaimed_question`; no existing field changes."""
+        from answer import scope_note
+        seen = {lang: scope_note(lang) for lang in ("ar", "fr", "en")}
+        self.assertEqual(len(set(seen.values())), 3, seen)
+        for text in seen.values():
+            self.assertGreater(len(text), 30)
+        self.assertEqual(scope_note(None), seen["ar"])
+        self.assertEqual(scope_note("zz"), seen["ar"])
+
+    def test_console_prints_the_scope_note_before_the_answer(self):
+        """Order is the whole point: the live case printed five authoritative
+        claims and only THEN disclosed that the question had been re-aimed."""
+        import io
+        import local_front
+        buf = io.StringIO()
+        body = {"answer": "ادعاء يبدو حاسما.", "scope_note": "تنبيه النطاق.",
+                "answered_reaimed_question": True,
+                "understood_as": "سؤال آخر", "status": "answered"}
+        with patch("sys.stdout", buf):
+            local_front.show_answer(body)
+        out = buf.getvalue()
+        self.assertLess(out.index("تنبيه النطاق."), out.index("ادعاء يبدو حاسما."),
+                        out)
+
+
 class DiagSufficiencyTest(unittest.TestCase):
     """raglab/diag_sufficiency.py — the probe that exposed why /answer refused
     TM03/TM04 on the owner's deployment while the offline harness answered them:

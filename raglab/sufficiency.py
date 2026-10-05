@@ -184,6 +184,47 @@ FIELD_BRIDGE_PHRASES: dict[str, str] = {
 # Longest phrase key looked up (in tokens). Declared, not inferred.
 FIELD_BRIDGE_MAX_PHRASE = 4
 
+# ---------------------------------------------------------------------------
+# Declared concept vocabulary (REVIEW DATA — owner-approved rows, 2026-10-06).
+# Arabic colloquial -> the term the corpus ACTUALLY uses. Measured on the
+# 339-chunk corpus: the user's words are absent (حانة 0, خمارة 0, بار 0,
+# ملهى 0, قمار 0, كازينو 0, مخدرات 0) while the corpus's own are present
+# (خمر 3, محرمات 6, ميسر 2). Without these rows the evidence exists and is
+# unreachable; the live case was «هل يمكنني فتح حانة؟».
+#
+# «كحول» is DELIBERATELY NOT a target: _hit_terms strips the leading «ك» as a
+# prefix, so it normalizes to «حول» — measured df 33 by token but SUBSTRING df
+# 0, i.e. the word is not in the corpus at all and the 33 was the common word
+# «حول» ("about"). Declaring it would have pointed the anchor at boilerplate.
+# Every declared target is pinned by test to be genuinely present AND under
+# the scaled cap, so this cannot recur silently.
+#
+# The value may carry several terms — _hit_terms splits them. Every target is
+# df-checked before it can anchor, so a mapping onto boilerplate cannot
+# manufacture an anchor (same guard as the cross-script bridge).
+#
+# SCOPE LIMIT, declared: these rows make the evidence REACHABLE. They do not
+# make the corpus answer the question asked — the guide regulates whether a
+# BANK may finance an activity involving prohibited elements, not whether a
+# person may open a venue. The scope_note field (service.py) is what keeps the
+# answer honest about that; this table without it would produce confident
+# answers to a different question.
+CONCEPT_VOCABULARY: dict[str, str] = {
+    "حانة": "خمر",
+    "خمارة": "خمر",
+    "بار": "خمر",
+    "ملهى": "خمر",
+    "قمار": "ميسر",
+    "كازينو": "ميسر",
+    "رهان": "ميسر",
+    "مخدرات": "محرمات",
+}
+
+# Owner decision 2026-10-06 (both_parts + rows_minimal). "0" restores the
+# pre-vocabulary behavior exactly.
+CONCEPT_VOCABULARY_ENABLED = (
+    os.getenv("SUFFICIENCY_CONCEPT_VOCABULARY_ENABLED", "1") == "1")
+
 FIELD_BRIDGES_ENABLED = (
     os.getenv("SUFFICIENCY_FIELD_BRIDGES_ENABLED", "1") == "1")
 
@@ -453,6 +494,19 @@ def _bridged_terms(question: str) -> set[str]:
     return out
 
 
+def _concept_terms(question: str) -> set[str]:
+    """Normalized corpus equivalents of the question's DECLARED colloquial
+    terms (empty when the gate is off or the question carries none)."""
+    if not CONCEPT_VOCABULARY_ENABLED:
+        return set()
+    out: set[str] = set()
+    for term in question_terms(question):
+        arabic = CONCEPT_VOCABULARY.get(term)
+        if arabic:
+            out |= _hit_terms(arabic)   # same normalization as the hit side
+    return out
+
+
 def _anchors(question: str, hit_text: str, df: dict[str, int] | None) -> bool:
     """Does this hit topically anchor the question? (declared rules)"""
     shared = shared_terms(question, hit_text)
@@ -470,6 +524,14 @@ def _anchors(question: str, hit_text: str, df: dict[str, int] | None) -> bool:
         # onto boilerplate can never anchor)
         bridged = _bridged_terms(question) & _hit_terms(hit_text)
         return any(df.get(t, 0) <= cap for t in bridged)
+    if CONCEPT_VOCABULARY_ENABLED:
+        # Arabic->Arabic: the cross-script branch above never runs for a
+        # same-script question, so the declared concept vocabulary is applied
+        # here. df-checked exactly like the cross-script bridge, so a mapping
+        # onto boilerplate can never manufacture an anchor.
+        mapped = _concept_terms(question) & _hit_terms(hit_text)
+        if df and any(0 < df.get(t, 0) <= _df_cap(df) for t in mapped):
+            return True
     return bool(shared) and len(shared) >= _anchor_bar(question)
 
 
@@ -668,6 +730,12 @@ def check(question: str, hits: list[dict], df: dict[str, int] | None = None,
         # round 2 takes the NEXT rarest terms instead of repeating round 1
         # (measured 2026-10-05 on the owner's index: two identical rounds,
         # «صرف عمليات» twice, the second retrieving nothing new).
+        if CONCEPT_VOCABULARY_ENABLED:
+            # the declared equivalents are retrievable even when the question's
+            # own words have df=0 in the corpus (حانة -> كحول, df 33)
+            rest = rest + [t for t in _concept_terms(question)
+                           if t not in rest
+                           and (df is None or df.get(t, 0) > 0)]
         rest = [t for t in rest if t not in searched_terms]
         rest.sort(key=lambda t: (df.get(t, 0) if df else 0))
         batch = rest[:GUIDED_TERMS_PER_ROUND]

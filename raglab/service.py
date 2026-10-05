@@ -1011,7 +1011,15 @@ def create_app(profile: dict | None = None, *, generator=None,
                         reg = generator.answer(interrogation["paraphrase"], hits2,
                                                state_box.get("language"),
                                                allowed_documents=allowed_docs)
+                        from answer import scope_note as _scope_note
                         return {**reg,
+                                # Owner decision 2026-10-06: this answer is
+                                # about a DIFFERENT question than the one
+                                # asked. Say so in the payload AND let the
+                                # console print it BEFORE the claims.
+                                "answered_reaimed_question": True,
+                                "scope_note": _scope_note(
+                                    state_box.get("language") or "ar"),
                                 "understood_as": interrogation["paraphrase"],
                                 "original_question": question,
                                 "interrogation": {

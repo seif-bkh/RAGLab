@@ -67,6 +67,30 @@ REFUSAL_MESSAGES: dict[str, dict[str, str]] = {
 }
 
 
+# Owner decision 2026-10-06 (both_parts): when the interrogation re-aims a
+# request, the answer it produces is about a DIFFERENT question. The
+# `understood_as` field already discloses this, but the console printed it
+# AFTER the claims — so «هل يمكنني فتح حانة؟» was answered with five
+# supported claims about bank licensing and the disclosure trailed them.
+SCOPE_NOTES = {
+    "ar": "المدونة لا تجيب عن سؤالك كما هو؛ ما يلي يجيب السؤال المُعاد "
+          "صياغته والمبيَّن أدناه، فاقْرأه على أنه جواب عن ذلك السؤال.",
+    "fr": "Le corpus ne répond pas à votre question telle quelle ; ce qui suit "
+          "répond à la question reformulée indiquée plus bas.",
+    "en": "The corpus does not answer your question as asked; what follows "
+          "answers the re-aimed question shown below.",
+}
+
+
+def scope_note(language):
+    """One-line disclosure for an answer built from a RE-AIMED question.
+
+    Additive: the response gains `scope_note` and
+    `answered_reaimed_question`; no existing field changes meaning.
+    """
+    return SCOPE_NOTES.get((language or "ar").lower()[:2], SCOPE_NOTES["ar"])
+
+
 def refusal_message(reason: str | None, language: str) -> str:
     """The user-safe explanation for THIS refusal reason (never a guess, never
     empty: an unknown reason falls back to the private/live-data wording, and
