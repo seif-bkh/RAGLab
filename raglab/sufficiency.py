@@ -152,8 +152,10 @@ CROSS_BRIDGE_ENABLED = os.getenv("CROSS_SCRIPT_BRIDGES_ENABLED", "1") == "1"
 # (df <= cap), so a bridge onto boilerplate can never anchor. Measured corpus
 # df (339 chunks): اعتماد=12 مستندي=4 صرف=14 — all under CROSS_DF_MAX=30.
 #
-# OFF by default: this is a new arm, not an activated behaviour. "1" enables
-# it; unset/"0" reproduces the 2026-10-05 behavior exactly.
+# Default ON (2026-10-05, owner directive after the live measurement: 2/2
+# answered with the arm vs 2/2 refused without it, on the owner's 1713-chunk
+# index, understood_as absent -> the ORIGINAL question passed the first pass).
+# "0" restores the pre-fix behavior exactly.
 FIELD_BRIDGE_TERMS: dict[str, str] = {
     # fr — «opération de change» is the guide's own heading 5.3 subject
     "change": "صرف",
@@ -180,7 +182,7 @@ FIELD_BRIDGE_PHRASES: dict[str, str] = {
 FIELD_BRIDGE_MAX_PHRASE = 4
 
 FIELD_BRIDGES_ENABLED = (
-    os.getenv("SUFFICIENCY_FIELD_BRIDGES_ENABLED", "") == "1")
+    os.getenv("SUFFICIENCY_FIELD_BRIDGES_ENABLED", "1") == "1")
 
 # A rare term (df <= RARE_DF) carries subject signal; common-term overlap
 # (بنك، تونس، شركة) is boilerplate noise. Used by the escalation rule.
@@ -226,6 +228,21 @@ MAX_GUIDED_ROUNDS = 2        # hard cap
 GUIDED_TERMS_PER_ROUND = 5   # rarest uncovered terms per round
 ROUND_K = 20                 # retrieval depth of a guided round
 
+# A cross-script question's own terms have df=0 in an Arabic corpus, so the
+# round below selected NOTHING and broke immediately (measured on TM03/TM04:
+# guided_rounds=[] — the rescue was dead exactly where it was needed). When
+# this is on, the round searches the DECLARED Arabic equivalents instead
+# (_bridged_terms — governed table, no model call, no rephrasing).
+# Default ON (measured 2026-10-05 over the 8-arm matrix): with the bridges on,
+# the guided round turns TM04 from غير كافٍ to كافٍ on the offline arm even
+# though its evidence sits at BM25 ranks 27/29/36 — the round now reaches what
+# the first window cannot. Both frozen sets are byte-identical in all eight
+# arms (FS=0 FR=0 agreement=1.0). "0" restores the dead-round behavior.
+# COST: up to MAX_GUIDED_ROUNDS extra retrievals, and only on the path that
+# was already failing.
+GUIDED_BRIDGED_ENABLED = (
+    os.getenv("SUFFICIENCY_GUIDED_BRIDGED_ENABLED", "1") == "1")
+
 # ---------------------------------------------------------------------------
 # Declared shape patterns for UNTYPED documents (REVIEW DATA) — the typed
 # law path reuses evidence_plan's adopted checks via unit types.
@@ -266,7 +283,8 @@ SHAPE_PATTERNS: dict[str, list[str]] = {
 #   bare «هو + …»                14/339 chunks  — rejected as too loose
 #   «يستعمل|يستخدم|يهدف|الغرض»    55/339 chunks  — rejected as too loose
 #   tight purpose forms (below)    3/339 chunks
-# OFF by default; "1" enables, unset/"0" reproduces the previous shapes.
+# Default ON with the field bridges above (same measurement); "0" restores
+# the previous shapes exactly.
 DEFINITION_SHAPE_PATTERNS: list[str] = [
     # equative definition: «X هو <what X IS>» — the noun list is the declared
     # set of heads the corpus actually uses for «what the thing is».
@@ -276,7 +294,7 @@ DEFINITION_SHAPE_PATTERNS: list[str] = [
 ]
 
 DEFINITION_SHAPE_ENABLED = (
-    os.getenv("SUFFICIENCY_DEFINITION_SHAPE_ENABLED", "") == "1")
+    os.getenv("SUFFICIENCY_DEFINITION_SHAPE_ENABLED", "1") == "1")
 
 _CONFLICT_UNRESOLVABLE = "unresolvable"
 
@@ -636,6 +654,12 @@ def check(question: str, hits: list[dict], df: dict[str, int] | None = None,
         # (df == 0 terms exist in no chunk — searching them cannot help)
         rest = [t for t in terms if t not in anchorable
                 and (df is None or df.get(t, 0) > 0)]
+        if not rest and GUIDED_BRIDGED_ENABLED and _is_cross_script(question):
+            # the question's own terms exist in no chunk (df=0); searching
+            # them cannot help. Fall back to the DECLARED Arabic equivalents,
+            # rarest first — the same governed table the anchor uses.
+            rest = [t for t in _bridged_terms(question)
+                    if (df is None or df.get(t, 0) > 0)]
         rest.sort(key=lambda t: (df.get(t, 0) if df else 0))
         batch = rest[:GUIDED_TERMS_PER_ROUND]
         if not batch:

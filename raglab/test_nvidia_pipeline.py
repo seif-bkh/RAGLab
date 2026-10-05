@@ -2927,18 +2927,63 @@ class FieldBridgeAndDefinitionShapeTest(unittest.TestCase):
 
     # ---- the shipped default is the OLD behavior ------------------------
 
-    def test_both_gates_are_off_by_default(self):
+    def test_both_gates_default_on_and_zero_restores_the_old_behavior(self):
+        """Activated 2026-10-05 on the owner's live measurement (2/2 answered
+        with the arm vs 2/2 refused without it). A fresh interpreter with no
+        env must read both gates ON, and "0" must reproduce the pre-fix
+        refusal exactly."""
         import subprocess
         import sys
         env = {k: v for k, v in os.environ.items()
                if k not in ("SUFFICIENCY_FIELD_BRIDGES_ENABLED",
-                            "SUFFICIENCY_DEFINITION_SHAPE_ENABLED")}
-        out = subprocess.run(
-            [sys.executable, "-c", "import sufficiency as s; "
-             "print(s.FIELD_BRIDGES_ENABLED, s.DEFINITION_SHAPE_ENABLED)"],
-            cwd=Path(__file__).resolve().parent, env=env,
-            capture_output=True, text=True, check=True)
-        self.assertEqual(out.stdout.split(), ["False", "False"], out.stderr)
+                            "SUFFICIENCY_DEFINITION_SHAPE_ENABLED",
+                            "SUFFICIENCY_GUIDED_BRIDGED_ENABLED")}
+        probe = ("import sufficiency as s; print(s.FIELD_BRIDGES_ENABLED, "
+                 "s.DEFINITION_SHAPE_ENABLED, s.GUIDED_BRIDGED_ENABLED)")
+        out = subprocess.run([sys.executable, "-c", probe],
+                             cwd=Path(__file__).resolve().parent, env=env,
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(out.stdout.split(), ["True", "True", "True"],
+                         out.stderr)
+        off = dict(env, SUFFICIENCY_FIELD_BRIDGES_ENABLED="0",
+                   SUFFICIENCY_DEFINITION_SHAPE_ENABLED="0",
+                   SUFFICIENCY_GUIDED_BRIDGED_ENABLED="0")
+        out = subprocess.run([sys.executable, "-c", probe],
+                             cwd=Path(__file__).resolve().parent, env=off,
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(out.stdout.split(), ["False", "False", "False"],
+                         out.stderr)
+
+    def test_guided_round_rescues_cross_script_via_declared_bridges(self):
+        """The guided round used to be dead exactly where it was needed: a
+        Latin-script question's own terms all have df=0 in an Arabic corpus,
+        so the term list was empty and the loop broke at once (measured
+        guided_rounds=[] on TM03/TM04). With the gate on it searches the
+        DECLARED Arabic equivalents instead."""
+        import sufficiency
+        seen = []
+
+        def search(query, k):
+            seen.append(query)
+            return [self._hit(self.DOC_CREDIT)]
+
+        df = self._df()
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True), \
+                patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", True), \
+                patch.object(sufficiency, "GUIDED_BRIDGED_ENABLED", False):
+            off = sufficiency.check(self.Q_EN, [], df=df, search_fn=search)
+        self.assertEqual(seen, [])                    # nothing was searched
+        self.assertEqual(off["guided_rounds"], [])
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True), \
+                patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", True), \
+                patch.object(sufficiency, "GUIDED_BRIDGED_ENABLED", True):
+            on = sufficiency.check(self.Q_EN, [], df=df, search_fn=search)
+        self.assertTrue(seen)
+        self.assertTrue(on["guided_rounds"])
+        # the round searched the declared Arabic terms, not the English ones
+        self.assertNotIn("documentary", " ".join(seen))
+        self.assertIn("مستندي", " ".join(seen))
+        self.assertEqual(on["state"], "كافٍ", on["reason"])
 
     def test_gates_off_reproduce_the_refusal_exactly(self):
         import sufficiency
@@ -3062,6 +3107,72 @@ class FieldBridgeAndDefinitionShapeTest(unittest.TestCase):
                 hits, budget,
                 "%s matched %d/%d chunks (share budget %d)"
                 % (pattern, hits, len(texts), budget))
+
+
+class RefusalMessageByReasonTest(unittest.TestCase):
+    """2026-10-05, the owner's live case: «هل يمكنني فتح بيت دعارة؟» was
+    correctly refused but explained with the personal-accounts/credentials
+    wording, because ONE REFUSALS string served every reason. The `reason`
+    vocabulary is unchanged; only the human-facing text became truthful."""
+
+    REASONS = ("private_or_live_request", "no_context", "evidence_insufficient",
+               "insufficient_evidence", "unsourced_number", "invalid_output")
+
+    def test_every_reason_has_three_non_empty_languages(self):
+        from answer import REFUSAL_MESSAGES
+        self.assertEqual(set(REFUSAL_MESSAGES), set(self.REASONS))
+        for reason, table in REFUSAL_MESSAGES.items():
+            for lang in ("en", "fr", "ar"):
+                self.assertTrue(table.get(lang, "").strip(),
+                                "%s/%s is empty" % (reason, lang))
+
+    def test_the_reasons_no_longer_share_one_text(self):
+        from answer import refusal_message
+        texts = {r: refusal_message(r, "ar") for r in self.REASONS}
+        self.assertEqual(len(set(texts.values())), len(self.REASONS),
+                         "two reasons still share a message: %s" % texts)
+
+    def test_insufficient_evidence_does_not_blame_personal_accounts(self):
+        """The owner's exact symptom: a corpus-coverage refusal explained as
+        a lack of access to accounts/credentials/live data."""
+        from answer import refusal_message
+        for lang in ("en", "fr", "ar"):
+            msg = refusal_message("insufficient_evidence", lang)
+            private = refusal_message("private_or_live_request", lang)
+            self.assertNotEqual(msg, private)
+            for needle in ("الحسابات", "comptes", "accounts", "كلمات",
+                           "identifiants", "credentials"):
+                self.assertNotIn(needle, msg, lang)
+
+    def test_unknown_reason_and_language_fail_safe(self):
+        from answer import REFUSALS, refusal_message
+        self.assertEqual(refusal_message("some_new_reason", "ar"),
+                         REFUSALS["ar"])
+        self.assertEqual(refusal_message(None, "ar"), REFUSALS["ar"])
+        self.assertEqual(refusal_message("insufficient_evidence", "de"),
+                         refusal_message("insufficient_evidence", "en"))
+
+    def test_the_generator_refusal_path_uses_the_reason_specific_text(self):
+        """End-to-end on the real AnswerGenerator: a reply with no accepted
+        claim must carry the insufficient_evidence wording, not the
+        private-data one."""
+        from answer import AnswerGenerator, refusal_message
+        gen = AnswerGenerator(make_config(
+            ANSWER_CACHE_PATH=Path(tempfile.mkdtemp()) / "a.json"),
+            client=SimpleNamespace(
+                base_url="injected",
+                # a valid abstention: answerable=false with no claims, so
+                # validate_answer returns [] and the path under test is the
+                # generator's own insufficient_evidence refusal
+                chat=lambda *a, **k: {
+                    "text": '{"answerable": false, "claims": []}',
+                    "seconds": 0.1, "served_model": "m", "usage": {}}))
+        out = gen.answer("سؤال", [{"id": "d::chunk_0001", "text": "نص دليل",
+                                   "metadata": {"source": "d"}}], language="ar")
+        self.assertEqual(out["status"], "refused")
+        self.assertEqual(out["reason"], "insufficient_evidence")
+        self.assertEqual(out["answer"],
+                         refusal_message("insufficient_evidence", "ar"))
 
 
 class DiagBridgeTest(unittest.TestCase):

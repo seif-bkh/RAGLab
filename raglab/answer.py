@@ -21,6 +21,58 @@ REFUSALS = {
     "fr": "Je ne peux pas répondre à partir des documents fournis. Je n’ai pas accès aux comptes personnels, aux identifiants ni aux données bancaires en temps réel.",
     "ar": "لا أستطيع الإجابة اعتمادا على المستندات المقدمة. لا أملك وصولا إلى الحسابات الشخصية أو كلمات المرور أو البيانات البنكية الآنية.",
 }
+
+# ---------------------------------------------------------------------------
+# One refusal message PER REASON (2026-10-05, the owner's live case: asking
+# «هل يمكنني فتح بيت دعارة؟» was correctly refused but explained with the
+# personal-accounts/credentials text, because a single REFUSALS string served
+# every reason). The `reason` field values are UNCHANGED — the contract keeps
+# its vocabulary; only the human-facing `answer` text becomes truthful about
+# why. REFUSALS stays exported (llm_smoke.py, service.py) and remains the
+# private/live-data wording; unknown reasons fall back to it, so no path can
+# produce an empty or KeyError'd answer.
+REFUSAL_MESSAGES: dict[str, dict[str, str]] = {
+    # asked for personal or live data — decided locally, no inference
+    "private_or_live_request": REFUSALS,
+    # nothing retrieved reached the generator at all
+    "no_context": {
+        "en": "No retrieved evidence reached the answer step, so no sourced answer was produced.",
+        "fr": "Aucun élément récupéré n’est parvenu à l’étape de génération ; aucune réponse sourcée n’a été produite.",
+        "ar": "لم يصل أي دليل مسترجع إلى خطوة توليد الجواب، فلم يُنتَج جواب مسنود.",
+    },
+    # the sufficiency gate refused BEFORE generation (evidence absent)
+    "evidence_insufficient": {
+        "en": "The supplied documents do not contain the evidence this question requires, so no answer was generated.",
+        "fr": "Les documents fournis ne contiennent pas les éléments qu’exige cette question ; aucune réponse n’a été générée.",
+        "ar": "لا تتضمن المستندات المقدمة الدليل الذي يستلزمه هذا السؤال، فلم يُولَّد أي جواب.",
+    },
+    # generation ran but produced no claim the evidence supports
+    "insufficient_evidence": {
+        "en": "Nothing in the supplied documents supports an answer to this question, so no claim was accepted.",
+        "fr": "Rien dans les documents fournis n’étaye de réponse à cette question ; aucune affirmation n’a été acceptée.",
+        "ar": "لا يسندها أي دليل في المستندات المقدمة للإجابة عن هذا السؤال، فلم يُقبل أي ادعاء.",
+    },
+    # the draft stated a number no supplied document contains
+    "unsourced_number": {
+        "en": "The draft answer stated a number that no supplied document contains, so it was withheld.",
+        "fr": "Le projet de réponse énonçait un chiffre qu’aucun document fourni ne contient ; il a été écarté.",
+        "ar": "تضمّن مشروع الجواب رقمًا لا يورده أي مستند مقدم، فحُجب.",
+    },
+    # the draft failed the citation gate's structural / membership checks
+    "invalid_output": {
+        "en": "The draft answer could not be verified against the supplied documents, so it was withheld.",
+        "fr": "Le projet de réponse n’a pas pu être vérifié contre les documents fournis ; il a été écarté.",
+        "ar": "تعذّر التحقق من مشروع الجواب بمطابقته مع المستندات المقدمة، فحُجب.",
+    },
+}
+
+
+def refusal_message(reason: str | None, language: str) -> str:
+    """The user-safe explanation for THIS refusal reason (never a guess, never
+    empty: an unknown reason falls back to the private/live-data wording, and
+    an unknown language falls back to English then Arabic)."""
+    table = REFUSAL_MESSAGES.get(reason or "", REFUSALS)
+    return table.get(language) or table.get("en") or table.get("ar") or ""
 ERRORS = {
     "en": "The answer service is temporarily unavailable. No unverified answer was returned.",
     "fr": "Le service de réponse est temporairement indisponible. Aucune réponse non vérifiée n’a été fournie.",
@@ -308,7 +360,8 @@ def local_private_refusal(cfg, question, language=None):
             'api_endpoint': None, 'language': language, 'claims': [], 'sources': [],
             'cached': False, 'inference_performed': False, 'validation_ok': True,
             'provider_ok': True, 'seconds': 0, 'status': 'refused',
-            'reason': 'private_or_live_request', 'answer': REFUSALS[language]}
+            'reason': 'private_or_live_request',
+            'answer': refusal_message('private_or_live_request', language)}
 
 
 def build_answer_generator(cfg, *, call_budget=1):
@@ -382,7 +435,8 @@ class AnswerGenerator:
         sources = build_sources(hits, getattr(self.cfg, "ANSWER_CONTEXT_TOKENS", 3000))
         base["sources"] = sources
         if not sources:
-            return {**base, "status": "refused", "reason": "no_context", "answer": REFUSALS[language]}
+            return {**base, "status": "refused", "reason": "no_context",
+                    "answer": refusal_message("no_context", language)}
         messages = answer_messages(question, language, sources, self.prompt_version)
         max_tokens = getattr(self.cfg, "ANSWER_MAX_TOKENS", 4096)
         key = fingerprint({"model": self.model, "prompt_version": self.prompt_version,
@@ -412,7 +466,8 @@ class AnswerGenerator:
         except UnsourcedNumber as exc:
             reply = response.get("text") if isinstance(response, dict) else None
             return {**base, "status": "refused", "reason": "unsourced_number",
-                    "validation_ok": False, "answer": REFUSALS[language],
+                    "validation_ok": False,
+                    "answer": refusal_message("unsourced_number", language),
                     "error": safe_error(exc),
                     # the model's reply, so the offending claim/number is visible
                     "raw_preview": str(reply or "")[:1200],
@@ -421,7 +476,8 @@ class AnswerGenerator:
         except (ValueError, KeyError, TypeError) as exc:
             reply = response.get("text") if isinstance(response, dict) else None
             return {**base, "status": "refused", "reason": "invalid_output", "validation_ok": False,
-                    "answer": REFUSALS[language], "error": safe_error(exc),
+                    "answer": refusal_message("invalid_output", language),
+                    "error": safe_error(exc),
                     # Diagnostic only (nothing downstream parses it): 1200 chars is
                     # enough to see the claim(s) and the quote that broke membership,
                     # which is the question every invalid_output immediately raises.
@@ -436,7 +492,7 @@ class AnswerGenerator:
                            dict.fromkeys(e["source_id"] for e in c["evidence"])) for c in claims)
         return {**base, "status": "answered" if claims else "refused",
                 "reason": "supported" if claims else "insufficient_evidence",
-                "claims": claims, "answer": answer if claims else REFUSALS[language],
+                "claims": claims, "answer": answer if claims else refusal_message("insufficient_evidence", language),
                 "served_model": response.get("served_model"), "usage": response.get("usage", {}),
                 "seconds": response.get("seconds", 0.0)}
 

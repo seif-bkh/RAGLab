@@ -52,12 +52,23 @@ PROBES = HERE / "topic_map_live_probes.json"
 sys.path.insert(0, str(RAGLAB))
 
 GATES = ("SUFFICIENCY_FIELD_BRIDGES_ENABLED",
-         "SUFFICIENCY_DEFINITION_SHAPE_ENABLED")
+         "SUFFICIENCY_DEFINITION_SHAPE_ENABLED",
+         "SUFFICIENCY_GUIDED_BRIDGED_ENABLED")
 
-ARM_NAMES = {(0, 0): "off/off (current behavior)",
+# short label per gate, for the arm names
+GATE_LABELS = ("bridges", "shape", "guided")
+
+ARM_NAMES = {(0, 0): "off/off (pre-fix behavior)",
              (1, 0): "field-bridges ON",
              (0, 1): "definition-shape ON",
-             (1, 1): "BOTH ON (proposed arm)"}
+             (1, 1): "bridges+shape (the measured live arm)"}
+
+
+def arm_name(bits: tuple) -> str:
+    if len(bits) == 2:
+        return ARM_NAMES.get(bits, str(bits))
+    on = [GATE_LABELS[i] for i, b in enumerate(bits) if b]
+    return "+".join(on) if on else "ALL OFF (pre-fix behavior)"
 
 
 def _banner(text: str) -> None:
@@ -278,32 +289,35 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.arms:
+        import itertools
         summary = []
-        for fb in (0, 1):
-            for ds in (0, 1):
-                env = {**os.environ,
-                       GATES[0]: str(fb), GATES[1]: str(ds)}
-                cmd = [sys.executable, str(Path(__file__).resolve()),
-                       "--json", str((args.json or Path("/tmp/xcov.json"))
-                                     .with_suffix(".%d%d.json" % (fb, ds)))]
-                if args.regression:
-                    cmd.append("--regression")
-                print("\n\n########## ARM field_bridges=%d "
-                      "definition_shape=%d ##########" % (fb, ds))
-                subprocess.run(cmd, env=env, check=False)
-                payload = json.loads(
-                    Path(cmd[cmd.index("--json") + 1]).read_text(
-                        encoding="utf-8"))
-                summary.append({
-                    "arm": ARM_NAMES[(fb, ds)],
-                    "states": {c["id"]: c["one_shot"]["state"]
-                               for c in payload["cases"]},
-                    "gate_probe": {
-                        c["id"]: c["gate_probe_forced_pool"]["state"]
-                        for c in payload["cases"]},
-                    "regression": payload.get("regression"),
-                })
-        _banner("2x2 SUMMARY (one-shot state / gate-probe state per case)")
+        for bits in itertools.product((0, 1), repeat=len(GATES)):
+            env = {**os.environ,
+                   **{g: str(b) for g, b in zip(GATES, bits)}}
+            tag = "".join(str(b) for b in bits)
+            out_path = (args.json or Path("/tmp/xcov.json")).with_suffix(
+                ".%s.json" % tag)
+            cmd = [sys.executable, str(Path(__file__).resolve()),
+                   "--json", str(out_path)]
+            if args.regression:
+                cmd.append("--regression")
+            print("\n\n########## ARM %s ##########"
+                  % " ".join("%s=%d" % (g, b) for g, b in zip(GATES, bits)))
+            subprocess.run(cmd, env=env, check=False)
+            payload = json.loads(out_path.read_text(encoding="utf-8"))
+            summary.append({
+                "arm": arm_name(bits),
+                "states": {c["id"]: c["one_shot"]["state"]
+                           for c in payload["cases"]},
+                "guided_states": {c["id"]: c["guided"]["state"]
+                                  for c in payload["cases"]},
+                "gate_probe": {
+                    c["id"]: c["gate_probe_forced_pool"]["state"]
+                    for c in payload["cases"]},
+                "regression": payload.get("regression"),
+            })
+        _banner("%d-ARM SUMMARY (one-shot / guided / gate-probe per case)"
+                % len(summary))
         print(json.dumps(summary, ensure_ascii=False, indent=1))
         return 0
 

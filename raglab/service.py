@@ -988,11 +988,11 @@ def create_app(profile: dict | None = None, *, generator=None,
                 # tied to evidence absence and carries a referral (the
                 # missing requirements + clarifications).
                 import decompose
-                from answer import REFUSALS
+                from answer import refusal_message
                 d = decompose.decompose(question)
                 language = state_box.get("language") or "ar"
                 refusal = {"status": "refused", "reason": "evidence_insufficient",
-                        "answer": REFUSALS.get(language, REFUSALS["en"]),
+                        "answer": refusal_message("evidence_insufficient", language),
                         "claims": [], "sources": [], "model": "(none — refused before generation)",
                         "language": language, "validation_ok": True, "cached": False,
                         "seconds": 0.0,

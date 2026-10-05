@@ -483,7 +483,14 @@ evidence quotes don't contain — a computed/converted/renamed figure). On the
 `invalid_output`/`unsourced_number` paths the response also carries `error`
 (the gate's finding, safe-redacted) and `raw_preview` (the model's rejected
 reply, PII-scrubbed) for display like "[model said, not accepted]". Render
-`answer` as-is; it is a user-safe explanation:
+`answer` as-is; it is a user-safe explanation.
+
+Since 2026-10-05 the `answer` text is **specific to the `reason`** (it used to
+be one string for all six, which made a corpus-coverage refusal read as "I
+have no access to your accounts"). The reason vocabulary above is unchanged and
+the field stays a user-safe sentence in `en`/`fr`/`ar`; only its wording now
+states the actual cause. `private_or_live_request` keeps the wording shown
+below:
 
 ```json
 {"status": "refused", "reason": "private_or_live_request",

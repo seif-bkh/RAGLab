@@ -434,6 +434,37 @@ Current state of the work:
   question is refused with a personal-accounts explanation.
   Guarded by FieldBridgeAndDefinitionShapeTest (10);
   raglab/audits/PHASE9_STRUCTURE/13_CROSS_SCRIPT_COVERAGE.md.
+- **Cross-script arm ACTIVATED + the two open items closed (2026-10-05, owner
+  decisions after measuring on their own index)**: (1) all three gates now
+  default "1" — SUFFICIENCY_FIELD_BRIDGES_ENABLED,
+  SUFFICIENCY_DEFINITION_SHAPE_ENABLED, SUFFICIENCY_GUIDED_BRIDGED_ENABLED —
+  "0" on any of them restores the pre-fix behavior byte-for-byte (pinned by a
+  fresh-interpreter test). Justification: live 2/2 answered with the arm vs
+  2/2 refused without it on the owner's 1713-chunk index at top_k=5, with
+  understood_as ABSENT in all four answered runs, i.e. the interrogation never
+  ran and the ORIGINAL question passed the first pass. (2) The guided round is
+  no longer dead: a Latin-script question's own terms all have df=0 in an
+  Arabic corpus, so the round selected nothing and broke at once
+  (guided_rounds=[] on both cases). It now searches the DECLARED Arabic
+  equivalents (same governed table, no model call), rarest first. Measured over
+  an 8-arm matrix: with bridges+shape+guided, TM04 goes from غير كافٍ to كافٍ on
+  the offline arm even though its evidence sits at BM25 ranks 27/29/36 — the
+  round reaches what the first window cannot; shape alone does not rescue it and
+  neither does guided alone. Both frozen sets are byte-identical in ALL EIGHT
+  arms (FS=0 FR=0 escalated=3 rescues=0 agreement=1.0; 38/9/3 and 8/2). Cost,
+  declared: up to MAX_GUIDED_ROUNDS extra retrievals, only on the path that was
+  already failing. (3) Refusal text is now per-reason. The owner's live case:
+  «هل يمكنني فتح بيت دعارة؟» was correctly refused but explained with the
+  personal-accounts/credentials wording, because ONE REFUSALS string served six
+  sites (answer.py 311/385/415/424/439 + service.py 995). REFUSAL_MESSAGES now
+  maps all six reasons x en/fr/ar and refusal_message() picks one; the `reason`
+  vocabulary is UNCHANGED so the contract holds, REFUSALS stays exported and
+  keeps the private-data wording, and an unknown reason falls back to it.
+  diag_bridge also had to be fixed to be usable at all here: it counted
+  SUBSTRING df while _anchors() counts TOKENIZED normalized terms, which made it
+  report صرف df=335 DF-BLOCKED on an index where the term was in fact anchoring
+  (measured inflation on 339 chunks: صرف 95 vs 14, ربا 48 vs 13, تكافل 6 vs 3).
+  Guarded by RefusalMessageByReasonTest (5) and DiagBridgeTest (7).
 - **Root cause of the 'still refused after rebuild' (2026-10-02, CONFIRMED
   end-to-end)**: the owner's index has 1713 chunks vs the baked-in 339 — the
   corpus is duplicated ~5x through pushed documents. df(المرابحة) = 17 x 5
