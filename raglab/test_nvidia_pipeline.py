@@ -2985,6 +2985,44 @@ class FieldBridgeAndDefinitionShapeTest(unittest.TestCase):
         self.assertIn("مستندي", " ".join(seen))
         self.assertEqual(on["state"], "كافٍ", on["reason"])
 
+    def test_the_guided_round_only_runs_when_a_search_fn_is_passed(self):
+        """The asymmetry that made the live path refuse: sufficiency.check
+        guards its guided loop with `search_fn is not None`, so a caller that
+        omits it gets NO round at all — the same pool scores غير كافٍ as served
+        and كافٍ with one round. Measured on the owner's deployment by
+        raglab/diag_sufficiency.py (2026-10-05)."""
+        import sufficiency
+        # a decoy with a DISTINCT id: the round dedups by id, so reusing
+        # _hit's fixed chunk id for both would filter the rescue away
+        pool = [dict(self._hit("chunk that shares no anchorable term"),
+                     id="Loi_2016-48.pdf::chunk_0007")]
+        served = sufficiency.check(self.Q_EN, pool, df=self._df())
+        self.assertEqual(served["guided_rounds"], [])
+        self.assertEqual(served["state"], "غير كافٍ")
+
+        def search(query, k):
+            return [self._hit(self.DOC_CREDIT)]
+
+        rescued = sufficiency.check(self.Q_EN, pool, df=self._df(),
+                                    search_fn=search)
+        self.assertTrue(rescued["guided_rounds"])
+        self.assertEqual(rescued["state"], "كافٍ", rescued["reason"])
+
+    def test_service_passes_a_search_fn_to_every_sufficiency_check(self):
+        """Source contract for the wiring above: BOTH sufficiency.check call
+        sites in service.py must forward search_fn, or the deployed path
+        silently drops back to the dead-round behavior this test's sibling
+        measures. Asserted on the source because ask()'s commitment gate needs
+        a full runtime (embedder/collection/generator) that no offline test
+        builds."""
+        import re
+        src = (Path(__file__).resolve().parent
+               / "service.py").read_text(encoding="utf-8")
+        calls = re.findall(r"sufficiency\.check\((?:[^()]|\([^()]*\))*\)", src)
+        self.assertEqual(len(calls), 2, calls)
+        for call in calls:
+            self.assertIn("search_fn=", call, call)
+
     def test_gates_off_reproduce_the_refusal_exactly(self):
         import sufficiency
         with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", False), \
@@ -3243,6 +3281,93 @@ class DiagBridgeTest(unittest.TestCase):
         out = self._verdict({"مرابحة": 17, "تكافل": 6}, 2)
         self.assertIn("should-answer", out)
         self.assertIn("CROSS_BRIDGE_ENABLED", out)
+
+
+class DiagSufficiencyTest(unittest.TestCase):
+    """raglab/diag_sufficiency.py — the probe that exposed why /answer refused
+    TM03/TM04 on the owner's deployment while the offline harness answered them:
+    service.py called sufficiency.check() with no search_fn, and the guided
+    round is guarded by `search_fn is not None`. _verdict is pure; analyse is
+    checked end to end on the real corpus."""
+
+    def _rep(self, served_state, served_rounds, with_state, with_rounds,
+             covered=0, total=1):
+        return {"as_served": {"state": served_state, "missing": ["x"],
+                              "requirements": [{"req": "x",
+                                                "covered": i < covered}
+                                               for i in range(total)],
+                              "guided_rounds": served_rounds},
+                "with_rounds": {"state": with_state, "missing": [],
+                                "guided_rounds": with_rounds}}
+
+    def test_verdict_names_the_unreachable_round(self):
+        import diag_sufficiency as ds
+        notes = "\n".join(ds._verdict(self._rep(
+            "غير كافٍ", [], "كافٍ", [{"query": "صرف عمليات", "new_hits": 20}])))
+        self.assertIn("GUIDED ROUND UNREACHABLE ON /answer", notes)
+        self.assertIn("صرف عمليات", notes)
+        self.assertIn("كافٍ", notes)
+
+    def test_verdict_says_when_the_round_is_not_what_is_needed(self):
+        import diag_sufficiency as ds
+        notes = "\n".join(ds._verdict(self._rep("غير كافٍ", [], "غير كافٍ", [])))
+        self.assertIn("changes nothing", notes)
+        self.assertNotIn("UNREACHABLE", notes)
+
+    def test_verdict_redirects_when_the_served_pool_was_fine(self):
+        """A كافٍ pool means the refusal came from another stage — the probe
+        must say so instead of inventing a retrieval story."""
+        import diag_sufficiency as ds
+        notes = "\n".join(ds._verdict(self._rep("كافٍ", [], "كافٍ", [])))
+        self.assertIn("should NOT have refused", notes)
+
+    def test_verdict_distinguishes_the_two_service_branches(self):
+        """`if not covered:` decides whether the interrogation runs at all, so
+        the probe has to report which branch the deployment took."""
+        import diag_sufficiency as ds
+        none = "\n".join(ds._verdict(
+            self._rep("غير كافٍ", [], "غير كافٍ", [], covered=0, total=2)))
+        self.assertIn("interrogation branch", none)
+        partial = "\n".join(ds._verdict(
+            self._rep("غير كافٍ", [], "غير كافٍ", [], covered=1, total=2)))
+        self.assertIn("SKIPPED", partial)
+
+    def test_analyse_reproduces_the_served_asymmetry(self):
+        """The measured asymmetry, on the real corpus: the SAME pool scores
+        غير كافٍ exactly as /answer computes it and كافٍ once a search_fn is
+        passed. This is the finding, not a restatement of it."""
+        import diag_sufficiency as ds
+        import sufficiency
+        from loader import load_all
+        cfg = make_config(CHUNKING_MODE="restructure")
+        texts = [c.text for c in chunker.chunk_all(load_all(DOCS_DIRS), cfg)]
+        question = ds.DEFAULT_QUESTIONS[0]        # the fr cross-script case
+
+        def search(query, k):
+            qt = sufficiency._hit_terms(query)
+            scored = sorted(
+                ((len(qt & sufficiency._hit_terms(t)), i, t)
+                 for i, t in enumerate(texts)
+                 if qt & sufficiency._hit_terms(t)),
+                key=lambda x: (-x[0], x[1]))
+            return [{"id": f"c{i}", "text": t} for _, i, t in scored[:k]]
+
+        decoy = [{"id": "decoy", "text": "نص لا يشترك في شيء"}]
+        rep = ds.analyse(question, texts, decoy, search_fn=search)
+        # exactly what /answer computed: no round, so the refusal stands
+        self.assertEqual(rep["as_served"]["state"], "غير كافٍ")
+        self.assertEqual(rep["as_served"]["guided_rounds"], [])
+        # the same pool with a round reaches the guide's 5.3 change section
+        rounds = rep["with_rounds"]["guided_rounds"]
+        self.assertTrue(rounds)
+        self.assertEqual(rep["with_rounds"]["state"], "كافٍ",
+                         rep["as_served"]["missing"])
+        # the round searched the DECLARED Arabic equivalent, never the French
+        queries = " ".join(r["query"] for r in rounds)
+        self.assertIn("صرف", queries)
+        self.assertNotIn("change", queries)
+        self.assertIn("GUIDED ROUND UNREACHABLE ON /answer",
+                      "\n".join(ds._verdict(rep)))
 
 
 class InterrogateTest(unittest.TestCase):

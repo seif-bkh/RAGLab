@@ -466,6 +466,30 @@ Current state of the work:
   report صرف df=335 DF-BLOCKED on an index where the term was in fact anchoring
   (measured inflation on 339 chunks: صرف 95 vs 14, ربا 48 vs 13, تكافل 6 vs 3).
   Guarded by RefusalMessageByReasonTest (5) and DiagBridgeTest (7).
+- **CORRECTION to the item above (same day): the guided round was STILL dead on
+  the deployed path.** sufficiency's round is guarded by `search_fn is not
+  None`, and service.py called check() with NO search_fn at both sites (915,
+  the pre-generation gate, and 960, the paraphrase re-check). Every number that
+  "proved" the round works came from sufficiency.measure(), which HAS always
+  passed one — so the claim "the guided round is no longer dead" was true of
+  the harness only. Found from the owner's live run: both cross-script
+  questions refused at 0.0s with no understood_as on a verified-fresh image
+  (`True True True` + the diag_bridge `counting:` header). raglab/
+  diag_sufficiency.py measures the asymmetry directly — it runs check() TWICE
+  over the SAME pool, once as /answer does and once with a search_fn; on the
+  339-chunk corpus TM03 is غير كافٍ as served and كافٍ with one round
+  (query «صرف عمليات», +20 hits). service.py now passes a search_fn built from
+  the request's own retrieval profile, under the SAME
+  SUFFICIENCY_GUIDED_BRIDGED_ENABLED switch, so "0" restores the no-round
+  behavior exactly. No new regression run was needed: the frozen-set numbers
+  were produced by measure(), i.e. WITH the round already running
+  (guided_rescues=0 in every arm). COST: up to MAX_GUIDED_ROUNDS extra
+  retrievals at ROUND_K=20, only on requests that were ALREADY going to refuse.
+  GOVERNANCE: service.py may hold exactly ONE `import sufficiency`, inside the
+  gate — so the flag is read inside _commitment_gate, not at module scope;
+  SufficiencyCheck.test_inert_layer_no_deployed_imports caught the first
+  attempt. Guarded by DiagSufficiencyTest (5) plus two tests pinning that the
+  round needs a search_fn and that BOTH check() call sites forward one.
 - **Root cause of the 'still refused after rebuild' (2026-10-02, CONFIRMED
   end-to-end)**: the owner's index has 1713 chunks vs the baked-in 339 — the
   corpus is duplicated ~5x through pushed documents. df(المرابحة) = 17 x 5

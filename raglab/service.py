@@ -910,11 +910,44 @@ def create_app(profile: dict | None = None, *, generator=None,
         retrieval_mode = (request.mode
                           or runtime.profile["retrieval"]["mode"])
 
+        def _guided_search(query, k_rounds):
+            """One bounded guided-round retrieval, on the same profile as the
+            request. Only ever called from sufficiency.check's guided loop,
+            which is guarded by MAX_GUIDED_ROUNDS and by 'rest' being empty of
+            retrievable terms — so this costs at most MAX_GUIDED_ROUNDS extra
+            retrievals, and only on a pool that was ALREADY insufficient."""
+            from evaluate import prepare_query_text
+            from retrieval import retrieve
+            found, _variants = retrieve(
+                local, embedder, collection, prepare_query_text(query),
+                language=state_box.get("language"), translator=None,
+                top_k=k_rounds,
+                variant_strategy=local.QUERY_VARIANT_STRATEGY,
+                mode=retrieval_mode,
+                lang_filter=(request.lang_filter
+                             if request.lang_filter is not None
+                             else runtime.profile["retrieval"]["lang_filter"]))
+            return [{"id": h.get("id"), "text": h.get("text", "")}
+                    for h in found]
+
         def _commitment_gate(question, hits):
             import sufficiency
+            # service.py used to call check() with NO search_fn, so sufficiency's
+            # guided round — guarded by `search_fn is not None` — never ran on
+            # the deployed path (measured 2026-10-05 by diag_sufficiency.py: the
+            # same pool scores غير كافٍ as served and كافٍ with one guided
+            # round). sufficiency.measure() HAS always passed one, so the
+            # frozen-set numbers that justified activating the arm were measured
+            # WITH the round; this makes the deployed path match the measured
+            # path. SUFFICIENCY_GUIDED_BRIDGED_ENABLED=0 restores the exact
+            # previous behavior (no round, no extra retrieval). Read here, not
+            # at module scope: this file may hold exactly ONE `import
+            # sufficiency`, inside the gate (SufficiencyCheck governance test).
             s = sufficiency.check(
                 question, hits,
-                df=sufficiency.df_for_collection(collection))
+                df=sufficiency.df_for_collection(collection),
+                search_fn=(_guided_search
+                           if sufficiency.GUIDED_BRIDGED_ENABLED else None))
             state_box["s"] = s
             if not want_commitment or s["state"] != "غير كافٍ":
                 return None                      # proceed to the model
@@ -959,7 +992,10 @@ def create_app(profile: dict | None = None, *, generator=None,
                                              radius=local.ANSWER_NEIGHBOR_RADIUS)
                     s2 = sufficiency.check(
                         interrogation["paraphrase"], hits2,
-                        df=sufficiency.df_for_collection(collection))
+                        df=sufficiency.df_for_collection(collection),
+                        search_fn=(_guided_search
+                                   if sufficiency.GUIDED_BRIDGED_ENABLED
+                                   else None))
                     state_box["s2"] = s2
                     if s2["state"] in ("كافٍ", "متعارض"):
                         # the paraphrase IS answerable — answer IT, fully
