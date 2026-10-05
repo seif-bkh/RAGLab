@@ -1,0 +1,58 @@
+{
+  "schema_version": "phase9-topic-map-live-probes-1.0",
+  "baseline_commit": "965634f966fbcce3c6987d693d38d3d0e8780f06",
+  "purpose": "Six independent multilingual cases, each paired across the exact pre-enrichment implementation at baseline_commit and the active Phase 9 implementation. This is a topic-selection diagnostic, not answer evaluation, and does not alter either frozen question set.",
+  "cases": [
+    {
+      "id": "TM01-investment-deposit-basis",
+      "language": "ar",
+      "question": "إذا أودعت أموالًا في حساب استثماري، فما الأساس التعاقدي الذي يسمح للبنك باستثمارها؟",
+      "accepted_topic_ids": [
+        "loi-2016-48:art016",
+        "circulaire-bct-2019-08:section-04f410e2ee",
+        "guide-interne-operations-bancaires-islamiques:section-e55c3b65fd",
+        "guide-interne-operations-bancaires-islamiques:section-56292a7545",
+        "guide-interne-operations-bancaires-islamiques:section-bf49c7fd4e"
+      ]
+    },
+    {
+      "id": "TM02-investment-deposit-reporting",
+      "language": "ar",
+      "question": "ما المعلومات التي يبلغ بها البنك أصحاب الودائع الاستثمارية كل ستة أشهر؟",
+      "accepted_topic_ids": [
+        "circulaire-bct-2019-08:section-e32cee9b1a"
+      ]
+    },
+    {
+      "id": "TM03-foreign-exchange-fr",
+      "language": "fr",
+      "question": "Dans le guide interne, comment une opération de change est-elle réalisée pour un client ?",
+      "accepted_topic_ids": [
+        "guide-interne-operations-bancaires-islamiques:section-dfbdfd2976"
+      ]
+    },
+    {
+      "id": "TM04-documentary-credit-en",
+      "language": "en",
+      "question": "In the internal guide, what does a documentary credit promise and who receives it?",
+      "accepted_topic_ids": [
+        "guide-interne-operations-bancaires-islamiques:section-9f1cc7cf67"
+      ]
+    },
+    {
+      "id": "TM05-early-islamic-finance",
+      "language": "ar",
+      "question": "ما الدول التي شهدت بدايات التجارب الأولى للمالية الإسلامية وفق المدخل التدريبي؟",
+      "accepted_topic_ids": [
+        "madkhal-sayrafa-islamiya:section-ef7f7c9604"
+      ]
+    },
+    {
+      "id": "TM06-off-corpus-balcony-mint",
+      "language": "ar",
+      "question": "كيف أعتني بنبتة نعناع في شرفة مشمسة خلال الصيف؟",
+      "accepted_topic_ids": [],
+      "expected_classification": "non_banking"
+    }
+  ]
+}

@@ -3090,6 +3090,66 @@ class TopicMapTest(unittest.TestCase):
                          {"first.md", "second.md"})
 
 
+class TopicMapLiveProbePlanTest(unittest.TestCase):
+    """The separately maintained low-N map probe uses live catalog IDs only."""
+
+    def test_probe_plan_is_independent_and_all_expected_ids_are_visible(self):
+        import json
+        import topic_map
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent
+        plan = json.loads((root / "audits" / "PHASE9_STRUCTURE"
+                           / "topic_map_live_probes.json").read_text(encoding="utf-8"))
+        self.assertEqual(plan["schema_version"], "phase9-topic-map-live-probes-1.0")
+        self.assertEqual(plan["baseline_commit"],
+                         "965634f966fbcce3c6987d693d38d3d0e8780f06")
+        cases = plan["cases"]
+        self.assertEqual(len(cases), 6)
+        self.assertEqual(len({case["id"] for case in cases}), len(cases))
+        self.assertEqual({case["language"] for case in cases}, {"ar", "fr", "en"})
+        self.assertFalse(any(case["id"].startswith("OWNER-") or
+                             case["id"].startswith("S1-") for case in cases))
+
+        docs = root.parent / "docs"
+        visible_ids = {entry["topic_id"]
+                       for entry in topic_map.prompt_entries([docs])}
+        for case in cases:
+            self.assertTrue(set(case["accepted_topic_ids"]) <= visible_ids,
+                            case["id"])
+        out_of_scope = next(case for case in cases
+                            if case.get("expected_classification") == "non_banking")
+        self.assertEqual(out_of_scope["accepted_topic_ids"], [])
+
+    def test_legacy_topic_mapping_requires_an_exact_unambiguous_source_label(self):
+        import importlib.util
+        from pathlib import Path
+        root = Path(__file__).resolve().parent
+        probe_path = (root / "audits" / "PHASE9_STRUCTURE"
+                      / "run_topic_map_live_probe.py")
+        spec = importlib.util.spec_from_file_location("phase9_live_probe_test", probe_path)
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        legacy = [
+            {"document": "A.pdf", "heading": "Shared heading", "unit_id": None},
+            {"document": "B.pdf", "heading": "Shared heading", "unit_id": None},
+            {"document": "C.pdf", "heading": "Unique heading", "unit_id": None},
+        ]
+        active = [
+            {"document": "A.pdf", "heading": "Shared heading", "topic_id": "a:1"},
+            {"document": "B.pdf", "heading": "Shared heading", "topic_id": "b:1"},
+            {"document": "C.pdf", "heading": "Unique heading", "topic_id": "c:1"},
+        ]
+        result = probe.legacy_selected_ids(
+            ["Unique heading", "heading", "(A.pdf) Shared heading"], legacy, active)
+        self.assertEqual(result["topic_ids"], ["c:1", "a:1"])
+        self.assertEqual(result["unmapped_topics"], ["heading"])
+        self.assertEqual(result["ambiguous_topics"], [])
+        ambiguous = probe.legacy_selected_ids(["Shared heading"], legacy, active)
+        self.assertEqual(ambiguous["topic_ids"], [])
+        self.assertEqual(ambiguous["ambiguous_topics"], ["Shared heading"])
+
+
 class ModelsProbeTest(unittest.TestCase):
     """The read-only free-model probe (xKiro / NVIDIA / Google): honest
     per-provider semantics, fail-closed free detection, bounded reads, and
