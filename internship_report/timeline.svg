@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 660" width="1600" height="660">
+<rect width="1600" height="660" fill="#ffffff"/>
+<text x="40.0" y="50.0" font-family="Segoe UI, Arial, sans-serif" font-size="30" fill="#16202c" font-weight="bold" text-anchor="start">RAGLab — development timeline</text>
+<text x="40.0" y="82.0" font-family="Segoe UI, Arial, sans-serif" font-size="14" fill="#5c6775" font-weight="normal" text-anchor="start">369 non-merge commits (387 total) across 15 branches · 04 Sept → 05 Oct 2026 · the last day of work is highlighted</text>
+<rect x="70.0" y="104" width="696.3" height="22" rx="6" fill="#ffffff" stroke="#7ba4f0" stroke-width="1.2"/>
+<text x="418.2" y="119.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#7ba4f0" font-weight="bold" text-anchor="middle">Generation 1 — flat lab</text>
+<rect x="766.3" y="104" width="232.1" height="22" rx="6" fill="#ffffff" stroke="#9aa4b2" stroke-width="1.2"/>
+<text x="882.4" y="119.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#9aa4b2" font-weight="bold" text-anchor="middle">Pivot &amp; docs</text>
+<rect x="998.4" y="104" width="232.1" height="22" rx="6" fill="#ffffff" stroke="#dfa23c" stroke-width="1.2"/>
+<text x="1114.5" y="119.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#dfa23c" font-weight="bold" text-anchor="middle">Corpus repair</text>
+<rect x="1230.5" y="104" width="154.7" height="22" rx="6" fill="#ffffff" stroke="#4fae8d" stroke-width="1.2"/>
+<text x="1307.9" y="119.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#4fae8d" font-weight="bold" text-anchor="middle">Phases 2–6</text>
+<rect x="1385.3" y="104" width="154.7" height="22" rx="6" fill="#ffffff" stroke="#d6336c" stroke-width="1.2"/>
+<text x="1462.6" y="119.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#d6336c" font-weight="bold" text-anchor="middle">★ Phase 9</text>
+<line x1="70" y1="470" x2="1540" y2="470" stroke="#c8d0dc" stroke-width="1.4"/>
+<rect x="84.7" y="417.9" width="48.0" height="52.1" rx="4" fill="#7ba4f0"/>
+<text x="108.7" y="411.9" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#7ba4f0" font-weight="bold" text-anchor="middle">18</text>
+<text x="108.7" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 04</text>
+<rect x="162.1" y="250.0" width="48.0" height="220.0" rx="4" fill="#7ba4f0"/>
+<text x="186.1" y="244.0" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#7ba4f0" font-weight="bold" text-anchor="middle">76</text>
+<text x="186.1" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 05</text>
+<rect x="239.4" y="328.2" width="48.0" height="141.8" rx="4" fill="#7ba4f0"/>
+<text x="263.4" y="322.2" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#7ba4f0" font-weight="bold" text-anchor="middle">49</text>
+<text x="263.4" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 06</text>
+<rect x="316.8" y="432.4" width="48.0" height="37.6" rx="4" fill="#7ba4f0"/>
+<text x="340.8" y="426.4" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#7ba4f0" font-weight="bold" text-anchor="middle">13</text>
+<text x="340.8" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 07</text>
+<rect x="394.2" y="452.6" width="48.0" height="17.4" rx="4" fill="#7ba4f0"/>
+<text x="418.2" y="446.6" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#7ba4f0" font-weight="bold" text-anchor="middle">6</text>
+<text x="418.2" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 08</text>
+<rect x="471.5" y="452.6" width="48.0" height="17.4" rx="4" fill="#7ba4f0"/>
+<text x="495.5" y="446.6" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#7ba4f0" font-weight="bold" text-anchor="middle">6</text>
+<text x="495.5" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 11</text>
+<rect x="548.9" y="417.9" width="48.0" height="52.1" rx="4" fill="#7ba4f0"/>
+<text x="572.9" y="411.9" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#7ba4f0" font-weight="bold" text-anchor="middle">18</text>
+<text x="572.9" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 14</text>
+<rect x="626.3" y="464.2" width="48.0" height="5.8" rx="4" fill="#7ba4f0"/>
+<text x="650.3" y="458.2" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#7ba4f0" font-weight="bold" text-anchor="middle">2</text>
+<text x="650.3" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 15</text>
+<rect x="703.6" y="429.5" width="48.0" height="40.5" rx="4" fill="#7ba4f0"/>
+<text x="727.6" y="423.5" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#7ba4f0" font-weight="bold" text-anchor="middle">14</text>
+<text x="727.6" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 16</text>
+<rect x="781.0" y="461.3" width="48.0" height="8.7" rx="4" fill="#9aa4b2"/>
+<text x="805.0" y="455.3" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#9aa4b2" font-weight="bold" text-anchor="middle">3</text>
+<text x="805.0" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 23</text>
+<rect x="858.4" y="432.4" width="48.0" height="37.6" rx="4" fill="#9aa4b2"/>
+<text x="882.4" y="426.4" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#9aa4b2" font-weight="bold" text-anchor="middle">13</text>
+<text x="882.4" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 24</text>
+<rect x="935.8" y="467.1" width="48.0" height="2.9" rx="4" fill="#9aa4b2"/>
+<text x="959.7" y="461.1" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#9aa4b2" font-weight="bold" text-anchor="middle">1</text>
+<text x="959.7" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 25</text>
+<rect x="1013.1" y="429.5" width="48.0" height="40.5" rx="4" fill="#dfa23c"/>
+<text x="1037.1" y="423.5" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#dfa23c" font-weight="bold" text-anchor="middle">14</text>
+<text x="1037.1" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 28</text>
+<rect x="1090.5" y="446.8" width="48.0" height="23.2" rx="4" fill="#dfa23c"/>
+<text x="1114.5" y="440.8" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#dfa23c" font-weight="bold" text-anchor="middle">8</text>
+<text x="1114.5" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 29</text>
+<rect x="1167.9" y="377.4" width="48.0" height="92.6" rx="4" fill="#dfa23c"/>
+<text x="1191.8" y="371.4" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#dfa23c" font-weight="bold" text-anchor="middle">32</text>
+<text x="1191.8" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Sep 30</text>
+<rect x="1245.2" y="325.3" width="48.0" height="144.7" rx="4" fill="#4fae8d"/>
+<text x="1269.2" y="319.3" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#4fae8d" font-weight="bold" text-anchor="middle">50</text>
+<text x="1269.2" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Oct 01</text>
+<rect x="1322.6" y="409.2" width="48.0" height="60.8" rx="4" fill="#4fae8d"/>
+<text x="1346.6" y="403.2" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#4fae8d" font-weight="bold" text-anchor="middle">21</text>
+<text x="1346.6" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Oct 02</text>
+<rect x="1400.0" y="455.5" width="48.0" height="14.5" rx="4" fill="#d6336c"/>
+<text x="1423.9" y="449.5" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#d6336c" font-weight="bold" text-anchor="middle">5</text>
+<text x="1423.9" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Oct 04</text>
+<rect x="1477.3" y="412.1" width="48.0" height="57.9" rx="4" fill="#d6336c"/>
+<text x="1501.3" y="406.1" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#d6336c" font-weight="bold" text-anchor="middle">20</text>
+<text x="1501.3" y="488.0" font-family="Segoe UI, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="middle">Oct 05</text>
+<text x="1037.1" y="540.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#dfa23c" font-weight="bold" text-anchor="middle">28 Sep — pivot: corpus = docs/ only,</text>
+<text x="1037.1" y="556.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#dfa23c" font-weight="bold" text-anchor="middle">step-and-plan protocol, owner gates</text>
+<text x="302.1" y="540.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#7ba4f0" font-weight="bold" text-anchor="middle">04–16 Sep — first pipeline: providers,</text>
+<text x="302.1" y="556.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#7ba4f0" font-weight="bold" text-anchor="middle">translation and fusion compared by A/B</text>
+<text x="1423.9" y="540.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#d6336c" font-weight="bold" text-anchor="middle">★ 04–05 Oct — Phase 9:</text>
+<text x="1423.9" y="556.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#d6336c" font-weight="bold" text-anchor="middle">question ↔ retrieval, service 1.5.0</text>
+<text x="1269.2" y="595.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#4fae8d" font-weight="bold" text-anchor="middle">01 Oct — Phase 4 knowledge layer</text>
+<text x="1269.2" y="611.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#4fae8d" font-weight="bold" text-anchor="middle">(198 units · 77 edges · 53 numbers)</text>
+<text x="805.0" y="595.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#9aa4b2" font-weight="bold" text-anchor="middle">23–25 Sep — spec, gap analysis,</text>
+<text x="805.0" y="611.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#9aa4b2" font-weight="bold" text-anchor="middle">production packaging, endpoint freeze</text>
+<text x="1346.6" y="630.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#4fae8d" font-weight="bold" text-anchor="middle">02 Oct — activation: sufficiency + interrogation ON (1.4.0)</text>
+<line x1="1037.1" y1="522" x2="1037.1" y2="566" stroke="#dfa23c" stroke-width="1.3"/>
+<line x1="302.1" y1="522" x2="302.1" y2="566" stroke="#7ba4f0" stroke-width="1.3"/>
+<line x1="1423.9" y1="522" x2="1423.9" y2="566" stroke="#d6336c" stroke-width="1.3"/>
+<line x1="1269.2" y1="576" x2="1269.2" y2="621" stroke="#4fae8d" stroke-width="1.3"/>
+<line x1="805.0" y1="576" x2="805.0" y2="621" stroke="#9aa4b2" stroke-width="1.3"/>
+<line x1="1346.6" y1="611" x2="1346.6" y2="641" stroke="#4fae8d" stroke-width="1.3"/>
+<rect x="70" y="138" width="14" height="13" rx="3" fill="#7ba4f0"/>
+<text x="90.0" y="149.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#5c6775" font-weight="normal" text-anchor="start">Generation 1</text>
+<rect x="174.4" y="138" width="14" height="13" rx="3" fill="#9aa4b2"/>
+<text x="194.4" y="149.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#5c6775" font-weight="normal" text-anchor="start">Pivot / docs</text>
+<rect x="278.8" y="138" width="14" height="13" rx="3" fill="#dfa23c"/>
+<text x="298.8" y="149.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#5c6775" font-weight="normal" text-anchor="start">Corpus repair</text>
+<rect x="389.40000000000003" y="138" width="14" height="13" rx="3" fill="#4fae8d"/>
+<text x="409.4" y="149.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#5c6775" font-weight="normal" text-anchor="start">Phases 2–6</text>
+<rect x="481.40000000000003" y="138" width="14" height="13" rx="3" fill="#d6336c"/>
+<text x="501.4" y="149.0" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" fill="#5c6775" font-weight="normal" text-anchor="start">Phase 9 (last update)</text>
+</svg>
