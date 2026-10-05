@@ -3368,11 +3368,16 @@ class DiagSufficiencyTest(unittest.TestCase):
         self.assertNotIn("UNREACHABLE", notes)
 
     def test_verdict_redirects_when_the_served_pool_was_fine(self):
-        """A كافٍ pool means the refusal came from another stage — the probe
-        must say so instead of inventing a retrieval story."""
+        """A كافٍ pool means the pre-generation gate PASSED. The owner's run
+        printed the old wording ('/answer should NOT have refused') on a
+        question that had in fact been ANSWERED, so the line presumed a failure
+        that had not happened. It must point at the later stages instead —
+        which is exactly where the invalid_output episode actually came from."""
         import diag_sufficiency as ds
         notes = "\n".join(ds._verdict(self._rep("كافٍ", [], "كافٍ", [])))
-        self.assertIn("should NOT have refused", notes)
+        self.assertIn("pre-generation gate PASSES", notes)
+        self.assertIn("citation gate", notes)
+        self.assertNotIn("should NOT have refused", notes)
 
     def test_verdict_distinguishes_the_two_service_branches(self):
         """`if not covered:` decides whether the interrogation runs at all, so

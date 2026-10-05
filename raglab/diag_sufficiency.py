@@ -118,9 +118,15 @@ def _verdict(rep: dict) -> list[str]:
     notes: list[str] = []
     a, w = rep["as_served"], rep["with_rounds"]
     if a["state"] != "غير كافٍ":
-        notes.append(f"served verdict is {a['state']} — /answer should NOT have "
-                     "refused on this pool; the refusal came from elsewhere "
-                     "(interrogation path or a different pool).")
+        # The owner's 2026-10-05 run showed this line presuming a refusal that
+        # had not happened: the pool was كافٍ and /answer ANSWERED. A كافٍ
+        # pool means the pre-generation gate passed, so any refusal the caller
+        # saw came from a LATER stage — say that instead of guessing.
+        notes.append(f"served verdict is {a['state']} — the pre-generation gate "
+                     "PASSES, so /answer proceeds to the model. If the response "
+                     "was still a refusal, it came from a LATER stage (the "
+                     "citation gate -> invalid_output, or an unsourced number), "
+                     "never from evidence sufficiency.")
         return notes
     notes.append("served verdict is غير كافٍ — /answer refuses before any "
                  "model call (service.py:915).")

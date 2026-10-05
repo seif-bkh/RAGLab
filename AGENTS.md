@@ -517,6 +517,25 @@ Current state of the work:
   test_guided_rounds_bounded_and_rescuing pinned len(rounds)==MAX_GUIDED_ROUNDS
   exactly — it was pinning that waste; it now pins <= the cap and that no two
   rounds search the same terms.
+- **VERIFIED END TO END on the owner's deployment (854 chunks, cap 76, after
+  deleting 859 duplicate chunks: 35 + 824, baked corpus untouched).** TM03 (fr)
+  is `answered/supported`, كافٍ / procedural_evidence, 7 claims over 3 sources
+  (chunk_0138/0139/0140, heading 5.3) with `understood_as` ABSENT — a French
+  question about «les étapes et modalités» answered verbatim from an
+  Arabic-only corpus with NO interrogation, i.e. the first pass alone suffices
+  once intent is classified correctly and the duplicates are gone. TM04 (en) is
+  `answered/supported` too, but STILL via the interrogation (9.636s): on the
+  deployment's vector retrieval the guided round does NOT flip it
+  (with_rounds is also غير كافٍ), whereas the harness — BM25 over 339 chunks —
+  does. Same correct, disclosed outcome; different rescuer than sections 12/14
+  describe. Post-dedup df: every bridge term anchors (صرف 25, اعتماد 22,
+  مستندي 11, ربا 26, مرابحة 31 …) except عمليات df=279 vs cap 76 — the guard
+  working correctly, it is in 33% of chunks. سلف is a DEAD ROW in the bridge
+  table: df=0 tokenized, because the corpus only has «سلفة» (measured locally:
+  1 chunk by substring, 0 tokenized), so the old "6" was containment, not a
+  term. Measured and REJECTED: dropping above-cap terms from the round's query
+  is exactly neutral on all six probes and both frozen sets, so there is no
+  measured benefit to justify a production change.
 - **Root cause of the 'still refused after rebuild' (2026-10-02, CONFIRMED
   end-to-end)**: the owner's index has 1713 chunks vs the baked-in 339 — the
   corpus is duplicated ~5x through pushed documents. df(المرابحة) = 17 x 5
