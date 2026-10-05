@@ -508,26 +508,38 @@ Current state of the work:
   `37251040562` sent 12 xKiro calls across six cases: all parsed, no call
   errors, target hits 4/5 -> 5/5; diagnostic only, no retrieval or answer
   generation. See `raglab/audits/PHASE9_STRUCTURE/11_TOPIC_MAP_LIVE_COMPARISON.md`.
-  A later, separate end-to-end probe ran the six cases through actual
-  `POST /answer` (`37252874521`): HTTP 200 6/6; 3 answered and 3 refused; all
-  three answers passed citation-structure validation and cited a target
-  document (3/5 in-scope cases). That citation metric is NOT retrieval hit@k.
-  Six logical chat calls (3 answer generations + 3 interrogations), no provider
-  errors. TM03/TM04 selected the intended topics but refused; per-pass retrieved
-  documents and final `s2` sufficiency are not exposed. TM06 refused outside
-  corpus correctly, but the reason/message mismatched the mint question.
-  Results, answers, limits, and proposed diagnostic gate 2.5:
+  Initial end-to-end probe `37252874521` ran all six unchanged questions through
+  `POST /answer`; a saved-artifact replay `37253849145` made no provider calls.
+  The later trace-enabled K=5 arm `37263044824`, plus K=12 `37263803281` and
+  K=20 `37264116035`, all returned HTTP 200 for six cases: 3 answered / 3
+  refused, all three generated answers validated, seven logical calls and zero
+  provider/HTTP errors. Expected-document retrieval was already 5/5 in the
+  original pass and 2/2 after interrogation at K=5, and stayed identical at
+  K=12/20. This is not a final-citation metric.
+  The K=12/20 harness/workflow support and stage classification landed in
+  `67e74b2`; CI run `37263688467` passed the offline suite and Docker/import
+  smoke. Trace distinguishes document hit, reranked input-position/chunk, and
+  requirement coverage. TM03/TM04 retrieve the expected Guide and relevant
+  sections in the top five, but sufficiency still refuses them (TM04's source
+  has a direct definition, yet `definition_or_purpose_unit` has no covering
+  chunk). Raising top_k did not change the outcomes. TM06's after-interrogation
+  pass is sufficient, then generation returns `reason=insufficient_evidence`
+  with no supported claims; the audit now classifies that as
+  `answer_generation_no_supported_claims`, distinct from the
+  `evidence_insufficient` gate. Exact refusal text, per-pass trace, final
+  answers, and limits are recorded in
   `raglab/audits/PHASE9_STRUCTURE/12_PHASE9_ANSWER_PROBE_RESULTS.md`.
-  The first answer run `37252759793` failed preflight with no provider calls;
-  report replay `37253849145` republished the saved artifact without inference.
-  No changes to `questions_50.json`, `questions_targets.json`, or production
-  index. The diagnostic does not justify a default change or map expansion.
+  The first attempt `37252759793` stopped at preflight with no provider calls.
+  Nothing changed in `questions_50.json`, `questions_targets.json`, production
+  service/index, or the default top_k; the measurements do not justify changing
+  defaults or expanding the topic map.
 - Current Arena session branch: **arena/01a10905-raglab**, based on
   54b993f8 (from arena/01a107b8-raglab). Tokenizer-dependent historical-map
   count validation was removed in commit `39eaf79`; corrected map run
-  `37251040562` completed. Regular CI passed at `01bf5da` (run
-  `37253845572`). Offline gate: 417 tests, EXIT=0
-  (`raglab/logs/test_run_20261005_011647.log`).
+  `37251040562` completed. Regular CI on code commit `67e74b2` passed
+  (run `37263688467`; offline regression suite and Docker/import smoke).
+  Local `--validate-only` could not finish because sandbox Python lacks
+  `tiktoken`, but the per-arm GitHub preflights passed.
 - **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
   `raglab/decompose.py` (read-only): the intermediate decomposition layer.
   EVERY question → reformulated micro-questions, each with its partial
