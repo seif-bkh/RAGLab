@@ -115,8 +115,13 @@ class Report(FPDF):
         x = self.l_margin + 3 + level * 6
         self.set_x(x)
         self.cell(5, 5.6, mark)
+        # fpdf2 restarts wrapped lines at the LEFT MARGIN, so indent by moving the margin
+        old = self.l_margin
+        self.set_left_margin(x + 5)
         self.set_x(x + 5)
-        self.multi_cell(self.w - x - 5 - self.r_margin, 5.6, transliterate(s))
+        self.multi_cell(0, 5.6, transliterate(s))
+        self.set_left_margin(old)
+        self.set_x(old)
         self.ln(0.6)
 
     def code(self, lines):
@@ -161,7 +166,10 @@ class Report(FPDF):
                 self.set_xy(x, y)
                 self.rect(x, y, widths[j], h, style="F")
                 self.set_xy(x + 1.5, y + 1.2)
+                old_lm = self.l_margin
+                self.set_left_margin(x + 1.5)
                 self.multi_cell(widths[j] - 3, 4.4, txt)
+                self.set_left_margin(old_lm)
                 x += widths[j]
             self.set_xy(self.l_margin, y + h)
         self.set_draw_color(210, 216, 224)
@@ -231,17 +239,25 @@ def parse(md: str):
             yield ("hr", None)
             i += 1
             continue
-        m = re.match(r"^(\s*)[-*]\s+(.*)$", ln)
+        m = re.match(r"^(\s*)[-*]\s+(.*)$", ln) or re.match(r"^(\s*)\d+[.)]\s+(.*)$", ln)
         if m:
             indent = len(m.group(1)) // 2
-            yield ("bullet", (indent, inline_clean(m.group(2))))
+            buf = [m.group(2).strip()]
             i += 1
-            continue
-        m = re.match(r"^(\s*)\d+[.)]\s+(.*)$", ln)
-        if m:
-            indent = len(m.group(1)) // 3
-            yield ("bullet", (indent, inline_clean(m.group(2))))
-            i += 1
+            # a Markdown list item may wrap over several indented lines: join them
+            while i < len(lines):
+                nxt = lines[i]
+                if not nxt.strip():
+                    break
+                if re.match(r"^\s*([-*]|\d+[.)])\s+", nxt):
+                    break
+                if nxt.startswith(("#", "|", ">", "```", "---", "![")):
+                    break
+                if len(nxt) - len(nxt.lstrip()) == 0:   # dedented -> new block
+                    break
+                buf.append(nxt.strip())
+                i += 1
+            yield ("bullet", (indent, inline_clean(" ".join(buf))))
             continue
         if not ln.strip():
             i += 1
