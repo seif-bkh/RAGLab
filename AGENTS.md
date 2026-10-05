@@ -404,7 +404,14 @@ Current state of the work:
   («… هو تعهد مكتوب صادر من بنك …»), not a definition verb. Looseness was
   measured BEFORE declaring: «هو + noun» 1/339 chunks (chunk_0043 itself),
   tight purpose forms 3/339, vs rejected «هو + …» 14/339 and
-  «يستعمل|يستخدم|يهدف|الغرض» 55/339; the cap is pinned by a test. Measured
+  «يستعمل|يهدف|الغرض» 55/339; the cap is pinned by a test. NOTE the chunk
+  count is environment-dependent — 339 with the char4 fallback estimator
+  (this sandbox cannot fetch tiktoken's BPE file) vs 858 with cl100k_base in
+  CI — so the looseness cap is a SHARE (1 in 100, floor 5), never an absolute
+  count; the first absolute version (5) passed locally and failed CI with
+  "matched 6/858", which is why the share form exists. The same split scales
+  the corpus df ~2.5x, and _df_cap already scales with it (76 at 858 chunks),
+  so the bridged terms stay under the bar in both environments. Measured
   2x2 (measure_cross_script_coverage.py --arms, each arm a real subprocess):
   bridges alone turn TM03 كافٍ end-to-end; TM04 is كافٍ in the GATE PROBE
   (evidence forced into the pool) but stays غير كافٍ one-shot because

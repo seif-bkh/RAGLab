@@ -3035,20 +3035,33 @@ class FieldBridgeAndDefinitionShapeTest(unittest.TestCase):
             self.assertTrue(sufficiency.shape_ok(
                 "definition_or_purpose_unit", hit, {}, set(), self.Q_EN))
 
+    # Looseness bound as a SHARE, never an absolute count: the SAME corpus
+    # chunks 339 ways with the char4 fallback estimator (this sandbox cannot
+    # fetch tiktoken's BPE file) and 858 ways with cl100k_base in CI, so a
+    # fixed cap passes in one environment and fails in the other. This is the
+    # lesson sufficiency._df_cap already encodes for df ("rarity is a share").
+    DEFINITION_SHAPE_MAX_SHARE = 100          # 1 chunk in 100
+
     def test_added_definition_shapes_stay_tight_on_the_real_corpus(self):
         """Looseness guard: a shape matching most chunks would make the
-        definitional requirement vacuous (false sufficiency). Measured over
-        the 339-chunk corpus: «هو + اسم جامد» 1 chunk, tight purpose 3."""
+        definitional requirement vacuous (false sufficiency).
+
+        Measured shares — copula 1/339 (0.3%) and tight purpose 3/339 (0.9%)
+        on the local char4 build, purpose 6/858 (0.7%) on the CI tiktoken
+        build; the forms rejected as too loose are 14/339 (4.1%), 55/339
+        (16%) and the pre-existing definition pattern 91/339 (27%)."""
         import sufficiency
         from loader import load_all
         cfg = make_config(CHUNKING_MODE="restructure")
         texts = [c.text for c in chunker.chunk_all(load_all(DOCS_DIRS), cfg)]
         self.assertGreater(len(texts), 300)
+        budget = max(5, -(-len(texts) // self.DEFINITION_SHAPE_MAX_SHARE))
         for pattern in sufficiency.DEFINITION_SHAPE_PATTERNS:
             hits = sum(1 for t in texts if re.search(pattern, t))
-            self.assertLessEqual(hits, 5,
-                                 "%s matched %d/%d chunks"
-                                 % (pattern, hits, len(texts)))
+            self.assertLessEqual(
+                hits, budget,
+                "%s matched %d/%d chunks (share budget %d)"
+                % (pattern, hits, len(texts), budget))
 
 
 class DiagBridgeTest(unittest.TestCase):
