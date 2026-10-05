@@ -3150,6 +3150,109 @@ class TopicMapLiveProbePlanTest(unittest.TestCase):
         self.assertEqual(ambiguous["ambiguous_topics"], ["Shared heading"])
 
 
+class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
+    """The six-case end-to-end answer probe is bounded and reportable offline."""
+
+    @staticmethod
+    def _probe():
+        import importlib.util
+        from pathlib import Path
+        root = Path(__file__).resolve().parent
+        path = root / "audits" / "PHASE9_STRUCTURE" / "run_phase9_answer_probe.py"
+        spec = importlib.util.spec_from_file_location("phase9_answer_probe_test", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_live_run_is_blocked_outside_github_actions(self):
+        import os
+        from pathlib import Path
+        import tempfile
+        from unittest.mock import patch
+        probe = self._probe()
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "should-not-be-created.json"
+            with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+                self.assertEqual(probe.run(output=output), 2)
+            self.assertFalse(output.exists())
+
+    def test_plan_reuses_the_six_existing_topic_probe_cases(self):
+        from pathlib import Path
+        import json
+        probe = self._probe()
+        plan_path = (Path(__file__).resolve().parent / "audits" / "PHASE9_STRUCTURE"
+                     / "topic_map_live_probes.json")
+        existing = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan = probe.load_plan()
+        self.assertEqual([c["id"] for c in plan["cases"]],
+                         [c["id"] for c in existing["cases"]])
+        self.assertEqual([c["question"] for c in plan["cases"]],
+                         [c["question"] for c in existing["cases"]])
+
+    def test_summary_distinguishes_answered_citations_and_oos_refusal(self):
+        probe = self._probe()
+        report = {"cases": [
+            {"http_status": 200, "status": "answered", "validation_ok": True,
+             "expected_documents": ["Guide.docx"],
+             "citation_target_document_hit": True,
+             "expected_out_of_scope_refusal": False,
+             "out_of_scope_refusal_match": None,
+             "chat_calls": [{"kind": "answer_generation"}]},
+            {"http_status": 200, "status": "refused", "validation_ok": True,
+             "expected_documents": [], "citation_target_document_hit": None,
+             "expected_out_of_scope_refusal": True,
+             "out_of_scope_refusal_match": True,
+             "chat_calls": [{"kind": "interrogation"}]},
+        ]}
+        summary = probe.summarize(report)
+        self.assertEqual(summary["validated_answers"], 1)
+        self.assertEqual(summary["citation_target_document_hits"], 1)
+        self.assertEqual(summary["out_of_scope_refusal_matches"], 1)
+        self.assertEqual(summary["chat_calls_by_kind"],
+                         {"answer_generation": 1, "interrogation": 1})
+        self.assertEqual(summary["provider_or_http_errors"], 0)
+
+    def test_annotation_exposes_final_answer_and_citation_quote(self):
+        import json
+        probe = self._probe()
+        report = {
+            "model": "qwen/qwen3.8-max:free",
+            "max_logical_chat_calls": 18,
+            "free_price_verification": {"verified": True},
+            "profile": {"chunking": {"mode": "restructure"}},
+            "summary": {"cases": 1},
+            "cases": [{
+                "id": "TM-test", "question": "What is asked?",
+                "http_status": 200, "status": "answered", "reason": "supported",
+                "language_actual": "en", "validation_ok": True,
+                "evidence_status": "كافٍ", "retrieved": 2,
+                "sources": [{"source_id": "S1", "document": "Guide.docx",
+                             "heading": "Section 1", "unit_id": None}],
+                "citation_target_document_hit": True,
+                "interrogation": {"classification": "definitional",
+                                  "topics": ["Topic"], "requirements": [],
+                                  "confidence": 0.8},
+                "interrogation_topic_hit": True,
+                "understood_as": "Explain the topic from the guide.",
+                "answer": "A grounded answer [S1]",
+                "claims": [{"text": "A grounded answer.", "evidence": [
+                    {"source_id": "S1", "document": "Guide.docx",
+                     "heading": "Section 1", "quote": "Verbatim evidence quote."}]}],
+                "expected_out_of_scope_refusal": False,
+                "out_of_scope_refusal_match": None,
+                "chat_call_counts": {"answer_generation": 1},
+            }],
+        }
+        rendered = json.loads(probe.annotation(report))
+        case = rendered["cases"][0]
+        self.assertEqual(rendered["max_logical_chat_calls"], 18)
+        self.assertEqual(case["answer"], "A grounded answer [S1]")
+        self.assertEqual(case["claims"][0]["evidence"][0]["quote"],
+                         "Verbatim evidence quote.")
+        self.assertEqual(case["interrogation"]["understood_as"],
+                         "Explain the topic from the guide.")
+
+
 class ModelsProbeTest(unittest.TestCase):
     """The read-only free-model probe (xKiro / NVIDIA / Google): honest
     per-provider semantics, fail-closed free detection, bounded reads, and
