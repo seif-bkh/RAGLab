@@ -36,6 +36,7 @@ if str(RAGLAB) not in sys.path:
 
 PLAN_PATH = PHASE9 / "topic_map_live_probes.json"
 DEFAULT_OUTPUT = RAGLAB / "results" / "phase9_answer_probe" / "live_answer_results.json"
+MAX_GITHUB_ANNOTATION_BYTES = 3500
 EXPECTED_PROFILE = {
     "embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
     "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
@@ -192,10 +193,14 @@ class SufficiencyPassTrace:
                 guided.append({"round": row.get("round"),
                                "new_hits": row.get("new_hits")})
         final_pool = result.get("final_pool")
+        missing = []
+        for requirement in result.get("missing", []) or []:
+            if requirement not in missing:
+                missing.append(requirement)
         return {
             "state": result.get("state"),
             "reason": str(result.get("reason") or "")[:240] or None,
-            "requirements_missing": (result.get("missing") or [])[:12],
+            "requirements_missing": missing[:12],
             "requirements": requirements[:24],
             "guided_rounds": guided[:4],
             "final_pool_count": len(final_pool) if isinstance(final_pool, list) else len(hits),
@@ -460,8 +465,63 @@ def _clip(value, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+def _pass_summary(item: dict) -> dict:
+    sufficiency = item.get("sufficiency") or {}
+    return {
+        "pass": item.get("pass"),
+        "requested_top_k": item.get("requested_top_k"),
+        "input_hit_count": item.get("input_hit_count"),
+        "retrieved_target_document_hit": item.get("retrieved_target_document_hit"),
+        "retrieved_target_document_ranks": item.get("retrieved_target_document_ranks", {}),
+        "sufficiency_state": sufficiency.get("state"),
+        "requirements_missing": (sufficiency.get("requirements_missing") or [])[:8],
+    }
+
+
+def _pass_annotation(case_id: str, item: dict) -> dict:
+    sufficiency = item.get("sufficiency") or {}
+    requirements = []
+    for row in (sufficiency.get("requirements") or [])[:3]:
+        if not isinstance(row, dict):
+            continue
+        covering = row.get("covering_chunk_ids") or []
+        requirements.append({
+            "requirement": _clip(row.get("requirement"), 64),
+            "covered": bool(row.get("covered")),
+            "covering_chunk_ids": [_clip(chunk_id, 120) for chunk_id in covering[:1]],
+        })
+    guided_rounds = []
+    for row in (sufficiency.get("guided_rounds") or [])[:4]:
+        if isinstance(row, dict):
+            new_hits = row.get("new_hits") or []
+            guided_rounds.append({
+                "round": row.get("round"),
+                "new_hit_count": len(new_hits) if isinstance(new_hits, list) else None,
+            })
+    return {
+        "id": case_id,
+        "pass": item.get("pass"),
+        "requested_top_k": item.get("requested_top_k"),
+        "input_hit_count": item.get("input_hit_count"),
+        "retrieved_target_document_hit": item.get("retrieved_target_document_hit"),
+        "retrieved_target_document_ranks": item.get("retrieved_target_document_ranks", {}),
+        "sufficiency_state": sufficiency.get("state"),
+        "sufficiency_reason": _clip(sufficiency.get("reason"), 160) or None,
+        "requirements_missing": [_clip(value, 64)
+                                 for value in (sufficiency.get("requirements_missing") or [])[:8]],
+        "requirements": requirements,
+        "guided_rounds": guided_rounds,
+        "hits": [{
+            "rank": hit.get("rank"),
+            "document": _clip(hit.get("document"), 90) or None,
+            "heading": _clip(hit.get("heading"), 80) or None,
+            "chunk_id": _clip(hit.get("chunk_id"), 120) or None,
+        } for hit in (item.get("hits") or [])[:5] if isinstance(hit, dict)],
+    }
+
+
 def annotations(report: dict) -> list[tuple[str, dict]]:
-    """Small check annotations: split answers and evidence to avoid GH truncation."""
+    """Bounded check annotations split by case, pass, answer, and evidence."""
     summary_events = [("summary", {
         "model": report.get("model"),
         "max_logical_chat_calls": report.get("max_logical_chat_calls"),
@@ -470,9 +530,10 @@ def annotations(report: dict) -> list[tuple[str, dict]]:
         "summary": report.get("summary") or summarize(report),
         "setup_error": report.get("setup_error"),
     })]
-    case_events, answer_events, evidence_events = [], [], []
+    case_events, pass_events, answer_events, evidence_events = [], [], [], []
     for row in report.get("cases", []):
         inter = row.get("interrogation") or {}
+        diagnostic_passes = row.get("retrieval_sufficiency_passes") or []
         case_events.append(("case", {
             "id": row.get("id"),
             "question": _clip(row.get("question"), 220),
@@ -484,20 +545,8 @@ def annotations(report: dict) -> list[tuple[str, dict]]:
             "evidence_status": row.get("evidence_status"),
             "retrieved": row.get("retrieved"),
             "terminal_stage": row.get("terminal_stage"),
-            "retrieval_sufficiency_passes": [{
-                "pass": item.get("pass"),
-                "requested_top_k": item.get("requested_top_k"),
-                "input_hit_count": item.get("input_hit_count"),
-                "retrieved_target_document_hit": item.get("retrieved_target_document_hit"),
-                "retrieved_target_document_ranks": item.get("retrieved_target_document_ranks", {}),
-                "sufficiency_state": (item.get("sufficiency") or {}).get("state"),
-                "sufficiency_reason": (item.get("sufficiency") or {}).get("reason"),
-                "requirements_missing": (item.get("sufficiency") or {}).get(
-                    "requirements_missing", [])[:8],
-                "hits": [{key: hit.get(key) for key in
-                          ("rank", "document", "heading", "chunk_id")}
-                         for hit in (item.get("hits") or [])[:5]],
-            } for item in (row.get("retrieval_sufficiency_passes") or [])[:3]],
+            "retrieval_sufficiency_passes": [
+                _pass_summary(item) for item in diagnostic_passes[:3]],
             "dropped_for_budget": row.get("dropped_for_budget"),
             "seconds": row.get("seconds"),
             "expected_topic_ids": row.get("expected_topic_ids", []),
@@ -529,6 +578,8 @@ def annotations(report: dict) -> list[tuple[str, dict]]:
             "chat_call_counts": row.get("chat_call_counts", {}),
             "raw_preview": _clip(row.get("raw_preview"), 240) or None,
         }))
+        pass_events.extend(("pass", _pass_annotation(row.get("id", "unknown"), item))
+                           for item in diagnostic_passes[:3])
         answer = _clip(row.get("answer"), 650)
         answer_parts = [answer[index:index + 400] for index in range(0, len(answer), 400)] or ["—"]
         for part_number, text in enumerate(answer_parts, start=1):
@@ -547,12 +598,17 @@ def annotations(report: dict) -> list[tuple[str, dict]]:
                 "id": row.get("id"), "claim_number": claim_number,
                 "claim": _clip(claim.get("text"), 220), "evidence": evidence,
             }))
-    return [*summary_events, *case_events, *answer_events, *evidence_events]
+    return [*summary_events, *case_events, *pass_events, *answer_events, *evidence_events]
 
 
 def _emit_annotations(report: dict) -> None:
     for kind, value in annotations(report):
         encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        size = len(encoded.encode("utf-8"))
+        if size > MAX_GITHUB_ANNOTATION_BYTES:
+            raise ValueError(
+                f"phase9-answer-{kind} annotation is {size} UTF-8 bytes; "
+                f"limit is {MAX_GITHUB_ANNOTATION_BYTES}")
         print(f"ANNO| phase9-answer-{kind} | {encoded}")
 
 

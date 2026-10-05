@@ -3218,7 +3218,7 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
         self.assertEqual("".join(part["text"] for part in parts), answer_text)
         sizes = [len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
                  for _kind, value in events]
-        self.assertLess(max(sizes), 4096)
+        self.assertLessEqual(max(sizes), probe.MAX_GITHUB_ANNOTATION_BYTES)
 
     def test_sufficiency_trace_separates_passes_and_never_keeps_chunk_text(self):
         from unittest.mock import patch
@@ -3240,7 +3240,7 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
                 "state": "غير كافٍ" if insufficient else "كافٍ",
                 "reason": "missing one requirement" if insufficient
                          else "all requirements covered",
-                "missing": ["wide_evidence"] if insufficient else [],
+                "missing": (["wide_evidence", "wide_evidence"] if insufficient else []),
                 "requirements": [{"req": "wide_evidence", "sub_question": None,
                                   "covered": not insufficient,
                                   "by": [hits[0]["id"]]}],
@@ -3283,36 +3283,51 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
     def test_pass_annotations_show_ranked_documents_without_exceeding_limit(self):
         import json
         probe = self._probe()
-        hits = [{"rank": index, "document": f"Doc-{index}.pdf",
-                 "heading": "heading" * 15, "chunk_id": f"doc::{index}"}
+        document = "Guide_Interne_Operations_Bancaires_Islamiques.docx"
+        hits = [{"rank": index, "document": document,
+                 "heading": "عمليات الصرف والمتاجرة في العملات " * 4,
+                 "chunk_id": f"{document}::chunk_{index:04d}"}
                 for index in range(1, 6)]
+        requirements = [{"requirement": f"requirement_{index}_evidence", "covered": index < 3,
+                         "covering_chunk_ids": [hits[index]["chunk_id"]],
+                         "sub_question": "large question omitted from annotation"}
+                        for index in range(3)]
+        sufficiency = {
+            "state": "غير كافٍ", "reason": "الدليل غير كافٍ لإثبات جميع المتطلبات المطلوبة",
+            "requirements_missing": [f"requirement_{index}" for index in range(8)],
+            "requirements": requirements,
+            "guided_rounds": [{"round": index, "new_hits": [hit["chunk_id"] for hit in hits]}
+                               for index in range(1, 5)],
+        }
         report = {"model": "test-model", "cases": [{
             "id": "TM-pass", "question": "fixed probe question",
             "terminal_stage": "sufficiency_after_interrogation",
             "retrieved": 5, "retrieval_sufficiency_passes": [
                 {"pass": "original", "requested_top_k": 5,
                  "input_hit_count": 5, "retrieved_target_document_hit": True,
-                 "retrieved_target_document_ranks": {"Doc-4.pdf": 4},
-                 "sufficiency": {"state": "غير كافٍ", "reason": "missing",
-                                 "requirements_missing": ["wide_evidence"]},
-                 "hits": hits},
+                 "retrieved_target_document_ranks": {document: 1},
+                 "sufficiency": sufficiency, "hits": hits},
                 {"pass": "after_interrogation", "requested_top_k": 5,
                  "input_hit_count": 5, "retrieved_target_document_hit": False,
                  "retrieved_target_document_ranks": {},
-                 "sufficiency": {"state": "غير كافٍ", "reason": "missing",
-                                 "requirements_missing": ["wide_evidence"]},
-                 "hits": hits},
+                 "sufficiency": sufficiency, "hits": hits},
             ],
         }]}
-        case_event = next(value for kind, value in probe.annotations(report)
-                          if kind == "case")
-        encoded = json.dumps(case_event, ensure_ascii=False).encode("utf-8")
-        self.assertLess(len(encoded), 8192)
+        events = probe.annotations(report)
+        case_event = next(value for kind, value in events if kind == "case")
+        pass_events = [value for kind, value in events if kind == "pass"]
+        sizes = [len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+                 for _kind, value in events]
+        self.assertLessEqual(max(sizes), probe.MAX_GITHUB_ANNOTATION_BYTES)
         self.assertEqual(len(case_event["retrieval_sufficiency_passes"]), 2)
+        self.assertNotIn("hits", case_event["retrieval_sufficiency_passes"][0])
         self.assertEqual(case_event["retrieval_sufficiency_passes"][0]
-                         ["retrieved_target_document_ranks"], {"Doc-4.pdf": 4})
-        self.assertEqual(case_event["retrieval_sufficiency_passes"][0]
-                         ["hits"][3]["rank"], 4)
+                         ["retrieved_target_document_ranks"], {document: 1})
+        self.assertEqual(len(pass_events), 2)
+        self.assertEqual(pass_events[0]["hits"][3]["rank"], 4)
+        self.assertEqual(pass_events[0]["requirements"][0]["covering_chunk_ids"],
+                         [hits[0]["chunk_id"]])
+        self.assertEqual(pass_events[0]["guided_rounds"][0]["new_hit_count"], 5)
 
     def test_summary_distinguishes_cited_documents_from_retrieval_hits(self):
         probe = self._probe()
@@ -3404,6 +3419,7 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
         case = next(value for kind, value in rendered if kind == "case")
         answer = next(value for kind, value in rendered if kind == "answer")
         evidence = next(value for kind, value in rendered if kind == "evidence")
+        pass_event = next(value for kind, value in rendered if kind == "pass")
         self.assertEqual(summary["max_logical_chat_calls"], 18)
         self.assertEqual(case["id"], "TM-test")
         self.assertEqual(case["expected_documents"], ["Guide.docx"])
@@ -3411,7 +3427,9 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
         self.assertEqual(case["terminal_stage"], "answer_generation_and_citation_gate")
         self.assertTrue(case["retrieval_sufficiency_passes"][0]
                         ["retrieved_target_document_hit"])
-        self.assertEqual(case["retrieval_sufficiency_passes"][0]["hits"][1]["rank"], 2)
+        self.assertNotIn("hits", case["retrieval_sufficiency_passes"][0])
+        self.assertEqual(pass_event["pass"], "original")
+        self.assertEqual(pass_event["hits"][1]["rank"], 2)
         self.assertEqual(answer["text"], "A grounded answer [S1]")
         self.assertEqual(evidence["evidence"][0]["quote"],
                          "Verbatim evidence quote.")
