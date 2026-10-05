@@ -913,10 +913,10 @@ jobs:
             --emit-report phase9_prior_run/live_answer_results.json \
             > /tmp/phase9_answer_report/emit.log
 
-      - name: Publish saved summary, case metadata, and retrieval passes
+      - name: Publish saved summary and case metadata
         shell: bash
         run: |
-          for kind in summary case pass; do
+          for kind in summary case; do
             while IFS= read -r line; do
               label=${line#ANNO| }
               label=${label%% | *}
@@ -925,6 +925,17 @@ jobs:
               echo "::warning::$label | $escaped"
             done < <(grep "^ANNO| phase9-answer-$kind |" /tmp/phase9_answer_report/emit.log)
           done
+
+      - name: Publish saved retrieval and sufficiency passes
+        shell: bash
+        run: |
+          while IFS= read -r line; do
+            label=${line#ANNO| }
+            label=${label%% | *}
+            message=${line#* | }
+            escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+            echo "::warning::$label | $escaped"
+          done < <(grep '^ANNO| phase9-answer-pass |' /tmp/phase9_answer_report/emit.log)
 
       - name: Publish saved final answers (parts 1–10)
         shell: bash
