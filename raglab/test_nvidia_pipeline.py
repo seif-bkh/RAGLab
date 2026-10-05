@@ -3361,11 +3361,27 @@ class DiagSufficiencyTest(unittest.TestCase):
         import diag_sufficiency as ds
         self.assertTrue(ds.deployed_forwards_search_fn())
 
-    def test_verdict_says_when_the_round_is_not_what_is_needed(self):
+    def test_verdict_says_which_rescue_path_exists(self):
+        """The old line said "the rescue is not what this question needs" —
+        wrong, and the owner's TM04 run proved it: the question WAS rescued, by
+        the interrogation paraphrase (understood_as, 9.636s), not by the round.
+        Which rescue is available depends on the branch service.py takes, so
+        the probe has to name it instead of declaring none exists."""
         import diag_sufficiency as ds
-        notes = "\n".join(ds._verdict(self._rep("غير كافٍ", [], "غير كافٍ", [])))
-        self.assertIn("changes nothing", notes)
-        self.assertNotIn("UNREACHABLE", notes)
+        # nothing covered -> the interrogation branch runs, so the PARAPHRASE
+        # is the rescue even though the round does nothing
+        none = "\n".join(ds._verdict(
+            self._rep("غير كافٍ", [], "غير كافٍ", [], covered=0, total=1)))
+        self.assertIn("changes nothing", none)
+        self.assertIn("PARAPHRASE", none)
+        self.assertNotIn("UNREACHABLE", none)
+        self.assertNotIn("not what this question needs", none)
+        # partial coverage -> the interrogation is skipped, so no rescue exists
+        partial = "\n".join(ds._verdict(
+            self._rep("غير كافٍ", [], "غير كافٍ", [], covered=1, total=2)))
+        self.assertIn("changes nothing", partial)
+        self.assertIn("no rescue path exists", partial)
+        self.assertNotIn("PARAPHRASE", partial)
 
     def test_verdict_redirects_when_the_served_pool_was_fine(self):
         """A كافٍ pool means the pre-generation gate PASSED. The owner's run

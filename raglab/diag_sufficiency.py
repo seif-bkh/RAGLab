@@ -161,8 +161,22 @@ def _verdict(rep: dict) -> list[str]:
                          f"({rounds}); could not read service.py to say whether "
                          "the deployed path forwards one.")
     elif w["state"] == a["state"]:
-        notes.append("  the guided round changes nothing here — the rescue is "
-                     "not what this question needs.")
+        # "the rescue is not what this question needs" was wrong, and the
+        # owner's TM04 run proved it: the question WAS rescued — by the
+        # interrogation paraphrase (understood_as, 9.636s), not by the round.
+        # Which rescue path exists depends on the branch service.py takes.
+        if covered:
+            notes.append("  the guided round changes nothing, and partial "
+                         "coverage means the interrogation branch is SKIPPED — "
+                         "no rescue path exists, so this refusal stands.")
+        else:
+            notes.append("  the guided round changes nothing — but that does "
+                         "NOT mean no rescue is possible. Nothing covers the "
+                         "plan, so service.py takes the interrogation branch: "
+                         "the rescue for this question is the PARAPHRASE, not "
+                         "the round. A cross-script question whose own terms "
+                         "all have df=0 in the corpus cannot be rescued by "
+                         "retrieving more of its own terms.")
     return notes
 
 
