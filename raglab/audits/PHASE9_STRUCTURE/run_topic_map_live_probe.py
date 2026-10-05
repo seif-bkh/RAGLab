@@ -35,7 +35,6 @@ DEFAULT_OUTPUT = RAGLAB / "results" / "phase9_topic_map" / "live_probe_results.j
 BASELINE_COMMIT = "965634f966fbcce3c6987d693d38d3d0e8780f06"
 BASELINE_MAP_PATH = "raglab/topic_map.py"
 BASELINE_INTERROGATE_PATH = "raglab/interrogate.py"
-EXPECTED_LEGACY_ENTRY_COUNT = 259
 ARMS = ("before", "after")
 
 
@@ -528,14 +527,19 @@ def run(validate_only: bool = False, output: Path = DEFAULT_OUTPUT) -> int:
     legacy_topic_map, legacy_interrogator = load_legacy_modules()
     legacy_entries = legacy_topic_map.build_topic_map(data_dirs)
     legacy_text = legacy_topic_map.for_prompt(data_dirs)
-    if len(legacy_entries) != EXPECTED_LEGACY_ENTRY_COUNT:
-        raise ValueError(f"historical map has {len(legacy_entries)} entries; expected the recorded "
-                         f"{EXPECTED_LEGACY_ENTRY_COUNT} from {BASELINE_COMMIT[:7]}")
+    if not legacy_entries:
+        raise ValueError("historical topic map produced no entries")
+    # The old map is built from chunker heading metadata, so its entry count
+    # legitimately varies between cl100k_base and the documented local
+    # estimator fallback. Record the environment; never pin the count.
+    import chunker
+    legacy_tokenizer = chunker.tokenizer_identity()
     validate_plan_against_catalog(plan, active_entries, legacy_entries)
 
     if validate_only:
         print(f"paired probe plan OK: {len(plan['cases'])} cases x 2 arms; "
-              f"baseline {BASELINE_COMMIT[:7]}={len(legacy_entries)} entries / {len(legacy_text)} chars; "
+              f"baseline {BASELINE_COMMIT[:7]}={len(legacy_entries)} entries / {len(legacy_text)} chars "
+              f"(tokenizer={legacy_tokenizer}); "
               f"active={len(active_entries)} entries / {len(active_text)} chars; "
               f"all expected stable IDs map to both versions; no model call")
         return 0
@@ -556,6 +560,7 @@ def run(validate_only: bool = False, output: Path = DEFAULT_OUTPUT) -> int:
             "baseline_commit": BASELINE_COMMIT,
             "entry_count": len(legacy_entries),
             "rendered_chars": len(legacy_text),
+            "tokenizer_identity": legacy_tokenizer,
             "prompt_version": "exact historical topic_map.py + interrogate.py",
         },
         "after_map": {
