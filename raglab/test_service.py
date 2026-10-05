@@ -1572,6 +1572,71 @@ class DocumentsApiTest(unittest.TestCase):
     GUIDED_MD = ("# Guide\n\nguide doc\n\n## Fees\n\n"
                  "The Atlas card costs 10 dinars per year.\n")
 
+    def test_push_of_baked_corpus_content_is_rejected_409(self):
+        """Owner decision 2026-10-06 (reject_409). Re-pushing a document that
+        is byte-identical to a BAKED corpus file must be refused, because it
+        would be indexed twice: on the owner's deployment 859 of 1713 chunks
+        were re-pushes of the four baked documents, which took df(عمليات) to
+        279 against a scaled cap of 76 and filled half the top-5 window with
+        duplicates. The rejection has to NAME the file it collided with."""
+        import base64
+        baked_bytes = (self.tmp / "seed.md").read_bytes()
+        r = self.client.post("/documents", json={
+            "id": "collision", "filename": "anything-at-all.md",
+            "content": base64.b64encode(baked_bytes).decode("ascii"),
+            "content_encoding": "base64"})
+        self.assertEqual(r.status_code, 409, r.text)
+        body = r.json()["detail"]
+        self.assertEqual(body.get("reason"), "document_already_in_corpus", body)
+        self.assertEqual(body.get("matches"), "seed.md", body)
+        # nothing was stored and nothing entered the index
+        self.assertEqual(self.client.get("/documents/collision").status_code, 404)
+        # a DIFFERENT payload under the same id is still accepted
+        ok = self.client.post("/documents", json={
+            "id": "collision", "filename": "anything-at-all.md",
+            "content": self.GUIDED_MD})
+        self.assertEqual(ok.status_code, 201, ok.text)
+
+    def test_baked_match_is_content_keyed_not_name_keyed(self):
+        """The collision is by CONTENT hash, not by name — that is exactly how
+        `reglement` slipped past DocumentStore's own dedupe: byte-identical to
+        the baked Circulaire but stored under a different name."""
+        import hashlib
+        import tempfile as _tf
+        import docstore
+        with _tf.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "corpus.pdf").write_bytes(b"identical bytes")
+            sha = hashlib.sha256(b"identical bytes").hexdigest()
+            # a different NAME with the same content still collides
+            self.assertEqual(docstore.baked_match([root], sha), "corpus.pdf")
+            # different content does not
+            other = hashlib.sha256(b"other bytes").hexdigest()
+            self.assertIsNone(docstore.baked_match([root], other))
+            # a missing or non-directory path degrades to None, never raises
+            self.assertIsNone(docstore.baked_match([root / "nope"], sha))
+            self.assertIsNone(docstore.baked_match([], sha))
+            self.assertIsNone(docstore.baked_match(None, sha))
+            # the pushed-documents root is PART of the corpus, so it must be
+            # excluded — otherwise re-pushing an already-pushed document
+            # collides with its own stored copy and the documented
+            # "identical bytes -> no-op, version unchanged" contract breaks
+            pushed = root / "documents"
+            pushed.mkdir()
+            (pushed / "pushed-x.md").write_bytes(b"identical bytes")
+            # with the pushed dir excluded, the pushed copy alone is NOT a
+            # collision — only the baked file still counts
+            (root / "corpus.pdf").unlink()
+            self.assertIsNone(
+                docstore.baked_match([root, pushed], sha, exclude=pushed))
+            # a corpus dir that CONTAINS the pushed dir must not smuggle it in
+            self.assertIsNone(docstore.baked_match([root], sha, exclude=pushed))
+            # restore the baked file: it collides again even with the exclusion
+            (root / "corpus.pdf").write_bytes(b"identical bytes")
+            self.assertEqual(
+                docstore.baked_match([root, pushed], sha, exclude=pushed),
+                "corpus.pdf")
+
     def test_push_json_lifecycle_with_versions_and_statuses(self):
         # create -> 201, pending (nothing ingested since)
         r = self.client.post("/documents", json={

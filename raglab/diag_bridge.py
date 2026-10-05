@@ -34,7 +34,10 @@ from local_front import Api, DEFAULT_BASE_URL
 # diagnostic only needs the Arabic terms, and importing sufficiency here
 # would tie the client to the lab's version)
 BRIDGE_ARABIC = ["مرابحة", "مضاربة", "مشاركة", "صكوك", "اجارة",
-                 "تكافل", "ربا", "سلف", "استصناع",
+                 # «سلف» dropped 2026-10-06: tokenized df=0 on this corpus
+                 # (the text only has «سلفة», a different token), so counting
+                 # it reported a df that could never anchor.
+                 "تكافل", "ربا", "استصناع",
                  # 2026-10-05 field-vocabulary bridges (sufficiency
                  # .FIELD_BRIDGE_TERMS / FIELD_BRIDGE_PHRASES, gated by
                  # SUFFICIENCY_FIELD_BRIDGES_ENABLED). Their df matters for

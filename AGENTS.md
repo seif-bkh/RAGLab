@@ -536,6 +536,24 @@ Current state of the work:
   term. Measured and REJECTED: dropping above-cap terms from the round's query
   is exactly neutral on all six probes and both frozen sets, so there is no
   measured benefit to justify a production change.
+- **Three owner decisions implemented (2026-10-06).** (1) `reject_409`:
+  POST /documents now refuses content that is SHA-256-identical to a BAKED
+  corpus file with 409 `document_already_in_corpus`, naming the file. The
+  collision is keyed by CONTENT HASH, NOT NAME — that is exactly how
+  `reglement` slipped past DocumentStore's own dedupe (byte-identical to the
+  baked Circulaire under a different id). TRAP the existing test caught: the
+  pushed-documents dir is deliberately part of every profile's corpus
+  (service.py appends documents.root to data_dirs), so without
+  `exclude=documents.root` the guard rejected re-pushing an already-pushed
+  document and broke the documented "identical bytes -> 200 unchanged"
+  contract. (2) `remove_row`: `salaf -> سلف` deleted from
+  CROSS_SCRIPT_BRIDGES and diag_bridge's term list — tokenized df=0 because
+  the corpus only has «سلفة». (3) `keep_on`: the guided round stays default
+  ON even though it rescues nothing on the owner's deployment, because the
+  frozen-set regression is zero across all eight arms and the cost is confined
+  to requests that were already refusing. Guarded by
+  DocumentsApiTest.test_push_of_baked_corpus_content_is_rejected_409 and
+  test_baked_match_is_content_keyed_not_name_keyed.
 - **Root cause of the 'still refused after rebuild' (2026-10-02, CONFIRMED
   end-to-end)**: the owner's index has 1713 chunks vs the baked-in 339 — the
   corpus is duplicated ~5x through pushed documents. df(المرابحة) = 17 x 5

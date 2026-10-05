@@ -1623,6 +1623,26 @@ def create_app(profile: dict | None = None, *, generator=None,
         except ValueError as exc:
             raise ServiceError(400, "bad_document_id", id=doc_id,
                                error=str(exc)) from None
+        # Owner decision 2026-10-06 (reject_409): refuse a push whose content is
+        # byte-identical to a BAKED corpus file. DocumentStore.save() dedupes
+        # only within the pushed store keyed by (sha256, stored_as) and knows
+        # nothing about the corpus dirs, so re-pushing a baked document was
+        # silently accepted and indexed twice — measured on the owner's
+        # deployment: 859 of 1713 chunks were re-pushes of the four baked
+        # documents, taking df(عمليات) to 279 against a scaled cap of 76 and
+        # filling half the top-5 window with duplicate chunks.
+        import hashlib as _hashlib
+        baked = docstore_mod.baked_match(
+            profiles.data_dirs(runtime.profile),
+            _hashlib.sha256(content).hexdigest(),
+            exclude=documents.root)
+        if baked:
+            raise ServiceError(
+                409, "document_already_in_corpus", filename=filename,
+                matches=baked,
+                hint="this exact content is already indexed from the baked "
+                     "corpus; pushing it again would index every chunk twice "
+                     "and inflate every document frequency")
         # everything from here touches disk/sqlite — keep it OFF the event
         # loop (run_in_threadpool), like every sync endpoint
         record, action = await run_in_threadpool(

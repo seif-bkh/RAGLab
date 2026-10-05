@@ -662,6 +662,26 @@ ids are `[A-Za-z0-9][A-Za-z0-9._-]{0,79}` (`400 bad_document_id` — also your
 path-traversal guard); size cap `RAGLAB_MAX_DOCUMENT_BYTES` (default 20 MB →
 `413 document_too_large`).
 
+**Content collision with the baked corpus → `409 document_already_in_corpus`**
+(added 2026-10-06 by owner decision). If the pushed bytes are SHA-256-identical
+to a file already in the corpus directories, the push is refused and the error
+names the file it collided with:
+
+```json
+{"detail": {"reason": "document_already_in_corpus", "filename": "reglement.pdf",
+            "matches": "Circulaire_BCT_2019-08.pdf",
+            "hint": "this exact content is already indexed from the baked corpus; …"}}
+```
+
+Why: a duplicate is indexed twice, so every term's document frequency doubles,
+the anchor guard starts refusing legitimate terms, and the retrieval window
+fills with duplicate chunks. Measured on a real deployment: 859 of 1713 chunks
+were re-pushes of the four baked documents, which took `df(عمليات)` to 279
+against a scaled cap of 76. The collision is keyed by **content hash, not
+name** — the same PDF pushed under a different id is still refused. The
+pushed-documents directory is excluded from the check, so re-pushing an
+already-pushed document still returns `200 unchanged` as before.
+
 ```json
 {"result": "created",
  "document": {"id": "rates", "filename": "rates.md", "stored_as": "pushed-rates.md",

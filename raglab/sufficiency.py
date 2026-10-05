@@ -124,7 +124,10 @@ CROSS_SCRIPT_BRIDGES: dict[str, str] = {
     "ijara": "اجارة", "ijarah": "اجارة",
     "takaful": "تكافل",
     "riba": "ربا",
-    "salaf": "سلف",
+    # «salaf» was REMOVED 2026-10-06 (owner decision): its Arabic side «سلف»
+    # has tokenized df=0 on this corpus — the text only ever contains «سلفة»,
+    # a different token (measured: 1 chunk by substring, 0 tokenized), so the
+    # row could never anchor. The old df "6" was substring containment.
     "istisna": "استصناع",
 }
 # Owner activation 2026-10-02 (the failing question was re-sent after the

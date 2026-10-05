@@ -53,6 +53,51 @@ def extension_of(filename: str) -> str:
     return Path(filename).suffix.lower()
 
 
+def baked_match(dirs, sha256_hex: str, exclude=None) -> str | None:
+    """The BAKED corpus file whose content hashes to `sha256_hex`, or None.
+
+    `exclude` is the pushed-documents root, which MUST be passed: that dir is
+    deliberately part of every profile's corpus (service.py appends
+    `documents.root` to data_dirs), so without excluding it a re-push of an
+    already-pushed document would collide with its own stored copy and break
+    the documented "identical bytes -> no-op, version unchanged" contract.
+
+    A pushed document byte-identical to a file already in the corpus
+    directories would be indexed TWICE: every term's df doubles, the retrieval
+    window fills with duplicate chunks, and the anchor guard then refuses
+    legitimate terms. Measured 2026-10-06 on the owner's deployment: 859 of
+    1713 chunks were re-pushes of the four baked documents, which took
+    df(عمليات) to 279 against a scaled cap of 76.
+
+    DocumentStore.save() cannot catch this — it dedupes only WITHIN the pushed
+    store, keyed by (sha256, stored_as), and knows nothing about the corpus
+    dirs. That is also how `reglement` slipped through: byte-identical to the
+    baked Circulaire (same sha256) but stored under a different name.
+
+    Pure: reads files, writes nothing. Returns the baked filename for the error
+    message so the rejection names what it collided with.
+    """
+    skip = Path(exclude).resolve() if exclude is not None else None
+    for directory in dirs or []:
+        root = Path(directory)
+        if not root.is_dir():
+            continue
+        if skip is not None and root.resolve() == skip:
+            continue
+        for candidate in sorted(root.iterdir()):
+            try:
+                if not candidate.is_file():
+                    continue
+                # a corpus dir may CONTAIN the pushed dir — skip those too
+                if skip is not None and skip in candidate.resolve().parents:
+                    continue
+                if hashlib.sha256(candidate.read_bytes()).hexdigest() == sha256_hex:
+                    return candidate.name
+            except OSError:
+                continue
+    return None
+
+
 class DocumentStore:
     """Files + sidecars in one directory; thread-safe; atomic writes."""
 
