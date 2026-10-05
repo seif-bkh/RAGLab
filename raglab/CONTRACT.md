@@ -568,7 +568,11 @@ sufficiency fields report the PARAPHRASE's verdict and no `refusal_reason` is
 attached; on a `refused` payload they stay the original question's facts.
 `REPHRASE_INTERROGATION_ENABLED=0` removes all three fields.
 
-**Source-grounded topic map (1.5.0).** The interrogation model receives stable source topics with paths and excerpts, selects a short prompt-local ID, and the service resolves it by exact match to the existing `interrogation.topics` display labels. The response shape is unchanged; no model-generated topic label is accepted.
+**Source-grounded topic map (1.5.0).** The interrogation model receives stable
+source topics with paths and excerpts, selects a short prompt-local ID, and the
+service resolves it by exact match to the existing `interrogation.topics`
+display labels. The response shape is unchanged; no model-generated topic
+label is accepted.
 
 **What is machine-verified before you see an `answered` payload:** every
 evidence quote is a contiguous verbatim member of its cited chunk, AND every

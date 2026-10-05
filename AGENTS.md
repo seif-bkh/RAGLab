@@ -4,7 +4,7 @@ If you are an agent (or human) resuming work on RAGLab: **read this file first, 
 and keep it updated whenever you learn something that changes the truth.** It is the
 contract between sessions. Facts here were verified by running things, not guessed.
 
-Last verified: 2026-09-24 (branch `arena/01a0d2f5-raglab`).
+Last verified: 2026-10-05 (branch `arena/01a10905-raglab`).
 
 ---
 
@@ -430,7 +430,8 @@ Current state of the work:
   recorded in PHASE7_EXPERIMENTS.md. Standing recommendations: TOP_K 20
   (they run 5), push only genuinely-new documents.
 - **PHASE 8 BUILT (2026-10-02, owner: «جميل، ابن الفكرة» after the design
-  discussion)**: demand interrogation — an insufficient practical question
+  discussion; historical 1.4.0 behavior, with topic-map details superseded by
+  the Phase-9 entry below)**: demand interrogation — an insufficient practical question
   is re-expressed as the nearest TECHNICAL question instead of being
   refused. SEQUENCE architecture (the deterministic path stays free):
   كافٍ -> answer directly, zero extra calls; غير كافٍ with nothing covered
@@ -503,17 +504,18 @@ Current state of the work:
   historical answer-generation job SKIPPED. `topic_map.py` then moved from
   heading-only choices to 262 source-grounded nodes with paths/excerpts and
   short exact-matched prompt IDs; SERVICE_VERSION 1.4.0 -> 1.5.0 (HTTP shape
-  unchanged); offline gate EXIT=0 (415 tests), no
-  post-change live LLM measurement yet. Audit:
+  unchanged); offline gate EXIT=0 (415 tests;
+  `raglab/logs/test_run_20261005_001229.log`), no post-change live LLM
+  measurement yet. Audit:
   raglab/audits/PHASE9_STRUCTURE/09_STAGE1_VECTOR_RESULTS.md and
   10_TOPIC_MAP_ENRICHMENT.md. Questions sets 50/10 unchanged.
-- Current heads: this session works on **arena/01a0fcfb-raglab**, branched
-  from 330b85e ("last session chat history" — the previous session's whole
-  tree, remote arena/01a0d2f5-raglab sits at the same SHA; the Phase-8
-  live-fix code is inside it). Push only to arena/01a0fcfb-raglab.
-  The real-test tag real-test-experiments-20261001 stays on fed7b9d —
-  the measured experiments state (nothing after it touches the measured
-  pipeline).
+- Current Arena session branch: **arena/01a10905-raglab**, based on
+  54b993f8 (from arena/01a107b8-raglab). Phase-9 topic-map work is committed
+  as 044f87d and pushed to the matching origin branch; RAGLab CI run
+  37246662339 passed (offline suite + Docker image/import smoke). Local
+  offline gate: 415 tests, EXIT=0; no post-map live LLM measurement yet.
+  The measured vector-only run remains 37245380571 on tag
+  phase9-stage1-vector-20261005 / commit 965634f.
 - **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
   `raglab/decompose.py` (read-only): the intermediate decomposition layer.
   EVERY question → reformulated micro-questions, each with its partial

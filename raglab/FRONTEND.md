@@ -100,8 +100,9 @@ last error). During an ingest the whole app enters "sealed" mode (§4.3).
   (the user's words, verbatim — never hidden) and `interrogation`
   `{classification, topics, requirements, confidence, seconds}`. Render a
   disclosure strip **above** the answer: "Understood your request as: …",
-  `topics` as chips (source-grounded display labels resolved from exact map IDs since `1.5.0`), and the cost as
-  "interrogation Ns" — `interrogation.seconds` is separate from the top-level
+  `topics` as chips (source-grounded display labels resolved from exact map
+  IDs since `1.5.0`), and the cost as "interrogation Ns" —
+  `interrogation.seconds` is separate from the top-level
   `seconds`, which stays answer-generation-only (a refusal through this path
   legitimately shows `seconds: 0.0`). On an **answered** payload the evidence
   fields above describe the PARAPHRASE and no `refusal_reason` is attached; on
