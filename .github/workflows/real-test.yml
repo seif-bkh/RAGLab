@@ -31,7 +31,8 @@ name: RAGLab real test
 #   3. on failure, the newest step-log tail is posted as an ::error:: annotation.
 # The scoped paired-map job uploads `phase9-topic-map-live-probe`; the six-case
 # POST /answer job uploads `phase9-answer-probe` and emits bounded case/answer/evidence
-# annotations. `phase9-report-answer-<run-id>` replays that saved artifact without providers.
+# plus harness-only retrieval/sufficiency-pass annotations (no service response change).
+# `phase9-report-answer-<run-id>` replays that saved artifact without providers.
 
 on:
   workflow_dispatch:

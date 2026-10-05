@@ -3220,24 +3220,125 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
                  for _kind, value in events]
         self.assertLess(max(sizes), 4096)
 
-    def test_summary_distinguishes_answered_citations_and_oos_refusal(self):
+    def test_sufficiency_trace_separates_passes_and_never_keeps_chunk_text(self):
+        from unittest.mock import patch
+        import sufficiency
+        probe = self._probe()
+        original_hit = {
+            "id": "Guide.docx::chunk_0001", "text": "PRIVATE SOURCE TEXT",
+            "metadata": {"source": "Guide.docx", "heading": "Original heading"},
+            "rank": 1, "similarity": 0.82,
+        }
+        paraphrase_hit = {
+            "id": "Guide.docx::chunk_0042", "text": "ANOTHER PRIVATE SOURCE TEXT",
+            "metadata": {"source": "Guide.docx", "heading": "Paraphrase heading"},
+            "rank": 2, "similarity": 0.76,
+        }
+        def fake_check(question, hits, *args, **kwargs):
+            insufficient = question == "original query"
+            return {
+                "state": "غير كافٍ" if insufficient else "كافٍ",
+                "reason": "missing one requirement" if insufficient
+                         else "all requirements covered",
+                "missing": ["wide_evidence"] if insufficient else [],
+                "requirements": [{"req": "wide_evidence", "sub_question": None,
+                                  "covered": not insufficient,
+                                  "by": [hits[0]["id"]]}],
+                "guided_rounds": [], "final_pool": hits,
+            }
+        with patch.object(sufficiency, "check", side_effect=fake_check):
+            patched_check = sufficiency.check
+            with probe.SufficiencyPassTrace() as trace:
+                trace.begin_case("TM-test", requested_top_k=5)
+                sufficiency.check("original query", [original_hit])
+                sufficiency.check("paraphrased query", [paraphrase_hit])
+                passes = trace.end_case()
+            self.assertIs(sufficiency.check, patched_check)
+        self.assertEqual([row["pass"] for row in passes],
+                         ["original", "after_interrogation"])
+        self.assertEqual(passes[0]["hits"][0]["document"], "Guide.docx")
+        self.assertEqual(passes[0]["hits"][0]["rank"], 1)
+        self.assertEqual(passes[1]["sufficiency"]["state"], "كافٍ")
+        self.assertEqual(passes[0]["sufficiency"]["requirements_missing"],
+                         ["wide_evidence"])
+        self.assertNotIn("PRIVATE SOURCE TEXT", str(passes))
+        self.assertNotIn("ANOTHER PRIVATE SOURCE TEXT", str(passes))
+
+    def test_expected_document_hit_is_separate_for_each_retrieval_pass(self):
+        probe = self._probe()
+        passes = probe._enrich_pass_diagnostics([
+            {"pass": "original", "hits": [
+                {"rank": 1, "document": "Other.pdf"},
+                {"rank": 2, "document": "Guide.docx"}],
+             "sufficiency": {"state": "غير كافٍ"}},
+            {"pass": "after_interrogation", "hits": [
+                {"rank": 1, "document": "Other.pdf"}],
+             "sufficiency": {"state": "غير كافٍ"}},
+        ], ["Guide.docx"])
+        self.assertTrue(passes[0]["retrieved_target_document_hit"])
+        self.assertEqual(passes[0]["retrieved_target_document_ranks"],
+                         {"Guide.docx": 2})
+        self.assertFalse(passes[1]["retrieved_target_document_hit"])
+
+    def test_pass_annotations_show_ranked_documents_without_exceeding_limit(self):
+        import json
+        probe = self._probe()
+        hits = [{"rank": index, "document": f"Doc-{index}.pdf",
+                 "heading": "heading" * 15, "chunk_id": f"doc::{index}"}
+                for index in range(1, 6)]
+        report = {"model": "test-model", "cases": [{
+            "id": "TM-pass", "question": "fixed probe question",
+            "terminal_stage": "sufficiency_after_interrogation",
+            "retrieved": 5, "retrieval_sufficiency_passes": [
+                {"pass": "original", "requested_top_k": 5,
+                 "input_hit_count": 5, "retrieved_target_document_hit": True,
+                 "retrieved_target_document_ranks": {"Doc-4.pdf": 4},
+                 "sufficiency": {"state": "غير كافٍ", "reason": "missing",
+                                 "requirements_missing": ["wide_evidence"]},
+                 "hits": hits},
+                {"pass": "after_interrogation", "requested_top_k": 5,
+                 "input_hit_count": 5, "retrieved_target_document_hit": False,
+                 "retrieved_target_document_ranks": {},
+                 "sufficiency": {"state": "غير كافٍ", "reason": "missing",
+                                 "requirements_missing": ["wide_evidence"]},
+                 "hits": hits},
+            ],
+        }]}
+        case_event = next(value for kind, value in probe.annotations(report)
+                          if kind == "case")
+        encoded = json.dumps(case_event, ensure_ascii=False).encode("utf-8")
+        self.assertLess(len(encoded), 8192)
+        self.assertEqual(len(case_event["retrieval_sufficiency_passes"]), 2)
+        self.assertEqual(case_event["retrieval_sufficiency_passes"][0]
+                         ["retrieved_target_document_ranks"], {"Doc-4.pdf": 4})
+        self.assertEqual(case_event["retrieval_sufficiency_passes"][0]
+                         ["hits"][3]["rank"], 4)
+
+    def test_summary_distinguishes_cited_documents_from_retrieval_hits(self):
         probe = self._probe()
         report = {"cases": [
             {"http_status": 200, "status": "answered", "validation_ok": True,
              "expected_documents": ["Guide.docx"],
-             "citation_target_document_hit": True,
+             "citation_target_document_hit": False,
+             "retrieval_sufficiency_passes": [{
+                 "pass": "original", "retrieved_target_document_hit": True}],
              "expected_out_of_scope_refusal": False,
              "out_of_scope_refusal_match": None,
              "chat_calls": [{"kind": "answer_generation"}]},
             {"http_status": 200, "status": "refused", "validation_ok": True,
              "expected_documents": [], "citation_target_document_hit": None,
+             "retrieval_sufficiency_passes": [{
+                 "pass": "original", "retrieved_target_document_hit": None}],
              "expected_out_of_scope_refusal": True,
              "out_of_scope_refusal_match": True,
              "chat_calls": [{"kind": "interrogation"}]},
         ]}
         summary = probe.summarize(report)
         self.assertEqual(summary["validated_answers"], 1)
-        self.assertEqual(summary["citation_target_document_hits"], 1)
+        self.assertEqual(summary["citation_target_document_hits"], 0)
+        self.assertEqual(summary["retrieved_expected_document_hits_by_pass"]["original"], {
+            "observed_cases": 2, "eligible_cases": 1,
+            "retrieved_expected_document_hits": 1, "hit_rate": 1.0})
         self.assertEqual(summary["out_of_scope_refusal_matches"], 1)
         self.assertEqual(summary["chat_calls_by_kind"],
                          {"answer_generation": 1, "interrogation": 1})
@@ -3257,6 +3358,20 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
                 "http_status": 200, "status": "answered", "reason": "supported",
                 "language_actual": "en", "validation_ok": True,
                 "evidence_status": "كافٍ", "retrieved": 2,
+                "terminal_stage": "answer_generation_and_citation_gate",
+                "retrieval_sufficiency_passes": [{
+                    "pass": "original", "requested_top_k": 5,
+                    "input_hit_count": 2, "retrieved_target_document_hit": True,
+                    "retrieved_target_document_ranks": {"Guide.docx": 2},
+                    "sufficiency": {"state": "كافٍ", "reason": "covered",
+                                    "requirements_missing": [],
+                                    "requirements": [],
+                                    "guided_rounds": [], "final_pool_count": 2},
+                    "hits": [{"rank": 1, "document": "Other.docx",
+                              "heading": "Other section", "chunk_id": "other::1"},
+                             {"rank": 2, "document": "Guide.docx",
+                              "heading": "Section 1", "chunk_id": "guide::2"}],
+                }],
                 "sources": [{"source_id": "S1", "document": "Guide.docx",
                              "heading": "Section 1", "unit_id": None}],
                 "expected_documents": ["Guide.docx"],
@@ -3293,6 +3408,10 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
         self.assertEqual(case["id"], "TM-test")
         self.assertEqual(case["expected_documents"], ["Guide.docx"])
         self.assertEqual(case["requirements_missing"], ["definition_or_purpose_unit"])
+        self.assertEqual(case["terminal_stage"], "answer_generation_and_citation_gate")
+        self.assertTrue(case["retrieval_sufficiency_passes"][0]
+                        ["retrieved_target_document_hit"])
+        self.assertEqual(case["retrieval_sufficiency_passes"][0]["hits"][1]["rank"], 2)
         self.assertEqual(answer["text"], "A grounded answer [S1]")
         self.assertEqual(evidence["evidence"][0]["quote"],
                          "Verbatim evidence quote.")

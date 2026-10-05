@@ -3,9 +3,11 @@
 
 The live runner uses the supported NVIDIA-embedding + xKiro/Qwen profile,
 restructure chunks, vector retrieval, and the service's default answer policy
-(including sufficiency commitment and Phase-8 interrogation). It writes a
-case-level JSON/Markdown report and bounded GitHub-check annotations so the
-results remain inspectable when Actions artifacts cannot be downloaded.
+(including sufficiency commitment and Phase-8 interrogation). A harness-only
+trace records safe hit metadata and sufficiency results for the original and
+interrogated passes; it does not change the service response or production path.
+The runner writes a case-level JSON/Markdown report and bounded GitHub-check
+annotations so results remain inspectable when Actions artifacts cannot be downloaded.
 
 Live calls are restricted to GitHub Actions. --validate-only reads the probe
 plan and active topic catalog locally without constructing a provider, embedding,
@@ -14,7 +16,9 @@ or calling a model.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -133,15 +137,174 @@ class CountingChatClient:
             self.events.append(event)
 
 
+class SufficiencyPassTrace:
+    """Capture safe retrieval/sufficiency metadata during this test harness only.
+
+    The service response and production code path are untouched. The trace wraps
+    sufficiency.check only while the bounded Phase-9 probe is running, and never
+    retains chunk text, prompts, credentials, or customer data.
+    """
+
+    def __init__(self):
+        self._module = None
+        self._original = None
+        self._wrapped = None
+        self._current: dict | None = None
+
+    @staticmethod
+    def _hit_summary(hit: dict, position: int) -> dict:
+        metadata = hit.get("metadata") if isinstance(hit.get("metadata"), dict) else {}
+        document = metadata.get("source") or metadata.get("document") or metadata.get("file")
+        document = Path(str(document)).name if document else None
+        chunk_id = hit.get("id") or metadata.get("chunk_id")
+        score_key, score = None, None
+        for key in ("similarity", "rrf_score", "blend_score", "keyword_score"):
+            value = hit.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if math.isfinite(float(value)):
+                    score_key, score = key, round(float(value), 6)
+                    break
+        return {
+            "rank": hit.get("rank") if isinstance(hit.get("rank"), int) else position,
+            "document": document,
+            "heading": str(metadata.get("heading") or "")[:140] or None,
+            "unit_id": str(metadata.get("unit_id") or "")[:140] or None,
+            "chunk_id": str(chunk_id or "")[:220] or None,
+            "score_key": score_key,
+            "score": score,
+        }
+
+    @staticmethod
+    def _sufficiency_summary(result: dict, hits: list[dict]) -> dict:
+        requirements = []
+        for row in result.get("requirements", []) or []:
+            if not isinstance(row, dict):
+                continue
+            requirements.append({
+                "requirement": row.get("req"),
+                "sub_question": row.get("sub_question"),
+                "covered": bool(row.get("covered")),
+                "covering_chunk_ids": (row.get("by") or [])[:2],
+            })
+        guided = []
+        for row in result.get("guided_rounds", []) or []:
+            if isinstance(row, dict):
+                guided.append({"round": row.get("round"),
+                               "new_hits": row.get("new_hits")})
+        final_pool = result.get("final_pool")
+        return {
+            "state": result.get("state"),
+            "reason": str(result.get("reason") or "")[:240] or None,
+            "requirements_missing": (result.get("missing") or [])[:12],
+            "requirements": requirements[:24],
+            "guided_rounds": guided[:4],
+            "final_pool_count": len(final_pool) if isinstance(final_pool, list) else len(hits),
+        }
+
+    def __enter__(self):
+        import sufficiency
+        self._module = sufficiency
+        self._original = sufficiency.check
+
+        def traced_check(question, hits, *args, **kwargs):
+            result = self._original(question, hits, *args, **kwargs)
+            if self._current is not None:
+                number = len(self._current["passes"]) + 1
+                label = ("original" if number == 1 else
+                         "after_interrogation" if number == 2 else f"additional_{number - 1}")
+                safe_hits = [self._hit_summary(hit, index)
+                             for index, hit in enumerate(hits or [], start=1)
+                             if isinstance(hit, dict)]
+                self._current["passes"].append({
+                    "case_id": self._current["case_id"],
+                    "pass": label,
+                    "query_sha256": hashlib.sha256(
+                        str(question).encode("utf-8", errors="replace")).hexdigest(),
+                    "requested_top_k": self._current["requested_top_k"],
+                    "input_hit_count": len(hits or []),
+                    "hits": safe_hits[:20],
+                    "sufficiency": self._sufficiency_summary(result, hits or []),
+                })
+            return result
+
+        self._wrapped = traced_check
+        self._module.check = traced_check
+        return self
+
+    def begin_case(self, case_id: str, *, requested_top_k: int) -> None:
+        if self._current is not None:
+            raise RuntimeError("a sufficiency trace case is already active")
+        self._current = {"case_id": case_id,
+                         "requested_top_k": int(requested_top_k),
+                         "passes": []}
+
+    def end_case(self) -> list[dict]:
+        if self._current is None:
+            return []
+        passes = self._current["passes"]
+        self._current = None
+        return passes
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if (self._module is not None and self._wrapped is not None
+                and self._module.check is self._wrapped):
+            self._module.check = self._original
+        self._current = None
+        return False
+
+
 def _expected_documents(case: dict, by_id: dict[str, dict]) -> list[str]:
-    docs = {str(by_id[topic_id].get("document") or by_id[topic_id].get("source"))
-            for topic_id in case["accepted_topic_ids"]}
+    docs = {Path(str(by_id[topic_id].get("document")
+                    or by_id[topic_id].get("source"))).name
+            for topic_id in case["accepted_topic_ids"]
+            if by_id[topic_id].get("document") or by_id[topic_id].get("source")}
     return sorted(doc for doc in docs if doc and doc != "None")
+
+
+def _enrich_pass_diagnostics(passes: list[dict], expected_documents: list[str]) -> list[dict]:
+    enriched = []
+    for item in passes:
+        row = {key: item.get(key) for key in
+               ("case_id", "pass", "query_sha256", "requested_top_k", "input_hit_count",
+                "hits", "sufficiency")}
+        hits = row.get("hits") or []
+        ranks = {}
+        for document in expected_documents:
+            matching = [hit.get("rank") for hit in hits
+                        if isinstance(hit, dict) and hit.get("document") == document
+                        and isinstance(hit.get("rank"), int)]
+            if matching:
+                ranks[document] = min(matching)
+        row["expected_documents"] = list(expected_documents)
+        row["retrieved_target_document_ranks"] = ranks
+        row["retrieved_target_document_hit"] = (
+            bool(ranks) if expected_documents else None)
+        enriched.append(row)
+    return enriched
+
+
+def _terminal_stage(payload: dict, passes: list[dict]) -> str:
+    reason = payload.get("reason")
+    status = payload.get("status")
+    if reason == "evidence_insufficient":
+        if any(row.get("pass") == "after_interrogation" for row in passes):
+            return "sufficiency_after_interrogation"
+        return "sufficiency_original" if passes else "sufficiency_untraced"
+    if reason == "private_or_live_request":
+        return "capability_guard"
+    if reason == "no_context":
+        return "empty_retrieval"
+    if reason == "invalid_output":
+        return "answer_validation"
+    if status == "answered":
+        return "answer_generation_and_citation_gate"
+    return "unclassified_or_untraced"
 
 
 def _case_result(case: dict, payload: dict, *, http_status: int,
                  error: str | None, by_id: dict[str, dict],
-                 by_display: dict[str, list[dict]], calls: list[dict]) -> dict:
+                 by_display: dict[str, list[dict]], calls: list[dict],
+                 sufficiency_passes: list[dict] | None = None) -> dict:
     sources_by_id = {source.get("source_id"): source
                      for source in payload.get("sources", [])
                      if isinstance(source, dict) and source.get("source_id")}
@@ -188,6 +351,8 @@ def _case_result(case: dict, payload: dict, *, http_status: int,
     actual_class = interrogation.get("classification") if interrogation else None
     status = payload.get("status")
     is_oos_control = expected_class == "non_banking" and not expected_ids
+    diagnostic_passes = _enrich_pass_diagnostics(
+        sufficiency_passes or [], expected_docs)
 
     return {
         "id": case["id"],
@@ -197,6 +362,8 @@ def _case_result(case: dict, payload: dict, *, http_status: int,
         "http_error": error,
         "status": status,
         "reason": payload.get("reason"),
+        "terminal_stage": _terminal_stage(payload, diagnostic_passes),
+        "retrieval_sufficiency_passes": diagnostic_passes,
         "answer": payload.get("answer"),
         "language_actual": payload.get("language"),
         "model": payload.get("model"),
@@ -245,6 +412,24 @@ def summarize(report: dict) -> dict:
     citations = [row.get("citation_target_document_hit") for row in in_scope]
     calls = [call for row in cases for call in row.get("chat_calls", [])]
     call_counts = Counter(call.get("kind", "other") for call in calls)
+    retrieval_by_pass: dict[str, dict] = {}
+    for row in cases:
+        eligible = bool(row.get("expected_documents"))
+        for diagnostic in row.get("retrieval_sufficiency_passes", []) or []:
+            label = diagnostic.get("pass") or "unknown"
+            stats = retrieval_by_pass.setdefault(label, {
+                "observed_cases": 0, "eligible_cases": 0,
+                "retrieved_expected_document_hits": 0,
+            })
+            stats["observed_cases"] += 1
+            if eligible:
+                stats["eligible_cases"] += 1
+                if diagnostic.get("retrieved_target_document_hit") is True:
+                    stats["retrieved_expected_document_hits"] += 1
+    for stats in retrieval_by_pass.values():
+        denominator = stats["eligible_cases"]
+        stats["hit_rate"] = (stats["retrieved_expected_document_hits"] / denominator
+                              if denominator else None)
     return {
         "cases": len(cases),
         "http_200": sum(row.get("http_status") == 200 for row in cases),
@@ -252,6 +437,7 @@ def summarize(report: dict) -> dict:
         "validated_answers": sum(row.get("status") == "answered"
                                   and row.get("validation_ok") is True for row in cases),
         "citation_target_document_hits": sum(value is True for value in citations),
+        "retrieved_expected_document_hits_by_pass": retrieval_by_pass,
         "in_scope_cases_with_expected_documents": len(in_scope),
         "out_of_scope_refusal_matches": sum(row.get("out_of_scope_refusal_match") is True
                                              for row in oos),
@@ -297,6 +483,21 @@ def annotations(report: dict) -> list[tuple[str, dict]]:
             "validation_ok": row.get("validation_ok"),
             "evidence_status": row.get("evidence_status"),
             "retrieved": row.get("retrieved"),
+            "terminal_stage": row.get("terminal_stage"),
+            "retrieval_sufficiency_passes": [{
+                "pass": item.get("pass"),
+                "requested_top_k": item.get("requested_top_k"),
+                "input_hit_count": item.get("input_hit_count"),
+                "retrieved_target_document_hit": item.get("retrieved_target_document_hit"),
+                "retrieved_target_document_ranks": item.get("retrieved_target_document_ranks", {}),
+                "sufficiency_state": (item.get("sufficiency") or {}).get("state"),
+                "sufficiency_reason": (item.get("sufficiency") or {}).get("reason"),
+                "requirements_missing": (item.get("sufficiency") or {}).get(
+                    "requirements_missing", [])[:8],
+                "hits": [{key: hit.get(key) for key in
+                          ("rank", "document", "heading", "chunk_id")}
+                         for hit in (item.get("hits") or [])[:5]],
+            } for item in (row.get("retrieval_sufficiency_passes") or [])[:3]],
             "dropped_for_budget": row.get("dropped_for_budget"),
             "seconds": row.get("seconds"),
             "expected_topic_ids": row.get("expected_topic_ids", []),
@@ -389,6 +590,28 @@ def render_markdown(report: dict) -> str:
             f"**Result:** HTTP {row.get('http_status')}; `{row.get('status')}` / `{row.get('reason')}`; validation `{row.get('validation_ok')}`; evidence `{row.get('evidence_status')}`; retrieved `{row.get('retrieved')}`; answer seconds `{row.get('seconds')}`.",
             "", "**Answer:**", "", f"> {str(row.get('answer') or '—').replace(chr(10), ' ')}",
         ])
+        pass_diagnostics = row.get("retrieval_sufficiency_passes") or []
+        if pass_diagnostics:
+            lines.extend(["", f"**Terminal stage:** `{row.get('terminal_stage')}`",
+                          "", "**Retrieval and sufficiency by pass:**"])
+            for diagnostic in pass_diagnostics:
+                suff = diagnostic.get("sufficiency") or {}
+                lines.append(
+                    f"- `{diagnostic.get('pass')}`: pool "
+                    f"`{diagnostic.get('input_hit_count')}`/"
+                    f"`{diagnostic.get('requested_top_k')}`; retrieved target document "
+                    f"`{diagnostic.get('retrieved_target_document_hit')}` at "
+                    f"`{diagnostic.get('retrieved_target_document_ranks')}`; "
+                    f"sufficiency `{suff.get('state')}`, missing "
+                    f"`{suff.get('requirements_missing', [])}`, reason "
+                    f"`{suff.get('reason')}`.")
+                for hit in (diagnostic.get("hits") or [])[:5]:
+                    location = " — ".join(filter(None, [hit.get("document"),
+                                                         hit.get("heading"),
+                                                         hit.get("chunk_id")]))
+                    score = (f" ({hit.get('score_key')}={hit.get('score')})"
+                             if hit.get("score") is not None else "")
+                    lines.append(f"  - rank `{hit.get('rank')}` `{location}`{score}")
         if row.get("understood_as"):
             inter = row.get("interrogation") or {}
             lines.extend([
@@ -538,7 +761,7 @@ def run(validate_only: bool = False, output: Path = DEFAULT_OUTPUT) -> int:
             )
             from fastapi.testclient import TestClient
 
-            with TestClient(app) as client:
+            with SufficiencyPassTrace() as sufficiency_trace, TestClient(app) as client:
                 health = client.get("/health")
                 if health.status_code != 200 or health.json().get("status") != "ok":
                     raise RuntimeError("service health preflight failed")
@@ -567,29 +790,37 @@ def run(validate_only: bool = False, output: Path = DEFAULT_OUTPUT) -> int:
                     payload = {}
                     http_status = 0
                     request_error = None
+                    pass_diagnostics = []
+                    sufficiency_trace.begin_case(
+                        case["id"], requested_top_k=profile["retrieval"]["top_k"])
                     try:
-                        response = client.post("/answer", json={
-                            "question": case["question"],
-                            # No query_lang override: exercise service language detection.
-                            "mode": "vector",
-                            "k": int(profile["retrieval"]["top_k"]),
-                            "include_excerpts": False,
-                        })
-                        http_status = response.status_code
                         try:
-                            payload = response.json()
-                        except ValueError:
-                            payload = {}
-                        if http_status != 200:
-                            detail = payload.get("detail", payload) if isinstance(payload, dict) else payload
-                            request_error = json.dumps(detail, ensure_ascii=False)[:1000]
-                    except Exception as exc:  # retain later cases after a request-level failure
-                        from nvidia_api import safe_error
-                        request_error = safe_error(exc)
+                            response = client.post("/answer", json={
+                                "question": case["question"],
+                                # No query_lang override: exercise service language detection.
+                                "mode": "vector",
+                                "k": int(profile["retrieval"]["top_k"]),
+                                "include_excerpts": False,
+                            })
+                            http_status = response.status_code
+                            try:
+                                payload = response.json()
+                            except ValueError:
+                                payload = {}
+                            if http_status != 200:
+                                detail = (payload.get("detail", payload)
+                                          if isinstance(payload, dict) else payload)
+                                request_error = json.dumps(detail, ensure_ascii=False)[:1000]
+                        except Exception as exc:  # retain later cases after a request-level failure
+                            from nvidia_api import safe_error
+                            request_error = safe_error(exc)
+                    finally:
+                        pass_diagnostics = sufficiency_trace.end_case()
                     row = _case_result(
                         case, payload if isinstance(payload, dict) else {},
                         http_status=http_status, error=request_error, by_id=by_id,
-                        by_display=by_display, calls=counter.events[start:])
+                        by_display=by_display, calls=counter.events[start:],
+                        sufficiency_passes=pass_diagnostics)
                     base["cases"].append(row)
 
         _emit(base, output)
