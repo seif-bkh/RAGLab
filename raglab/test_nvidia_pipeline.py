@@ -3176,6 +3176,25 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
                 self.assertEqual(probe.run(output=output), 2)
             self.assertFalse(output.exists())
 
+    def test_top_k_diagnostic_arms_are_bounded_and_explicit(self):
+        probe = self._probe()
+        self.assertEqual(probe.resolve_top_k(5), 5)
+        for value in (5, 12, 20):
+            self.assertEqual(probe.resolve_top_k(5, value), value)
+        for value in (0, 6, 21, "not-a-number"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                probe.resolve_top_k(5, value)
+
+    def test_terminal_stage_distinguishes_gate_refusal_from_empty_generation(self):
+        probe = self._probe()
+        passes = [{"pass": "after_interrogation"}]
+        self.assertEqual(probe._terminal_stage(
+            {"status": "refused", "reason": "evidence_insufficient"}, passes),
+            "sufficiency_after_interrogation")
+        self.assertEqual(probe._terminal_stage(
+            {"status": "refused", "reason": "insufficient_evidence"}, passes),
+            "answer_generation_no_supported_claims")
+
     def test_existing_report_annotations_can_be_replayed_offline(self):
         import io
         import json

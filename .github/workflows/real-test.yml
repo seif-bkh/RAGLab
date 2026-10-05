@@ -19,7 +19,8 @@ name: RAGLab real test
 # runs retrieval only; phase9-topic-map-* runs a 12-call paired xKiro before/after
 # topic-selection diagnostic; phase9-answer-* runs the six fixed Phase-9 questions
 # through POST /answer with NVIDIA embeddings and the pinned free-verified xKiro
-# answer model. Neither frozen question set is changed. real-test-* triggers the
+# answer model (top_k=5 by default; phase9-answer-topk12-* / -topk20-* select
+# bounded diagnostic arms). Neither frozen question set is changed. real-test-* triggers the
 # full historical workflow. The regular push CI (.github/workflows/ci.yml) stays API-free.
 #
 # Reading the result from the sandbox (job logs and artifact downloads are NOT reachable
@@ -47,6 +48,12 @@ on:
         required: false
         default: false
         type: boolean
+      phase9_answer_top_k:
+        description: "Top-k arm for the Phase-9 answer probe"
+        required: false
+        default: "5"
+        type: choice
+        options: ["5", "12", "20"]
   push:
     tags: ["real-test-*", "phase9-stage1-*", "phase9-topic-map-*", "phase9-answer-*", "phase9-report-answer-*"]
 
@@ -685,6 +692,7 @@ jobs:
       REPHRASE_INTERROGATION_ENABLED: "1"
       SUFFICIENCY_FIELDS_ENABLED: "1"
       RAGLAB_ALLOW_PROFILE_SWITCH: "0"
+      PHASE9_ANSWER_TOP_K: ${{ (github.event_name == 'workflow_dispatch' && inputs.phase9_answer_top_k) || (startsWith(github.ref, 'refs/tags/phase9-answer-topk20-') && '20') || (startsWith(github.ref, 'refs/tags/phase9-answer-topk12-') && '12') || '5' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -710,6 +718,7 @@ jobs:
           mkdir -p /tmp/phase9_answer_probe
           status=0
           python audits/PHASE9_STRUCTURE/run_phase9_answer_probe.py --validate-only \
+            --top-k "$PHASE9_ANSWER_TOP_K" \
             2>&1 | tee /tmp/phase9_answer_probe/validation.log || status=$?
           echo "$status" > /tmp/phase9_answer_probe/validation_status
           if [ "$status" -ne 0 ]; then
@@ -742,6 +751,7 @@ jobs:
           mkdir -p /tmp/phase9_answer_probe results/phase9_answer_probe
           status=0
           python audits/PHASE9_STRUCTURE/run_phase9_answer_probe.py \
+            --top-k "$PHASE9_ANSWER_TOP_K" \
             --output results/phase9_answer_probe/live_answer_results.json \
             2>&1 | tee /tmp/phase9_answer_probe/live_answer.log || status=$?
           echo "$status" > /tmp/phase9_answer_probe/status

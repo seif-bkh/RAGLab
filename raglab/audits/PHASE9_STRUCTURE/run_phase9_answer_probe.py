@@ -42,6 +42,20 @@ EXPECTED_PROFILE = {
     "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
 }
 MAX_LOGICAL_CHAT_CALLS = 18  # six cases x (Phase-8 interrogation + one answer), with headroom
+ANSWER_TOP_K_ARMS = (5, 12, 20)
+
+
+def resolve_top_k(configured: int, requested: int | str | None = None) -> int:
+    """Resolve one bounded diagnostic arm without changing production defaults."""
+    try:
+        value = int(configured if requested in (None, "") else requested)
+    except (TypeError, ValueError):
+        raise ValueError("Phase-9 answer top_k must be one of 5, 12, or 20") from None
+    if requested not in (None, "") and value not in ANSWER_TOP_K_ARMS:
+        raise ValueError("Phase-9 answer top_k override must be one of 5, 12, or 20")
+    if value < 1 or value > 20:
+        raise ValueError("Phase-9 answer top_k must be between 1 and 20")
+    return value
 
 
 def load_plan() -> dict:
@@ -324,12 +338,16 @@ def _terminal_stage(payload: dict, passes: list[dict]) -> str:
         if any(row.get("pass") == "after_interrogation" for row in passes):
             return "sufficiency_after_interrogation"
         return "sufficiency_original" if passes else "sufficiency_untraced"
+    if reason == "insufficient_evidence":
+        return "answer_generation_no_supported_claims"
     if reason == "private_or_live_request":
         return "capability_guard"
     if reason == "no_context":
         return "empty_retrieval"
-    if reason == "invalid_output":
+    if reason in {"invalid_output", "unsourced_number"}:
         return "answer_validation"
+    if reason in {"provider_error", "provider_unreachable"}:
+        return "provider_error"
     if status == "answered":
         return "answer_generation_and_citation_gate"
     return "unclassified_or_untraced"
@@ -755,23 +773,26 @@ def _emit(report: dict, output: Path) -> None:
     _emit_annotations(report)
 
 
-def _validate_only() -> int:
+def _validate_only(top_k: int | None = None) -> int:
     plan = load_plan()
+    import config as cfg
     import profiles
 
+    selected_top_k = resolve_top_k(cfg.ANSWER_TOP_K, top_k)
     state = profiles.default_state()
     data_dirs = profiles.data_dirs(state)
     entries, by_id, _by_display = active_catalog(data_dirs)
     validate_active_targets(plan, by_id)
     print(f"answer probe plan OK: {len(plan['cases'])} unchanged cases; "
-          f"{len(entries)} active topics; all expected IDs resolve; "
+          f"{len(entries)} active topics; all expected IDs resolve; top_k={selected_top_k}; "
           "no service, provider, embedding, or model calls")
     return 0
 
 
-def run(validate_only: bool = False, output: Path = DEFAULT_OUTPUT) -> int:
+def run(validate_only: bool = False, output: Path = DEFAULT_OUTPUT,
+        top_k: int | None = None) -> int:
     if validate_only:
-        return _validate_only()
+        return _validate_only(top_k=top_k)
     if os.environ.get("GITHUB_ACTIONS") != "true":
         print("live POST /answer calls are restricted to GitHub Actions; "
               "use --validate-only locally", file=sys.stderr)
@@ -808,6 +829,7 @@ def run(validate_only: bool = False, output: Path = DEFAULT_OUTPUT) -> int:
             import profiles
             import service
 
+            selected_top_k = resolve_top_k(cfg.ANSWER_TOP_K, top_k)
             profile = profiles.default_state()
             if profile["embedding"] != profiles.SUPPORTED_EMBEDDING:
                 raise ValueError("default embedding profile is not the pinned NVIDIA model")
@@ -815,7 +837,7 @@ def run(validate_only: bool = False, output: Path = DEFAULT_OUTPUT) -> int:
                 raise ValueError("default answer profile is not the pinned xKiro model")
             profile["chunking"] = {"mode": "restructure", "size": 220, "overlap": 40}
             profile["retrieval"] = {
-                "top_k": int(cfg.ANSWER_TOP_K),
+                "top_k": selected_top_k,
                 "mode": "vector",
                 "lang_filter": None,
                 "neighbor_radius": int(cfg.ANSWER_NEIGHBOR_RADIUS),
@@ -944,12 +966,14 @@ def main() -> int:
     parser.add_argument("--validate-only", action="store_true",
                         help="validate the plan/catalog locally without provider or model calls")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--top-k", type=int, choices=ANSWER_TOP_K_ARMS,
+                        help="diagnostic retrieval arm (5, 12, or 20); default uses config")
     parser.add_argument("--emit-report", type=Path,
                         help="emit compact GitHub annotations from an existing report; no API calls")
     args = parser.parse_args()
     if args.emit_report:
         return emit_existing_report(args.emit_report)
-    return run(validate_only=args.validate_only, output=args.output)
+    return run(validate_only=args.validate_only, output=args.output, top_k=args.top_k)
 
 
 if __name__ == "__main__":
