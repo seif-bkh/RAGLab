@@ -504,21 +504,29 @@ Current state of the work:
   historical answer-generation job SKIPPED. `topic_map.py` then moved from
   heading-only choices to 262 source-grounded nodes with paths/excerpts and
   short exact-matched prompt IDs; SERVICE_VERSION 1.4.0 -> 1.5.0 (HTTP shape
-  unchanged); offline gate EXIT=0 (417 tests;
-  `raglab/logs/test_run_20261005_011647.log`), no post-change live LLM
-  measurement yet. Audit:
-  raglab/audits/PHASE9_STRUCTURE/09_STAGE1_VECTOR_RESULTS.md and
-  10_TOPIC_MAP_ENRICHMENT.md. Questions sets 50/10 unchanged.
+  unchanged). Offline gate EXIT=0 (417 tests;
+  `raglab/logs/test_run_20261005_011647.log`). The corrected live topic-map
+  probe (run 37251040562, tag `phase9-topic-map-live-rerun-20261005`) sent 12
+  xKiro calls across six paired cases after free-price verification: all 6
+  parsed per arm, no call errors, target hits 4/5 -> 5/5. This is a small
+  topic-selection diagnostic only; it did not run retrieval or generate
+  answers. TM05 was classified `non_banking` after despite a topic hit and has
+  no expected class, so the observation is unscored. See
+  `raglab/audits/PHASE9_STRUCTURE/11_TOPIC_MAP_LIVE_COMPARISON.md` for the
+  annotation metrics, the artifact-download limitation, and cautious reading.
+  Questions sets 50/10 unchanged.
 - Current Arena session branch: **arena/01a10905-raglab**, based on
-  54b993f8 (from arena/01a107b8-raglab). Phase-9 map work is committed and
-  pushed through `e3ec6a1` (map enrichment `044f87d`, docs `3a94a61`, paired
-  probe setup `e3ec6a1`); CI run `37249869192` passed. The first paired live
-  probe run `37249989698` failed before model inference because a tokenizer-
-  dependent legacy-map count was pinned; fix and local preflight now pass,
-  corrected live run pending. Offline gate: 417 tests, EXIT=0
-  (`raglab/logs/test_run_20261005_011647.log`). The earlier vector-only run
-  remains `37245380571` on tag `phase9-stage1-vector-20261005` / commit
-  `965634f`; no live answer generation was done.
+  54b993f8 (from arena/01a107b8-raglab). Tokenizer-dependent historical-map
+  count validation was removed in commit `39eaf79`; regular CI run
+  `37250940538` passed. The first paired live probe `37249989698` failed
+  before model inference, not during a provider call. Corrected live run
+  `37251040562` completed successfully. The check-run annotation was
+  inspected; direct artifact and job-log downloads from this sandbox returned
+  `EOF`, so the full raw JSON/Markdown was not inspected locally. Offline gate:
+  417 tests, EXIT=0 (`raglab/logs/test_run_20261005_011647.log`). The earlier
+  vector-only run remains `37245380571` on tag
+  `phase9-stage1-vector-20261005` / commit `965634f`; no live answer
+  generation was done.
 - **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
   `raglab/decompose.py` (read-only): the intermediate decomposition layer.
   EVERY question → reformulated micro-questions, each with its partial
