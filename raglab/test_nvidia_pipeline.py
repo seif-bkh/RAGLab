@@ -3176,6 +3176,25 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
                 self.assertEqual(probe.run(output=output), 2)
             self.assertFalse(output.exists())
 
+    def test_existing_report_annotations_can_be_replayed_offline(self):
+        import io
+        import json
+        import tempfile
+        from contextlib import redirect_stdout
+        from pathlib import Path
+        probe = self._probe()
+        report = {"schema_version": "phase9-answer-live-results-1.0",
+                  "model": "test-model", "cases": [{"id": "TM-offline",
+                                                        "answer": "saved answer"}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(probe.emit_existing_report(path), 0)
+        self.assertIn("ANNO| phase9-answer-case |", output.getvalue())
+        self.assertIn("ANNO| phase9-answer-answer |", output.getvalue())
+
     def test_plan_reuses_the_six_existing_topic_probe_cases(self):
         from pathlib import Path
         import json
@@ -3188,6 +3207,18 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
                          [c["id"] for c in existing["cases"]])
         self.assertEqual([c["question"] for c in plan["cases"]],
                          [c["question"] for c in existing["cases"]])
+
+    def test_annotations_split_long_answers_without_truncating_the_text(self):
+        import json
+        probe = self._probe()
+        answer_text = "مرحبا" * 250
+        events = probe.annotations({"cases": [{"id": "TM-long", "answer": answer_text}]})
+        parts = [value for kind, value in events if kind == "answer"]
+        self.assertGreater(len(parts), 1)
+        self.assertEqual("".join(part["text"] for part in parts), answer_text)
+        sizes = [len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+                 for _kind, value in events]
+        self.assertLess(max(sizes), 4096)
 
     def test_summary_distinguishes_answered_citations_and_oos_refusal(self):
         probe = self._probe()
@@ -3243,11 +3274,23 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
                 "chat_call_counts": {"answer_generation": 1},
             }],
         }
-        rendered = json.loads(probe.annotation(report))
-        case = rendered["cases"][0]
-        self.assertEqual(rendered["max_logical_chat_calls"], 18)
-        self.assertEqual(case["answer"], "A grounded answer [S1]")
-        self.assertEqual(case["claims"][0]["evidence"][0]["quote"],
+        import io
+        from contextlib import redirect_stdout
+        output = io.StringIO()
+        with redirect_stdout(output):
+            probe._emit_annotations(report)
+        rendered = []
+        for line in output.getvalue().splitlines():
+            prefix, encoded = line.split(" | ", 1)
+            rendered.append((prefix.rsplit("-", 1)[-1], json.loads(encoded)))
+        summary = next(value for kind, value in rendered if kind == "summary")
+        case = next(value for kind, value in rendered if kind == "case")
+        answer = next(value for kind, value in rendered if kind == "answer")
+        evidence = next(value for kind, value in rendered if kind == "evidence")
+        self.assertEqual(summary["max_logical_chat_calls"], 18)
+        self.assertEqual(case["id"], "TM-test")
+        self.assertEqual(answer["text"], "A grounded answer [S1]")
+        self.assertEqual(evidence["evidence"][0]["quote"],
                          "Verbatim evidence quote.")
         self.assertEqual(case["interrogation"]["understood_as"],
                          "Explain the topic from the guide.")

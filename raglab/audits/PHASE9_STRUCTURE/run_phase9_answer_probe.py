@@ -4,7 +4,7 @@
 The live runner uses the supported NVIDIA-embedding + xKiro/Qwen profile,
 restructure chunks, vector retrieval, and the service's default answer policy
 (including sufficiency commitment and Phase-8 interrogation). It writes a
-case-level JSON/Markdown report and a compact GitHub-check annotation so the
+case-level JSON/Markdown report and bounded GitHub-check annotations so the
 results remain inspectable when Actions artifacts cannot be downloaded.
 
 Live calls are restricted to GitHub Actions. --validate-only reads the probe
@@ -274,19 +274,19 @@ def _clip(value, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def annotation(report: dict) -> str:
-    cases = []
+def annotations(report: dict) -> list[tuple[str, dict]]:
+    """Small check annotations: split answers and evidence to avoid GH truncation."""
+    events = [("summary", {
+        "model": report.get("model"),
+        "max_logical_chat_calls": report.get("max_logical_chat_calls"),
+        "free_price_verified": (report.get("free_price_verification") or {}).get("verified"),
+        "profile": report.get("profile"),
+        "summary": report.get("summary") or summarize(report),
+        "setup_error": report.get("setup_error"),
+    })]
     for row in report.get("cases", []):
-        claims = []
-        for claim in (row.get("claims") or [])[:3]:
-            evidence = [{
-                "document": item.get("document"),
-                "heading": item.get("heading"),
-                "quote": _clip(item.get("quote"), 180),
-            } for item in (claim.get("evidence") or [])[:2]]
-            claims.append({"claim": _clip(claim.get("text"), 220), "evidence": evidence})
         inter = row.get("interrogation") or {}
-        cases.append({
+        events.append(("case", {
             "id": row.get("id"),
             "question": _clip(row.get("question"), 220),
             "http": row.get("http_status"),
@@ -303,27 +303,52 @@ def annotation(report: dict) -> str:
             "citation_target_document_hit": row.get("citation_target_document_hit"),
             "interrogation": ({
                 "classification": inter.get("classification"),
-                "topics": inter.get("topics", []),
+                "topics": (inter.get("topics") or [])[:3],
                 "topic_hit": row.get("interrogation_topic_hit"),
-                "requirements": inter.get("requirements", []),
+                "requirements": (inter.get("requirements") or [])[:4],
                 "confidence": inter.get("confidence"),
-                "understood_as": _clip(row.get("understood_as"), 260),
+                "understood_as": _clip(row.get("understood_as"), 220),
             } if inter else None),
-            "answer": _clip(row.get("answer"), 650),
-            "claims": claims,
             "expected_out_of_scope_refusal": row.get("expected_out_of_scope_refusal"),
             "out_of_scope_refusal_match": row.get("out_of_scope_refusal_match"),
             "chat_call_counts": row.get("chat_call_counts", {}),
-        })
-    return json.dumps({
-        "model": report.get("model"),
-        "max_logical_chat_calls": report.get("max_logical_chat_calls"),
-        "free_price_verified": (report.get("free_price_verification") or {}).get("verified"),
-        "profile": report.get("profile"),
-        "summary": report.get("summary") or summarize(report),
-        "setup_error": report.get("setup_error"),
-        "cases": cases,
-    }, ensure_ascii=False, separators=(",", ":"))
+            "raw_preview": _clip(row.get("raw_preview"), 240) or None,
+        }))
+        answer = _clip(row.get("answer"), 100000)
+        answer_parts = [answer[index:index + 400] for index in range(0, len(answer), 400)] or ["—"]
+        for part_number, text in enumerate(answer_parts, start=1):
+            events.append(("answer", {
+                "id": row.get("id"), "part": part_number,
+                "parts": len(answer_parts), "text": text,
+            }))
+        for claim_number, claim in enumerate((row.get("claims") or [])[:3], start=1):
+            evidence = [{
+                "source_id": item.get("source_id"),
+                "document": item.get("document"),
+                "heading": item.get("heading"),
+                "quote": _clip(item.get("quote"), 180),
+            } for item in (claim.get("evidence") or [])[:2]]
+            events.append(("evidence", {
+                "id": row.get("id"), "claim_number": claim_number,
+                "claim": _clip(claim.get("text"), 220), "evidence": evidence,
+            }))
+    return events
+
+
+def _emit_annotations(report: dict) -> None:
+    for kind, value in annotations(report):
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        print(f"ANNO| phase9-answer-{kind} | {encoded}")
+
+
+def emit_existing_report(path: Path) -> int:
+    """Re-publish an existing JSON diagnostic without ingestion or API access."""
+    report = json.loads(Path(path).read_text(encoding="utf-8"))
+    if report.get("schema_version") != "phase9-answer-live-results-1.0":
+        raise ValueError("not a Phase-9 answer-probe report")
+    report.setdefault("summary", summarize(report))
+    _emit_annotations(report)
+    return 0
 
 
 def render_markdown(report: dict) -> str:
@@ -385,7 +410,7 @@ def _emit(report: dict, output: Path) -> None:
     markdown_path.write_text(report["markdown"], encoding="utf-8")
     print(f"results: {output.relative_to(RAGLAB) if output.is_relative_to(RAGLAB) else output}")
     print(f"summary: {markdown_path.relative_to(RAGLAB) if markdown_path.is_relative_to(RAGLAB) else markdown_path}")
-    print("ANNO| phase9-answer | " + annotation(report))
+    _emit_annotations(report)
 
 
 def _validate_only() -> int:
@@ -569,7 +594,11 @@ def main() -> int:
     parser.add_argument("--validate-only", action="store_true",
                         help="validate the plan/catalog locally without provider or model calls")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--emit-report", type=Path,
+                        help="emit compact GitHub annotations from an existing report; no API calls")
     args = parser.parse_args()
+    if args.emit_report:
+        return emit_existing_report(args.emit_report)
     return run(validate_only=args.validate_only, output=args.output)
 
 
