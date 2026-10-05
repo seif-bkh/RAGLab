@@ -384,6 +384,45 @@ Current state of the work:
   arrives (live cross-lingual 73/80/80) and the bridge anchors it; the
   live CI run is the decisive check (recorded in PHASE7_EXPERIMENTS.md).
   Guarded by SufficiencyBridgeTest (6).
+- **Cross-script COVERAGE gate fixed behind two OFF gates (2026-10-05, the
+  Phase-9 answer probe; owner picked the bridge+shape scope and an
+  OFF-by-default arm)**: TM03 (fr) / TM04 (en) retrieved the right guide
+  sections and were still refused, and top_k 5→12→20 changed nothing.
+  Reproduced OFFLINE with no model call via sufficiency.bm25_store() +
+  sufficiency.check() on the 339-chunk corpus: the corpus is Arabic-only, so
+  a Latin-script question shares ZERO terms with the chunk that answers it —
+  shared_terms=[] and _anchors()=False on chunk_0049 (BM25 rank 8, INSIDE
+  top-20) and chunk_0043, so no requirement can ever be covered. The seed
+  bridge table only carries Islamic-finance TRANSLITERATIONS; the guide's own
+  operational vocabulary («documentary credit», «opération de change») had no
+  row. Two additions, both DECLARED REVIEW DATA only — no decision rule
+  changed: (1) sufficiency.FIELD_BRIDGE_TERMS / FIELD_BRIDGE_PHRASES (phrase
+  keys because «credit» alone is not «مستندي»), matched on the raw token
+  sequence with Latin accents folded, so «opération DE change» resolves even
+  though question_terms() drops «de»; (2) DEFINITION_SHAPE_PATTERNS via
+  _shape_patterns() — the guide defines with an equative sentence
+  («… هو تعهد مكتوب صادر من بنك …»), not a definition verb. Looseness was
+  measured BEFORE declaring: «هو + noun» 1/339 chunks (chunk_0043 itself),
+  tight purpose forms 3/339, vs rejected «هو + …» 14/339 and
+  «يستعمل|يستخدم|يهدف|الغرض» 55/339; the cap is pinned by a test. Measured
+  2x2 (measure_cross_script_coverage.py --arms, each arm a real subprocess):
+  bridges alone turn TM03 كافٍ end-to-end; TM04 is كافٍ in the GATE PROBE
+  (evidence forced into the pool) but stays غير كافٍ one-shot because
+  section 5.1 sits at BM25 ranks 29/27/36 — its remaining blocker is
+  retrieval depth, not the gate; the shape-only arm changes NOTHING, which is
+  the empirical proof that anchoring was the first failure. The two frozen
+  sets are identical in all four arms (FS=0 FR=0 agreement=1.0; 50set
+  38/9/3, targets 8/2). Gates SUFFICIENCY_FIELD_BRIDGES_ENABLED and
+  SUFFICIENCY_DEFINITION_SHAPE_ENABLED, both default "0" — the deployed
+  behavior is byte-identical to before. Live arm: phase9-answer-xfix-* tag or
+  phase9_cross_script_fix=true (NOT yet run). STILL OPEN, out of the approved
+  scope: the guided round is dead for cross-lingual questions (every question
+  term has df=0 in an Arabic corpus, so `rest` is empty and the loop breaks —
+  guided_rounds=[] on both cases), and one hard-coded REFUSALS string serves
+  every reason (answer.py:19-23 → 385/414/423/439), which is why TM06's mint
+  question is refused with a personal-accounts explanation.
+  Guarded by FieldBridgeAndDefinitionShapeTest (10);
+  raglab/audits/PHASE9_STRUCTURE/13_CROSS_SCRIPT_COVERAGE.md.
 - **Root cause of the 'still refused after rebuild' (2026-10-02, CONFIRMED
   end-to-end)**: the owner's index has 1713 chunks vs the baked-in 339 — the
   corpus is duplicated ~5x through pushed documents. df(المرابحة) = 17 x 5
