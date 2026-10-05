@@ -2890,6 +2890,167 @@ class SufficiencyBridgeTest(unittest.TestCase):
         self.assertEqual(on["state"], off["state"])
 
 
+class FieldBridgeAndDefinitionShapeTest(unittest.TestCase):
+    """Phase-9 answer probe follow-up (2026-10-05, the owner-approved
+    bridge+shape arm).
+
+    TM03 (fr) / TM04 (en) retrieved the right guide sections and were still
+    refused: the corpus is Arabic-only, so a Latin-script question shares ZERO
+    terms with the chunk that answers it, `_anchors()` is False, no
+    requirement can ever be covered, and the state is «غير كافٍ». The seed
+    bridge table only carries Islamic-finance TRANSLITERATIONS, and the
+    untyped definition shape only recognizes explicit definition verbs — the
+    guide defines documentary credit as «… هو تعهد مكتوب صادر من بنك …».
+
+    Both additions are env-gated and OFF by default; these tests pin the gate
+    in BOTH directions so the shipped default is provably the old behavior.
+    """
+
+    # Guide…docx 5.1 — the corpus's own equative definition (no verb)
+    DOC_CREDIT = ("الاعتماد المستندي (Lettre de Crédit Documentaire) هو تعهد "
+                  "مكتوب صادر من بنك ويسلم للبائع بناء على طلب المشتري "
+                  "ومطابقا لتعليماته")
+    Q_EN = ("In the internal guide, what does a documentary credit promise "
+            "and who receives it?")
+    Q_FR = ("Dans le guide interne, comment une opération de change "
+            "est-elle réalisée pour un client ?")
+
+    def _hit(self, text):
+        return {"id": "Guide_Interne.docx::chunk_0043", "text": text,
+                "metadata": {"source": "Guide_Interne.docx",
+                             "document": "Guide_Interne.docx",
+                             "heading": "5.1- عمليات فتح وقبول الاعتمادات"}}
+
+    def _df(self, **extra):
+        # the measured corpus df (339 chunks) — all under CROSS_DF_MAX=30
+        return {"اعتماد": 12, "مستندي": 4, "صرف": 14, "عمليات": 20, **extra}
+
+    # ---- the shipped default is the OLD behavior ------------------------
+
+    def test_both_gates_are_off_by_default(self):
+        import subprocess
+        import sys
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("SUFFICIENCY_FIELD_BRIDGES_ENABLED",
+                            "SUFFICIENCY_DEFINITION_SHAPE_ENABLED")}
+        out = subprocess.run(
+            [sys.executable, "-c", "import sufficiency as s; "
+             "print(s.FIELD_BRIDGES_ENABLED, s.DEFINITION_SHAPE_ENABLED)"],
+            cwd=Path(__file__).resolve().parent, env=env,
+            capture_output=True, text=True, check=True)
+        self.assertEqual(out.stdout.split(), ["False", "False"], out.stderr)
+
+    def test_gates_off_reproduce_the_refusal_exactly(self):
+        import sufficiency
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", False), \
+                patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", False):
+            self.assertEqual(sufficiency._bridged_terms(self.Q_EN), set())
+            self.assertFalse(sufficiency._anchors(self.Q_EN, self.DOC_CREDIT,
+                                                  self._df()))
+            state = sufficiency.check(self.Q_EN, [self._hit(self.DOC_CREDIT)],
+                                      df=self._df())
+        self.assertEqual(state["state"], "غير كافٍ")
+        self.assertEqual(state["missing"], ["definition_or_purpose_unit"])
+
+    # ---- field-vocabulary bridges ---------------------------------------
+
+    def test_documentary_credit_phrase_bridges_and_covers(self):
+        import sufficiency
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True), \
+                patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", True):
+            self.assertEqual(sufficiency._bridged_terms(self.Q_EN),
+                             {"اعتماد", "مستندي"})
+            self.assertTrue(sufficiency._anchors(self.Q_EN, self.DOC_CREDIT,
+                                                 self._df()))
+            state = sufficiency.check(self.Q_EN, [self._hit(self.DOC_CREDIT)],
+                                      df=self._df())
+        self.assertEqual(state["state"], "كافٍ", state["reason"])
+
+    def test_accented_french_form_reaches_the_same_bridge(self):
+        import sufficiency
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True):
+            accented = sufficiency._bridged_terms(
+                "Qu'est-ce que le crédit documentaire ?")
+            plain = sufficiency._bridged_terms("what is a credit documentaire")
+        self.assertEqual(accented, {"اعتماد", "مستندي"})
+        self.assertEqual(accented, plain)
+
+    def test_phrase_keys_keep_the_stopwords_question_terms_drops(self):
+        import sufficiency
+        self.assertNotIn("de", sufficiency.question_terms(self.Q_FR))
+        self.assertIn("operation de change",
+                      sufficiency._bridge_phrase_keys(self.Q_FR))
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True):
+            self.assertIn("صرف", sufficiency._bridged_terms(self.Q_FR))
+
+    def test_field_bridges_stay_df_checked(self):
+        import sufficiency
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True):
+            self.assertFalse(sufficiency._anchors(
+                self.Q_EN, self.DOC_CREDIT,
+                self._df(اعتماد=999, مستندي=999)))
+
+    def test_declared_tables_are_review_ready(self):
+        import sufficiency
+        for term, arabic in sufficiency.FIELD_BRIDGE_TERMS.items():
+            self.assertTrue(term and arabic)
+            self.assertEqual(term, sufficiency._bridge_key(term),
+                             "bridge key must already be folded: " + term)
+        for key, arabic in sufficiency.FIELD_BRIDGE_PHRASES.items():
+            self.assertTrue(arabic)
+            self.assertGreater(len(key.split()), 1,
+                               "phrase table is for multi-word keys: " + key)
+            self.assertEqual(key, " ".join(sufficiency._bridge_key(t)
+                                           for t in key.split()),
+                             "phrase key must be folded: " + key)
+
+    def test_every_field_bridge_target_exists_in_the_adopted_codex(self):
+        """Governance: the bridges map INTO the corpus vocabulary only."""
+        import restructure
+        import sufficiency
+        from evaluate import normalize_for_match
+        from loader import load_all
+        codices = []
+        for d in load_all(DOCS_DIRS):
+            t = restructure._adopted_codex_text(d["name"])
+            codices.append(t if t is not None else d["text"])
+        targets = set(sufficiency.FIELD_BRIDGE_TERMS.values()) | set(
+            sufficiency.FIELD_BRIDGE_PHRASES.values())
+        self.assertTrue(targets)
+        for target in sorted(targets):
+            self.assertTrue(
+                any(normalize_for_match(target) in normalize_for_match(c)
+                    for c in codices),
+                "bridge target not in the adopted codex: " + target)
+
+    # ---- equative definition/purpose shape ------------------------------
+
+    def test_equative_definition_shape_is_gated(self):
+        import sufficiency
+        hit = self._hit(self.DOC_CREDIT)
+        with patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", False):
+            self.assertFalse(sufficiency.shape_ok(
+                "definition_or_purpose_unit", hit, {}, set(), self.Q_EN))
+        with patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", True):
+            self.assertTrue(sufficiency.shape_ok(
+                "definition_or_purpose_unit", hit, {}, set(), self.Q_EN))
+
+    def test_added_definition_shapes_stay_tight_on_the_real_corpus(self):
+        """Looseness guard: a shape matching most chunks would make the
+        definitional requirement vacuous (false sufficiency). Measured over
+        the 339-chunk corpus: «هو + اسم جامد» 1 chunk, tight purpose 3."""
+        import sufficiency
+        from loader import load_all
+        cfg = make_config(CHUNKING_MODE="restructure")
+        texts = [c.text for c in chunker.chunk_all(load_all(DOCS_DIRS), cfg)]
+        self.assertGreater(len(texts), 300)
+        for pattern in sufficiency.DEFINITION_SHAPE_PATTERNS:
+            hits = sum(1 for t in texts if re.search(pattern, t))
+            self.assertLessEqual(hits, 5,
+                                 "%s matched %d/%d chunks"
+                                 % (pattern, hits, len(texts)))
+
+
 class DiagBridgeTest(unittest.TestCase):
     """diag_bridge.verdict — the pure verdict logic of the remote bridge
     diagnostic (the owner's duplicated-index case: df guard blocks the

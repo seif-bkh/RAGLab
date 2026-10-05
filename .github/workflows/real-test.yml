@@ -20,7 +20,10 @@ name: RAGLab real test
 # topic-selection diagnostic; phase9-answer-* runs the six fixed Phase-9 questions
 # through POST /answer with NVIDIA embeddings and the pinned free-verified xKiro
 # answer model (top_k=5 by default; phase9-answer-topk12-* / -topk20-* select
-# bounded diagnostic arms). Neither frozen question set is changed. real-test-* triggers the
+# bounded diagnostic arms, and phase9-answer-xfix-* additionally turns on the
+# gated cross-script coverage arm — SUFFICIENCY_FIELD_BRIDGES_ENABLED +
+# SUFFICIENCY_DEFINITION_SHAPE_ENABLED, both OFF everywhere else).
+# Neither frozen question set is changed. real-test-* triggers the
 # full historical workflow. The regular push CI (.github/workflows/ci.yml) stays API-free.
 #
 # Reading the result from the sandbox (job logs and artifact downloads are NOT reachable
@@ -54,6 +57,11 @@ on:
         default: "5"
         type: choice
         options: ["5", "12", "20"]
+      phase9_cross_script_fix:
+        description: "Phase-9 answer probe: enable the gated cross-script coverage arm (field bridges + equative definition shape)"
+        required: false
+        default: false
+        type: boolean
   push:
     tags: ["real-test-*", "phase9-stage1-*", "phase9-topic-map-*", "phase9-answer-*", "phase9-report-answer-*"]
 
@@ -693,6 +701,12 @@ jobs:
       SUFFICIENCY_FIELDS_ENABLED: "1"
       RAGLAB_ALLOW_PROFILE_SWITCH: "0"
       PHASE9_ANSWER_TOP_K: ${{ (github.event_name == 'workflow_dispatch' && inputs.phase9_answer_top_k) || (startsWith(github.ref, 'refs/tags/phase9-answer-topk20-') && '20') || (startsWith(github.ref, 'refs/tags/phase9-answer-topk12-') && '12') || '5' }}
+      # Gated cross-script coverage arm (2026-10-05). OFF unless this dispatch
+      # asks for it or the tag is phase9-answer-xfix-*; the sufficiency gates
+      # default to "0" in code, so every other job in this workflow and the
+      # deployed service keep the exact pre-change behavior.
+      SUFFICIENCY_FIELD_BRIDGES_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && inputs.phase9_cross_script_fix) || startsWith(github.ref, 'refs/tags/phase9-answer-xfix-')) && '1' || '0' }}
+      SUFFICIENCY_DEFINITION_SHAPE_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && inputs.phase9_cross_script_fix) || startsWith(github.ref, 'refs/tags/phase9-answer-xfix-')) && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -742,6 +756,35 @@ jobs:
             fi
           done
           [ "$missing" -eq 0 ]
+
+      - name: Record the active coverage-gate arm
+        shell: bash
+        run: |
+          echo "PHASE9_ANSWER_TOP_K=$PHASE9_ANSWER_TOP_K"
+          echo "SUFFICIENCY_FIELD_BRIDGES_ENABLED=$SUFFICIENCY_FIELD_BRIDGES_ENABLED"
+          echo "SUFFICIENCY_DEFINITION_SHAPE_ENABLED=$SUFFICIENCY_DEFINITION_SHAPE_ENABLED"
+
+      - name: Measure the cross-script coverage gate offline (no API)
+        working-directory: raglab
+        shell: bash
+        run: |
+          # API-free 2x2 (gate off/on x frozen-set regression). Non-fatal on
+          # purpose: a broken diagnostic must not block the paid live arm;
+          # the failure is annotated instead and the log is uploaded.
+          mkdir -p results/phase9_answer_probe
+          status=0
+          python audits/PHASE9_STRUCTURE/measure_cross_script_coverage.py \
+            --arms --regression \
+            --json results/phase9_answer_probe/cross_script_coverage.json \
+            2>&1 | tee results/phase9_answer_probe/cross_script_coverage.log \
+            || status=$?
+          sed -n '/2x2 SUMMARY/,$p' \
+            results/phase9_answer_probe/cross_script_coverage.log \
+            >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::cross-script coverage measurement exited $status; see cross_script_coverage.log"
+          fi
+          exit 0
 
       - name: Ingest and ask the six questions through POST /answer
         working-directory: raglab
@@ -878,6 +921,8 @@ jobs:
             raglab/results/phase9_answer_probe/live_answer_results.md
             raglab/results/phase9_answer_probe/live_answer.log
             raglab/results/phase9_answer_probe/validation.log
+            raglab/results/phase9_answer_probe/cross_script_coverage.json
+            raglab/results/phase9_answer_probe/cross_script_coverage.log
           if-no-files-found: warn
           retention-days: 30
 

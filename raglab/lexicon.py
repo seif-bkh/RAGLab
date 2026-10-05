@@ -51,6 +51,23 @@ SEED_ENTRIES: list[dict] = [
      "note": "بيع السلم (الشراء الآجل بثمن عاجل)"},
     {"from": "islamic banking", "to": "الصيرفة الإسلامية", "kind": "equivalent-en",
      "note": ""},
+    # Operational vocabulary of the internal guide (2026-10-05, the Phase-9
+    # answer probe: TM04 asked about documentary credit in English and the
+    # guide's own section 5.1 defines it in Arabic). PHRASE rows only — the
+    # bare token «credit» is NOT mapped (it is not equivalent to «مستندي» on
+    # its own), which is why the anchoring-side table in sufficiency.py
+    # carries a df-checked single-term row that this table deliberately
+    # omits: retrieval-side expansion is not df-checked, so a bare «change»
+    # row here would pull FX chunks into unrelated questions.
+    {"from": "documentary credit", "to": "الاعتماد المستندي",
+     "kind": "equivalent-en",
+     "note": "الدليل الداخلي 5.1 — عمليات فتح وقبول الاعتمادات المستندية"},
+    {"from": "crédit documentaire", "to": "الاعتماد المستندي",
+     "kind": "equivalent-fr",
+     "note": "التسمية الفرنسية الواردة في الدليل نفسه"},
+    {"from": "opération de change", "to": "عمليات الصرف",
+     "kind": "equivalent-fr",
+     "note": "الدليل الداخلي 5.3 — عمليات الصرف والمتاجرة في العملات"},
     {"from": "riba", "to": "الربا", "kind": "equivalent-en",
      "note": ""},
     {"from": "deposits", "to": "الودائع", "kind": "equivalent-en",

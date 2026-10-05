@@ -41,6 +41,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -130,6 +131,57 @@ CROSS_SCRIPT_BRIDGES: dict[str, str] = {
 # build offer — read as the directive). "0" restores the pre-bridge exact-
 # lexical behavior exactly.
 CROSS_BRIDGE_ENABLED = os.getenv("CROSS_SCRIPT_BRIDGES_ENABLED", "1") == "1"
+
+# ---------------------------------------------------------------------------
+# Field-vocabulary bridges (REVIEW DATA — 2026-10-05, the Phase-9 answer
+# probe: TM03/TM04 retrieved the RIGHT guide sections and were still refused).
+#
+# Measured cause (raglab/audits/PHASE9_STRUCTURE/13_CROSS_SCRIPT_COVERAGE.md):
+# the corpus is Arabic-only, so a French/English question shares ZERO terms
+# with its own evidence chunk —
+#   Guide…docx::chunk_0043 («5.1- عمليات فتح وقبول الاعتمادات المستندية», which
+#   literally reads «الاعتماد المستندي … هو تعهد مكتوب صادر من بنك … ويسلم
+#   للبائع … بناء على طلب المشتري») -> shared_terms=[], _anchors()=False.
+# The seed table above only carries Islamic-finance TRANSLITERATIONS
+# (murabaha, mudaraba, …); it has no row for the operational vocabulary the
+# guide is actually written in, so nothing can anchor and every requirement
+# stays uncovered -> «غير كافٍ» -> refusal on an answerable question.
+#
+# Same contract as the seed table: ANCHORING only (retrieval, matching and the
+# citation gate are untouched), single bridged term anchors, still df-checked
+# (df <= cap), so a bridge onto boilerplate can never anchor. Measured corpus
+# df (339 chunks): اعتماد=12 مستندي=4 صرف=14 — all under CROSS_DF_MAX=30.
+#
+# OFF by default: this is a new arm, not an activated behaviour. "1" enables
+# it; unset/"0" reproduces the 2026-10-05 behavior exactly.
+FIELD_BRIDGE_TERMS: dict[str, str] = {
+    # fr — «opération de change» is the guide's own heading 5.3 subject
+    "change": "صرف",
+}
+
+# Multi-word concepts whose single tokens are NOT safely equivalent on their
+# own («credit» alone is not «مستندي»), so the equivalence is declared on the
+# PHRASE. Keys are matched on the question's raw normalized token sequence
+# (stopwords kept, so «opération DE change» is one key) with Latin accents
+# folded — the corpus spells its own Latin glosses with accents («Lettre de
+# Crédit Documentaire») while questions arrive both ways.
+FIELD_BRIDGE_PHRASES: dict[str, str] = {
+    "documentary credit": "الاعتماد المستندي",
+    "documentary credits": "الاعتماد المستندي",
+    "credit documentaire": "الاعتماد المستندي",
+    "credits documentaires": "الاعتماد المستندي",
+    "lettre de credit": "الاعتماد المستندي",
+    "operation de change": "عمليات الصرف",
+    "operations de change": "عمليات الصرف",
+    "change a terme": "الصرف الاجل",
+}
+
+# Longest phrase key looked up (in tokens). Declared, not inferred.
+FIELD_BRIDGE_MAX_PHRASE = 4
+
+FIELD_BRIDGES_ENABLED = (
+    os.getenv("SUFFICIENCY_FIELD_BRIDGES_ENABLED", "") == "1")
+
 # A rare term (df <= RARE_DF) carries subject signal; common-term overlap
 # (بنك، تونس، شركة) is boilerplate noise. Used by the escalation rule.
 RARE_DF = 5
@@ -196,6 +248,35 @@ SHAPE_PATTERNS: dict[str, list[str]] = {
     "both_sides_evidence": [],   # coverage = >= 2 anchored hits (rule, not text)
     "wide_evidence": [],         # any anchored hit
 }
+
+# ---------------------------------------------------------------------------
+# Declarative definition/purpose shapes for UNTYPED documents (REVIEW DATA —
+# 2026-10-05, same probe as the field bridges above).
+#
+# The guide defines documentary credit as «الاعتماد المستندي … هو تعهد مكتوب
+# صادر من بنك …» — an equative nominal sentence with NO explicit definition
+# verb, so none of the patterns above fire and the requirement stayed
+# uncovered even though the evidence was in the pool.
+#
+# Both additions were measured for looseness over the 339-chunk corpus before
+# being declared (a pattern that matches most chunks would make the
+# definitional requirement vacuous — a false-sufficiency risk):
+#   existing definition pattern   91/339 chunks
+#   «هو + <اسم جامد>» (below)      1/339 chunk  — exactly chunk_0043
+#   bare «هو + …»                14/339 chunks  — rejected as too loose
+#   «يستعمل|يستخدم|يهدف|الغرض»    55/339 chunks  — rejected as too loose
+#   tight purpose forms (below)    3/339 chunks
+# OFF by default; "1" enables, unset/"0" reproduces the previous shapes.
+DEFINITION_SHAPE_PATTERNS: list[str] = [
+    # equative definition: «X هو <what X IS>» — the noun list is the declared
+    # set of heads the corpus actually uses for «what the thing is».
+    r"هو\s+(تعهد|عقد|اتفاق|التزام|عملية|صيغة|بيع|شراء|تفويض|مستند|أمر|خطاب|ضمان)",
+    # declared purpose/use, in the corpus's own tight forms only
+    r"ويستعمل|ويستخدم|يهدف\s+الى|الغرض\s+منه|الغاية\s+منه",
+]
+
+DEFINITION_SHAPE_ENABLED = (
+    os.getenv("SUFFICIENCY_DEFINITION_SHAPE_ENABLED", "") == "1")
 
 _CONFLICT_UNRESOLVABLE = "unresolvable"
 
@@ -308,16 +389,46 @@ def _anchor_bar(question: str) -> int:
     return min(AR_ANCHOR_MIN, max(1, -(-int(AR_ANCHOR_SHARE * 100 * n) // 100)))
 
 
+def _bridge_key(token: str) -> str:
+    """Latin accent-folded key for the declared bridge tables: the corpus
+    spells its own Latin glosses with accents («Lettre de Crédit
+    Documentaire») while questions arrive both ways, and NFKC (used by
+    normalize_for_match) does NOT fold them. Arabic is untouched by NFD."""
+    folded = unicodedata.normalize("NFD", token)
+    return "".join(c for c in folded
+                   if not unicodedata.combining(c)).casefold()
+
+
+def _bridge_phrase_keys(question: str) -> list[str]:
+    """Declared phrase keys carried by the question, longest first, over the
+    RAW token sequence (stopwords KEPT — «opération DE change» is one key, and
+    question_terms() would have dropped «de»)."""
+    toks = [_bridge_key(_core(t)) for t in _tokens(question)]
+    keys: list[str] = []
+    for n in range(min(FIELD_BRIDGE_MAX_PHRASE, len(toks)), 1, -1):
+        for i in range(len(toks) - n + 1):
+            keys.append(" ".join(toks[i:i + n]))
+    return keys
+
+
 def _bridged_terms(question: str) -> set[str]:
     """Normalized Arabic equivalents of the question's DECLARED bridge terms
     (empty when the gate is off or the question carries none)."""
     if not CROSS_BRIDGE_ENABLED:
         return set()
     out: set[str] = set()
+    tables = [CROSS_SCRIPT_BRIDGES]
+    if FIELD_BRIDGES_ENABLED:
+        tables.append(FIELD_BRIDGE_TERMS)
+        for key in _bridge_phrase_keys(question):
+            arabic = FIELD_BRIDGE_PHRASES.get(key)
+            if arabic:
+                out |= _hit_terms(arabic)
     for term in question_terms(question):
-        arabic = CROSS_SCRIPT_BRIDGES.get(term)
-        if arabic:
-            out |= _hit_terms(arabic)   # same normalization as the hit side
+        for table in tables:
+            arabic = table.get(term)
+            if arabic:
+                out |= _hit_terms(arabic)   # same normalization as the hit side
     return out
 
 
@@ -344,6 +455,17 @@ def _anchors(question: str, hit_text: str, df: dict[str, int] | None) -> bool:
 # ---------------------------------------------------------------------------
 # Requirement shape checks
 # ---------------------------------------------------------------------------
+
+def _shape_patterns(req_kind: str) -> list[str]:
+    """Declared shape patterns for a requirement kind. The 2026-10-05
+    definition/purpose additions are appended ONLY when their gate is on, so
+    the flag has no import-time side effect and unset reproduces the previous
+    patterns exactly."""
+    patterns = SHAPE_PATTERNS.get(req_kind, [])
+    if DEFINITION_SHAPE_ENABLED and req_kind == "definition_or_purpose_unit":
+        return patterns + DEFINITION_SHAPE_PATTERNS
+    return patterns
+
 
 _LAW_CACHE: dict = {}
 
@@ -397,7 +519,7 @@ def shape_ok(req_kind: str, hit: dict, law_map: dict[str, dict],
         return None   # rule-based (>=2 anchored hits), not text-shaped
     if req_kind == "wide_evidence":
         return True   # any anchored hit is valid wide evidence (declared)
-    patterns = SHAPE_PATTERNS.get(req_kind, [])
+    patterns = _shape_patterns(req_kind)
     return any(re.search(p, text) for p in patterns)
 
 
