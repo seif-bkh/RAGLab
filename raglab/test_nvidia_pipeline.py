@@ -3087,6 +3087,30 @@ class DiagBridgeTest(unittest.TestCase):
         self.assertIn("DUPLICATES", out)          # quality flag remains
         self.assertIn("menu 14", out)
 
+    def test_df_counting_matches_the_anchoring_normalization(self):
+        """The diagnostic must count df the way sufficiency._anchors() reads
+        it, or it reports false DF-BLOCKED. On the owner's 1713-chunk index
+        the substring count said صرف df=335 (blocked) while the term still
+        anchored — measured inflation on the 339-chunk corpus: صرف 95 vs 14,
+        ربا 48 vs 13, تكافل 6 vs 3."""
+        import diag_bridge
+        texts = [
+            "عمليات الصرف الاجل غير جائزة",   # الصرف -> core token «صرف»
+            "انصرف الحريف عن العملية",          # «صرف» as a SUBSTRING only
+        ]
+        df, method = diag_bridge.count_bridge_df(texts)
+        self.assertTrue(method.startswith("tokenized"), method)
+        self.assertEqual(df.get("صرف"), 1, df)
+        # the substring counting this replaced would have said 2
+        self.assertEqual(sum(1 for t in texts if "صرف" in t), 2)
+
+    def test_prefixed_forms_count_as_the_bare_term(self):
+        import diag_bridge
+        df, _ = diag_bridge.count_bridge_df(
+            ["الاعتماد المستندي هو تعهد مكتوب", "اعتماد آخر مستندي"])
+        self.assertEqual(df.get("اعتماد"), 2, df)
+        self.assertEqual(df.get("مستندي"), 2, df)
+
     def test_boilerplate_blocked_at_scale(self):
         # a term in a huge SHARE of the index is boilerplate at any size
         out = self._verdict({"مرابحة": 1200, "تكافل": 24}, hits_with_term=3,

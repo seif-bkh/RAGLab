@@ -115,11 +115,47 @@ def verdict(df: Counter, k: int, hits_with_term: int, rollup: list[dict],
     return notes
 
 
+def count_bridge_df(texts: list[str]) -> tuple[Counter, str]:
+    """Document frequency of every bridge term over the given chunk texts.
+
+    Counting MUST match what sufficiency._anchors() compares against, or the
+    verdict lies. _anchors() works on TOKENIZED, normalized terms
+    (sufficiency._hit_terms), where «الاعتماد» and «اعتماد» are the same term
+    and «الصرف» does not contain the token «صرف». A plain substring count
+    inflates short Arabic terms badly — measured on the 339-chunk corpus:
+    صرف 95 substring vs 14 tokenized (6.8x), ربا 48 vs 13 (3.7x), تكافل 6 vs
+    3 (2.0x). That produced false DF-BLOCKED verdicts on a 1713-chunk index
+    (صرف reported 335 while the term still anchored).
+
+    Returns (df, method) where method names the counting actually used, so the
+    output never implies more precision than it has.
+    """
+    try:
+        import sufficiency as _suf
+    except Exception:                       # client-only install: degrade loudly
+        _suf = None
+    df: Counter = Counter()
+    if _suf is None:
+        for text in texts:
+            for term in BRIDGE_ARABIC:
+                if term in text:
+                    df[term] += 1
+        return df, "substring (sufficiency unavailable — df OVERSTATED)"
+    wanted = {term: _suf._hit_terms(term) for term in BRIDGE_ARABIC}
+    for text in texts:
+        terms = _suf._hit_terms(text)
+        for term, needle in wanted.items():
+            if needle & terms:
+                df[term] += 1
+    return df, "tokenized (same normalization as sufficiency._anchors)"
+
+
 def run(api: Api) -> int:
     # 1) df + rollup from the live index
     df: Counter = Counter()
     rollup: list[dict] = []
     total = offset = 0
+    pages: list[str] = []
     while True:
         status, page = api.get("/chunks", params={"limit": 100, "offset": offset})
         if status != 200:
@@ -128,14 +164,12 @@ def run(api: Api) -> int:
         total = page.get("total", 0)
         if offset == 0:
             rollup = page.get("documents") or []
-        for item in page.get("items") or []:
-            text = item.get("text") or ""
-            for term in BRIDGE_ARABIC:
-                if term in text:
-                    df[term] += 1
-        offset += len(page.get("items") or [])
-        if offset >= total or not page.get("items"):
+        items = page.get("items") or []
+        pages.extend(item.get("text") or "" for item in items)
+        offset += len(items)
+        if offset >= total or not items:
             break
+    df, method = count_bridge_df(pages)
     # 2) does the deployment's window reach the evidence?
     status, search = api.post("/search", payload={
         "question": "what is murabaha?", "k": 5})
@@ -150,7 +184,8 @@ def run(api: Api) -> int:
     # bridges can be judged on the deployment's own corpus (a duplicated
     # index multiplies every df; the cap only scales with the chunk count).
     cap = df_cap(total)
-    print(f"[diag] bridge-term df over the live index (scaled cap = {cap}):")
+    print(f"[diag] bridge-term df over the live index (scaled cap = {cap}; "
+          f"counting: {method}):")
     for term in BRIDGE_ARABIC:
         n = df.get(term, 0)
         state = ("anchors" if 0 < n <= cap
