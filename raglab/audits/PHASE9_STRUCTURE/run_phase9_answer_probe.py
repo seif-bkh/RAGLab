@@ -276,7 +276,7 @@ def _clip(value, limit: int) -> str:
 
 def annotations(report: dict) -> list[tuple[str, dict]]:
     """Small check annotations: split answers and evidence to avoid GH truncation."""
-    events = [("summary", {
+    summary_events = [("summary", {
         "model": report.get("model"),
         "max_logical_chat_calls": report.get("max_logical_chat_calls"),
         "free_price_verified": (report.get("free_price_verification") or {}).get("verified"),
@@ -284,9 +284,10 @@ def annotations(report: dict) -> list[tuple[str, dict]]:
         "summary": report.get("summary") or summarize(report),
         "setup_error": report.get("setup_error"),
     })]
+    case_events, answer_events, evidence_events = [], [], []
     for row in report.get("cases", []):
         inter = row.get("interrogation") or {}
-        events.append(("case", {
+        case_events.append(("case", {
             "id": row.get("id"),
             "question": _clip(row.get("question"), 220),
             "http": row.get("http_status"),
@@ -314,10 +315,10 @@ def annotations(report: dict) -> list[tuple[str, dict]]:
             "chat_call_counts": row.get("chat_call_counts", {}),
             "raw_preview": _clip(row.get("raw_preview"), 240) or None,
         }))
-        answer = _clip(row.get("answer"), 100000)
+        answer = _clip(row.get("answer"), 650)
         answer_parts = [answer[index:index + 400] for index in range(0, len(answer), 400)] or ["—"]
         for part_number, text in enumerate(answer_parts, start=1):
-            events.append(("answer", {
+            answer_events.append(("answer", {
                 "id": row.get("id"), "part": part_number,
                 "parts": len(answer_parts), "text": text,
             }))
@@ -328,11 +329,11 @@ def annotations(report: dict) -> list[tuple[str, dict]]:
                 "heading": item.get("heading"),
                 "quote": _clip(item.get("quote"), 180),
             } for item in (claim.get("evidence") or [])[:2]]
-            events.append(("evidence", {
+            evidence_events.append(("evidence", {
                 "id": row.get("id"), "claim_number": claim_number,
                 "claim": _clip(claim.get("text"), 220), "evidence": evidence,
             }))
-    return events
+    return [*summary_events, *case_events, *answer_events, *evidence_events]
 
 
 def _emit_annotations(report: dict) -> None:

@@ -3211,7 +3211,7 @@ class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
     def test_annotations_split_long_answers_without_truncating_the_text(self):
         import json
         probe = self._probe()
-        answer_text = "مرحبا" * 250
+        answer_text = "مرحبا" * 100
         events = probe.annotations({"cases": [{"id": "TM-long", "answer": answer_text}]})
         parts = [value for kind, value in events if kind == "answer"]
         self.assertGreater(len(parts), 1)

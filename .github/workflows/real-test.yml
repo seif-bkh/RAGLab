@@ -766,18 +766,72 @@ jobs:
             cat results/phase9_answer_probe/live_answer_results.md >> "$GITHUB_STEP_SUMMARY"
           fi
           if grep -q '^ANNO| phase9-answer-' /tmp/phase9_answer_probe/live_answer.log 2>/dev/null; then
-            while IFS= read -r line; do
-              label=${line#ANNO| }
-              label=${label%% | *}
-              message=${line#* | }
-              escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
-              echo "::warning::$label | $escaped"
-            done < <(grep '^ANNO| phase9-answer-' /tmp/phase9_answer_probe/live_answer.log)
+            for kind in summary case; do
+              while IFS= read -r line; do
+                label=${line#ANNO| }
+                label=${label%% | *}
+                message=${line#* | }
+                escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+                echo "::warning::$label | $escaped"
+              done < <(grep "^ANNO| phase9-answer-$kind |" /tmp/phase9_answer_probe/live_answer.log)
+            done
           elif [ -f results/phase9_answer_probe/live_answer_results.json ]; then
-            echo "::warning::phase9-answer | report saved; compact annotations unavailable"
+            echo "::warning::phase9-answer | report saved; case annotations unavailable"
           else
             echo "::warning::phase9-answer | no report file; inspect the step failure"
           fi
+
+      - name: Annotate final answers (parts 1–10)
+        if: always()
+        working-directory: raglab
+        shell: bash
+        run: |
+          while IFS= read -r line; do
+            label=${line#ANNO| }
+            label=${label%% | *}
+            message=${line#* | }
+            escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+            echo "::warning::$label | $escaped"
+          done < <(grep '^ANNO| phase9-answer-answer |' /tmp/phase9_answer_probe/live_answer.log 2>/dev/null | sed -n '1,10p')
+
+      - name: Annotate final answers (remaining parts)
+        if: always()
+        working-directory: raglab
+        shell: bash
+        run: |
+          while IFS= read -r line; do
+            label=${line#ANNO| }
+            label=${label%% | *}
+            message=${line#* | }
+            escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+            echo "::warning::$label | $escaped"
+          done < <(grep '^ANNO| phase9-answer-answer |' /tmp/phase9_answer_probe/live_answer.log 2>/dev/null | sed -n '11,$p')
+
+      - name: Annotate citation claims and evidence (parts 1–10)
+        if: always()
+        working-directory: raglab
+        shell: bash
+        run: |
+          while IFS= read -r line; do
+            label=${line#ANNO| }
+            label=${label%% | *}
+            message=${line#* | }
+            escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+            echo "::warning::$label | $escaped"
+          done < <(grep '^ANNO| phase9-answer-evidence |' /tmp/phase9_answer_probe/live_answer.log 2>/dev/null | sed -n '1,10p')
+
+      - name: Annotate citation claims and evidence (remaining parts)
+        if: always()
+        working-directory: raglab
+        shell: bash
+        run: |
+          while IFS= read -r line; do
+            label=${line#ANNO| }
+            label=${label%% | *}
+            message=${line#* | }
+            escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+            echo "::warning::$label | $escaped"
+          done < <(grep '^ANNO| phase9-answer-evidence |' /tmp/phase9_answer_probe/live_answer.log 2>/dev/null | sed -n '11,$p')
 
       - name: Fail if setup or provider calls failed
         if: always()
@@ -815,7 +869,8 @@ jobs:
         id: source
         shell: bash
         run: |
-          run_id="${GITHUB_REF_NAME#phase9-report-answer-}"
+          source_ref="${GITHUB_REF_NAME#phase9-report-answer-}"
+          run_id="${source_ref%%-*}"
           case "$run_id" in
             ''|*[!0-9]*) echo "::error::tag suffix must be a numeric Actions run ID"; exit 2 ;;
           esac
@@ -836,21 +891,70 @@ jobs:
           run-id: ${{ steps.source.outputs.run_id }}
           path: phase9_prior_run
 
-      - name: Emit bounded per-case annotations from the saved JSON
+      - name: Prepare bounded per-case annotations from the saved JSON
         shell: bash
         run: |
-          set -o pipefail
           mkdir -p /tmp/phase9_answer_report
           python raglab/audits/PHASE9_STRUCTURE/run_phase9_answer_probe.py \
             --emit-report phase9_prior_run/live_answer_results.json \
-            2>&1 | tee /tmp/phase9_answer_report/emit.log
+            > /tmp/phase9_answer_report/emit.log
+
+      - name: Publish saved summary and case metadata
+        shell: bash
+        run: |
+          for kind in summary case; do
+            while IFS= read -r line; do
+              label=${line#ANNO| }
+              label=${label%% | *}
+              message=${line#* | }
+              escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+              echo "::warning::$label | $escaped"
+            done < <(grep "^ANNO| phase9-answer-$kind |" /tmp/phase9_answer_report/emit.log)
+          done
+
+      - name: Publish saved final answers (parts 1–10)
+        shell: bash
+        run: |
           while IFS= read -r line; do
             label=${line#ANNO| }
             label=${label%% | *}
             message=${line#* | }
             escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
             echo "::warning::$label | $escaped"
-          done < <(grep '^ANNO| phase9-answer-' /tmp/phase9_answer_report/emit.log)
+          done < <(grep '^ANNO| phase9-answer-answer |' /tmp/phase9_answer_report/emit.log | sed -n '1,10p')
+
+      - name: Publish saved final answers (remaining parts)
+        shell: bash
+        run: |
+          while IFS= read -r line; do
+            label=${line#ANNO| }
+            label=${label%% | *}
+            message=${line#* | }
+            escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+            echo "::warning::$label | $escaped"
+          done < <(grep '^ANNO| phase9-answer-answer |' /tmp/phase9_answer_report/emit.log | sed -n '11,$p')
+
+      - name: Publish saved evidence (parts 1–10)
+        shell: bash
+        run: |
+          while IFS= read -r line; do
+            label=${line#ANNO| }
+            label=${label%% | *}
+            message=${line#* | }
+            escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+            echo "::warning::$label | $escaped"
+          done < <(grep '^ANNO| phase9-answer-evidence |' /tmp/phase9_answer_report/emit.log | sed -n '1,10p')
+
+      - name: Publish saved evidence (remaining parts)
+        shell: bash
+        run: |
+          while IFS= read -r line; do
+            label=${line#ANNO| }
+            label=${label%% | *}
+            message=${line#* | }
+            escaped=$(printf '%s' "$message" | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+            echo "::warning::$label | $escaped"
+          done < <(grep '^ANNO| phase9-answer-evidence |' /tmp/phase9_answer_report/emit.log | sed -n '11,$p')
 
       - name: Publish the complete saved Markdown report
         if: always()
