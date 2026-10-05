@@ -497,36 +497,37 @@ Current state of the work:
   recommended as the owner's first post-deploy check. Deploy: code +
   default changed, so `git pull && docker compose up --build -d`.
 - **PHASE 9 FOLLOW-UP (2026-10-05, owner sequence: vector retrieval first,
-  then the 84.6% topic-label gap)**: vector-only real-test run 37245380571
-  (tag phase9-stage1-vector-20261005, commit 965634f) completed with 7
-  evidence-bearing cases; hit@1/3/5 = 5/7 in both dense-only and current
-  reranker-on arms. S1-L01 rank 1; S1-D02 complete evidence miss at top-20;
-  historical answer-generation job SKIPPED. `topic_map.py` then moved from
+  then the 84.6% topic-label gap)**: vector-only run `37245380571` (tag
+  `phase9-stage1-vector-20261005`, commit `965634f`) covered 7 evidence-bearing
+  cases; hit@1/3/5 = 5/7 in dense-only and reranker-on arms; no answers were
+  generated in that retrieval-only measurement. `topic_map.py` then moved from
   heading-only choices to 262 source-grounded nodes with paths/excerpts and
-  short exact-matched prompt IDs; SERVICE_VERSION 1.4.0 -> 1.5.0 (HTTP shape
+  exact-matched prompt IDs; SERVICE_VERSION 1.4.0 -> 1.5.0 (HTTP shape
   unchanged). Offline gate EXIT=0 (417 tests;
-  `raglab/logs/test_run_20261005_011647.log`). The corrected live topic-map
-  probe (run 37251040562, tag `phase9-topic-map-live-rerun-20261005`) sent 12
-  xKiro calls across six paired cases after free-price verification: all 6
-  parsed per arm, no call errors, target hits 4/5 -> 5/5. This is a small
-  topic-selection diagnostic only; it did not run retrieval or generate
-  answers. TM05 was classified `non_banking` after despite a topic hit and has
-  no expected class, so the observation is unscored. See
-  `raglab/audits/PHASE9_STRUCTURE/11_TOPIC_MAP_LIVE_COMPARISON.md` for the
-  annotation metrics, the artifact-download limitation, and cautious reading.
-  Questions sets 50/10 unchanged.
+  `raglab/logs/test_run_20261005_011647.log`). Corrected paired live map probe
+  `37251040562` sent 12 xKiro calls across six cases: all parsed, no call
+  errors, target hits 4/5 -> 5/5; diagnostic only, no retrieval or answer
+  generation. See `raglab/audits/PHASE9_STRUCTURE/11_TOPIC_MAP_LIVE_COMPARISON.md`.
+  A later, separate end-to-end probe ran the six cases through actual
+  `POST /answer` (`37252874521`): HTTP 200 6/6; 3 answered and 3 refused; all
+  three answers passed citation-structure validation and cited a target
+  document (3/5 in-scope cases). That citation metric is NOT retrieval hit@k.
+  Six logical chat calls (3 answer generations + 3 interrogations), no provider
+  errors. TM03/TM04 selected the intended topics but refused; per-pass retrieved
+  documents and final `s2` sufficiency are not exposed. TM06 refused outside
+  corpus correctly, but the reason/message mismatched the mint question.
+  Results, answers, limits, and proposed diagnostic gate 2.5:
+  `raglab/audits/PHASE9_STRUCTURE/12_PHASE9_ANSWER_PROBE_RESULTS.md`.
+  The first answer run `37252759793` failed preflight with no provider calls;
+  report replay `37253849145` republished the saved artifact without inference.
+  No changes to `questions_50.json`, `questions_targets.json`, or production
+  index. The diagnostic does not justify a default change or map expansion.
 - Current Arena session branch: **arena/01a10905-raglab**, based on
   54b993f8 (from arena/01a107b8-raglab). Tokenizer-dependent historical-map
-  count validation was removed in commit `39eaf79`; regular CI run
-  `37250940538` passed. The first paired live probe `37249989698` failed
-  before model inference, not during a provider call. Corrected live run
-  `37251040562` completed successfully. The check-run annotation was
-  inspected; direct artifact and job-log downloads from this sandbox returned
-  `EOF`, so the full raw JSON/Markdown was not inspected locally. Offline gate:
-  417 tests, EXIT=0 (`raglab/logs/test_run_20261005_011647.log`). The earlier
-  vector-only run remains `37245380571` on tag
-  `phase9-stage1-vector-20261005` / commit `965634f`; no live answer
-  generation was done.
+  count validation was removed in commit `39eaf79`; corrected map run
+  `37251040562` completed. Regular CI passed at `01bf5da` (run
+  `37253845572`). Offline gate: 417 tests, EXIT=0
+  (`raglab/logs/test_run_20261005_011647.log`).
 - **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
   `raglab/decompose.py` (read-only): the intermediate decomposition layer.
   EVERY question → reformulated micro-questions, each with its partial
