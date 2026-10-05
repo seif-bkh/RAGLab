@@ -108,7 +108,7 @@ from scrub import scrub_pii
 
 import docstore as docstore_mod
 
-SERVICE_VERSION = "1.4.0"
+SERVICE_VERSION = "1.5.0"
 
 
 # ---------------------------------------------------------------------------

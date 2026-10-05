@@ -1,7 +1,7 @@
 # RAGLab service — HTTP contract
 
 **Audience:** the fullstack team building against this service.
-**Service version:** `1.4.0` (reported by `GET /health` → `version`).
+**Service version:** `1.5.0` (reported by `GET /health` → `version`).
 **Machine-readable schema:** FastAPI generates OpenAPI 3 at `/openapi.json` and
 interactive docs at `/docs`. This document is the human contract — semantics,
 state, error behavior and integration rules that a schema alone does not carry.
@@ -201,7 +201,7 @@ this service needs a CLI — if a console claims "configured via CLI", it is
 reading an outdated premise.
 
 ```json
-{"service": "raglab", "version": "1.4.0",
+{"service": "raglab", "version": "1.5.0",
  "chat_model": "xkiro/qwen/qwen3.8-max:free",
  "embedding_model": "nvidia/nvidia/nemotron-3-embed-1b",
  "vector_dimension": 2048,
@@ -232,7 +232,7 @@ The endpoint your UI polls. No secrets — key values never appear, only
 `set`/`missing` per env var.
 
 ```json
-{"status": "ok", "version": "1.4.0",
+{"status": "ok", "version": "1.5.0",
  "profile": {"embedding": {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
              "answer": {"provider": "xkiro", "model": "qwen/qwen3.8-max:free"},
              "chunking": {"mode": "restructure", "size": 220, "overlap": 40},
@@ -559,13 +559,16 @@ additive-only).** When an insufficient question was re-expressed (§3.17), the
 response — answered OR refused — additionally carries `understood_as` (the
 technical paraphrase that was actually evaluated), `original_question` (your
 question verbatim — never hidden) and `interrogation`
-`{classification, topics, requirements, confidence, seconds}`. `topics` are
-verbatim corpus topics from the deterministic topic map; `seconds` is the
-bounded call's measured cost, disclosed separately because the top-level
+`{classification, topics, requirements, confidence, seconds}`. The model
+selects short IDs from the deterministic source-grounded topic map; the
+service resolves those IDs to `topics` display labels by exact matching.
+`seconds` is the bounded call's measured cost, disclosed separately because the top-level
 `seconds` stays answer-generation-only. On an `answered` payload the
 sufficiency fields report the PARAPHRASE's verdict and no `refusal_reason` is
 attached; on a `refused` payload they stay the original question's facts.
 `REPHRASE_INTERROGATION_ENABLED=0` removes all three fields.
+
+**Source-grounded topic map (1.5.0).** The interrogation model receives stable source topics with paths and excerpts, selects a short prompt-local ID, and the service resolves it by exact match to the existing `interrogation.topics` display labels. The response shape is unchanged; no model-generated topic label is accepted.
 
 **What is machine-verified before you see an `answered` payload:** every
 evidence quote is a contiguous verbatim member of its cited chunk, AND every
@@ -730,9 +733,10 @@ its first live measurement — `raglab/audits/PHASE8_INTERROGATION.md`). Set
 With the gate ON, a question that is insufficient
 (غير كافٍ) with nothing covered triggers ONE bounded interrogation call
 through the answer model: descriptive questions ABOUT the request
-(classification, nearest corpus topics — chosen verbatim from the
-deterministic topic map in `topic_map.py`, never invented —, a technical
-paraphrase, evidence requirements from the sufficiency engine's declared
+(classification, nearest corpus topics — chosen as exact IDs from the
+source-grounded deterministic topic map in `topic_map.py` and resolved to
+display labels, never invented —, a technical paraphrase, evidence
+requirements from the sufficiency engine's declared
 kinds). The paraphrase is re-evaluated by the SAME deterministic retrieval
 + sufficiency engines. If it suffices, the paraphrase is ANSWERED and the
 response gains (additively): `understood_as`, `original_question`,

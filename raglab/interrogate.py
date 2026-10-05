@@ -55,13 +55,13 @@ INTERROGATION_SYSTEM = (
 INTERROGATION_USER_TEMPLATE = """REQUEST (in the user's language):
 «{question}»
 
-CORPUS TOPIC MAP (the ONLY topics that exist — copy verbatim, never invent):
+CORPUS TOPIC MAP (source-grounded candidates; use ONLY the IDs shown):
 {topic_map}
 
 Answer these descriptive questions as ONE JSON object with EXACTLY these keys:
 {{
  "classification": "regulatory | procedural | definitional | numeric | non_banking",
- "nearest_topics": [1-3 topics COPIED VERBATIM from the map above],
+ "nearest_topic_ids": [1-3 exact prompt IDs copied from the map; [] if none fit],
  "technical_paraphrase": "the request re-expressed as a technical question inside those topics, in the USER'S language",
  "requirements": [only from: {requirements}],
  "confidence": 0.0
@@ -72,8 +72,11 @@ topics you can honestly justify, and the best technical paraphrase anyway.
 Do NOT answer the request. JSON only."""
 
 
-def interrogation_messages(question: str, data_dirs) -> list[dict]:
-    topics = topic_map.for_prompt(data_dirs)
+def interrogation_messages(question: str, data_dirs,
+                           topic_entries: list[dict] | None = None) -> list[dict]:
+    entries = (topic_entries if topic_entries is not None
+               else topic_map.prompt_entries(data_dirs))
+    topics = topic_map.render_topic_map(entries)
     return [
         {"role": "system", "content": INTERROGATION_SYSTEM},
         {"role": "user", "content": INTERROGATION_USER_TEMPLATE.format(
@@ -86,11 +89,67 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip())
 
 
-def parse_interrogation(raw: str, question: str,
-                        topics_text: str) -> dict | None:
-    """Validate the model's analysis. Returns the disclosure dict or None
-    (fail-closed). Topics must be verbatim corpus topics; requirements must
-    be declared kinds; the paraphrase must differ from the original."""
+def _legacy_catalog(topics_text: str) -> tuple[dict, dict]:
+    """Read old rendered maps for callers/tests; labels are exact, not substrings."""
+    by_prompt_id, by_label = {}, {}
+    for line in (topics_text or "").splitlines():
+        item = line.strip().lstrip("-").strip()
+        if not item:
+            continue
+        prompt_id = None
+        if item.startswith("[") and "]" in item:
+            prompt_id, item = item[1:].split("]", 1)
+            prompt_id, item = prompt_id.strip(), item.strip()
+        # Old map form: "(document [unit]) human-readable heading".
+        if ") " in item:
+            label = item.split(") ", 1)[1].strip()
+        else:
+            label = item
+        if prompt_id:
+            by_prompt_id[prompt_id] = {"topic_id": prompt_id, "display": label}
+        if label:
+            key = _normalize(label)
+            record = {"topic_id": prompt_id or label, "display": label}
+            if key in by_label and by_label[key] != record:
+                by_label[key] = None          # ambiguous display: require an ID
+            else:
+                by_label.setdefault(key, record)
+    return by_prompt_id, {k: v for k, v in by_label.items() if v is not None}
+
+
+def _topic_catalog(topic_entries) -> tuple[dict, dict, dict]:
+    """Exact lookup maps for request-local IDs, stable IDs and display labels."""
+    by_prompt_id, by_topic_id, by_display = {}, {}, {}
+    if isinstance(topic_entries, str):
+        prompt, labels = _legacy_catalog(topic_entries)
+        return prompt, {}, labels
+    for entry in topic_entries or []:
+        if not isinstance(entry, dict):
+            continue
+        topic_id = _normalize(entry.get("topic_id"))
+        prompt_id = _normalize(entry.get("prompt_id"))
+        display = _normalize(entry.get("display"))
+        record = {"topic_id": topic_id, "display": display}
+        if prompt_id:
+            by_prompt_id[prompt_id] = record
+        if topic_id:
+            by_topic_id[topic_id] = record
+        if display:
+            if display in by_display and by_display[display] != record:
+                by_display[display] = None     # ambiguous label: require its ID
+            else:
+                by_display.setdefault(display, record)
+    by_display = {k: v for k, v in by_display.items() if v is not None}
+    return by_prompt_id, by_topic_id, by_display
+
+
+def parse_interrogation(raw: str, question: str, topic_entries) -> dict | None:
+    """Validate analysis, resolving selected topics only by exact ID/label.
+
+    Accepts topic entries for the live source-grounded map. A string map is
+    retained for legacy direct callers, but substring membership is never
+    enough to bless a model-invented topic.
+    """
     if not raw:
         return None
     try:
@@ -109,20 +168,39 @@ def parse_interrogation(raw: str, question: str,
     if paraphrase == _normalize(question):
         return None                      # nothing new — no second pass
 
-    # topics: keep only verbatim corpus topics (containment on the map text)
-    known = _normalize(topics_text)
-    topics = []
-    for candidate in data.get("nearest_topics") or []:
+    by_prompt_id, by_topic_id, by_display = _topic_catalog(topic_entries)
+    candidates = data.get("nearest_topic_ids")
+    if not isinstance(candidates, list):
+        # Compatibility for older clients; entries are still exact-matched.
+        candidates = data.get("nearest_topics")
+    if not isinstance(candidates, list):
+        candidates = []
+
+    topics, topic_ids, seen_ids = [], [], set()
+    for candidate in candidates:
         if not isinstance(candidate, str):
             continue
-        candidate = _normalize(candidate)
-        if candidate and candidate in known and candidate not in topics:
-            topics.append(candidate)
+        key = _normalize(candidate)
+        entry = (by_prompt_id.get(key) or by_topic_id.get(key)
+                 or by_display.get(key))
+        if entry is None:
+            continue
+        topic_id = entry.get("topic_id") or key
+        if topic_id in seen_ids:
+            continue
+        seen_ids.add(topic_id)
+        display = entry.get("display") or key
+        topics.append(display)
+        if entry.get("topic_id"):
+            topic_ids.append(entry["topic_id"])
         if len(topics) >= TOPICS_MAX:
             break
 
     # requirements: keep only declared kinds
-    requirements = [r for r in data.get("requirements") or []
+    raw_requirements = data.get("requirements")
+    if not isinstance(raw_requirements, list):
+        raw_requirements = []
+    requirements = [r for r in raw_requirements
                     if isinstance(r, str) and r in DECLARED_REQUIREMENTS]
 
     classification = _normalize(data.get("classification")) or "unclassified"
@@ -135,6 +213,7 @@ def parse_interrogation(raw: str, question: str,
 
     return {"paraphrase": paraphrase,
             "topics": topics,
+            "topic_ids": topic_ids,
             "requirements": requirements,
             "classification": classification,
             "confidence": confidence}
@@ -148,16 +227,21 @@ def interrogate(generator, question: str, data_dirs) -> dict | None:
     model = getattr(generator, "model", None)
     if client is None or model is None:
         return None
-    topics_text = topic_map.for_prompt(data_dirs)
     try:
-        response = client.chat(model, interrogation_messages(question, data_dirs),
-                               max_tokens=600)
+        entries = topic_map.prompt_entries(data_dirs)
+        if not entries:
+            return None
+        messages = interrogation_messages(question, data_dirs, entries)
+    except Exception:
+        return None
+    try:
+        response = client.chat(model, messages, max_tokens=600)
     except TypeError:                    # a client without the kwarg
         try:
-            response = client.chat(model, interrogation_messages(question, data_dirs))
+            response = client.chat(model, messages)
         except Exception:
             return None
     except Exception:
         return None
     raw = response.get("text") if isinstance(response, dict) else None
-    return parse_interrogation(raw, question, topics_text)
+    return parse_interrogation(raw, question, entries)

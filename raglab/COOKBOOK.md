@@ -217,8 +217,9 @@ the live-discovery counterpart.
 A practical, non-technical question ("can i get a financing to open a
 pub?") used to be refused outright. It now triggers ONE
 bounded interrogation call: the model answers descriptive questions about
-the REQUEST (never answering it), choosing topics verbatim from the
-corpus's own topic map; the technical paraphrase is re-checked by the same
+the REQUEST (never answering it), choosing exact IDs from the
+source-grounded corpus topic map; the service resolves them to display
+labels. The technical paraphrase is re-checked by the same
 deterministic engines and — if the corpus can answer it — answered with
 full disclosure:
 

@@ -5,7 +5,7 @@
 maps every capability to screens, components and UX rules — the reference
 client is `raglab/local_front.py` (its 15 menus = your screens).
 
-**Written against service `1.4.0`** (the version `GET /health` and
+**Written against service `1.5.0`** (the version `GET /health` and
 `GET /config` report). Read `GET /config` at boot: it names the version, the
 active models, what is editable, the exact call behind every mutation
 (`capabilities`) and the doc set (`docs`) — never hard-code any of it.
@@ -100,7 +100,7 @@ last error). During an ingest the whole app enters "sealed" mode (§4.3).
   (the user's words, verbatim — never hidden) and `interrogation`
   `{classification, topics, requirements, confidence, seconds}`. Render a
   disclosure strip **above** the answer: "Understood your request as: …",
-  `topics` as chips (they are verbatim corpus topics), and the cost as
+  `topics` as chips (source-grounded display labels resolved from exact map IDs since `1.5.0`), and the cost as
   "interrogation Ns" — `interrogation.seconds` is separate from the top-level
   `seconds`, which stays answer-generation-only (a refusal through this path
   legitimately shows `seconds: 0.0`). On an **answered** payload the evidence

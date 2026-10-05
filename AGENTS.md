@@ -495,6 +495,18 @@ Current state of the work:
   deterministically but were NOT re-measured live after activation —
   recommended as the owner's first post-deploy check. Deploy: code +
   default changed, so `git pull && docker compose up --build -d`.
+- **PHASE 9 FOLLOW-UP (2026-10-05, owner sequence: vector retrieval first,
+  then the 84.6% topic-label gap)**: vector-only real-test run 37245380571
+  (tag phase9-stage1-vector-20261005, commit 965634f) completed with 7
+  evidence-bearing cases; hit@1/3/5 = 5/7 in both dense-only and current
+  reranker-on arms. S1-L01 rank 1; S1-D02 complete evidence miss at top-20;
+  historical answer-generation job SKIPPED. `topic_map.py` then moved from
+  heading-only choices to 262 source-grounded nodes with paths/excerpts and
+  short exact-matched prompt IDs; SERVICE_VERSION 1.4.0 -> 1.5.0 (HTTP shape
+  unchanged); offline gate EXIT=0 (415 tests), no
+  post-change live LLM measurement yet. Audit:
+  raglab/audits/PHASE9_STRUCTURE/09_STAGE1_VECTOR_RESULTS.md and
+  10_TOPIC_MAP_ENRICHMENT.md. Questions sets 50/10 unchanged.
 - Current heads: this session works on **arena/01a0fcfb-raglab**, branched
   from 330b85e ("last session chat history" — the previous session's whole
   tree, remote arena/01a0d2f5-raglab sits at the same SHA; the Phase-8

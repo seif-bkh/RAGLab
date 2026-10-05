@@ -2972,6 +2972,38 @@ class InterrogateTest(unittest.TestCase):
         self.assertEqual(out["requirements"], ["numeric_evidence"])
         self.assertEqual(out["confidence"], 1.0)     # clamped
 
+    def test_topic_validation_is_exact_not_substring(self):
+        out = self._parse('{"nearest_topics": ["Loi_2016-48.pdf"], '
+                          '"technical_paraphrase": "ما هي صيغ التمويل؟"}')
+        self.assertIsNotNone(out)
+        self.assertEqual(out["topics"], [])
+
+    def test_prompt_ids_resolve_to_source_grounded_display_labels(self):
+        import interrogate
+        entries = [{"prompt_id": "t007", "topic_id": "loi-2016-48:art012",
+                    "display": "الفصل 12 — مرابحة",
+                    "document": "Loi_2016-48.pdf"}]
+        raw = ('{"nearest_topic_ids": ["t007", "t00"], '
+               '"technical_paraphrase": "ما هي صيغ التمويل؟"}')
+        out = interrogate.parse_interrogation(raw, "can i get financing?", entries)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["topics"], ["الفصل 12 — مرابحة"])
+        self.assertEqual(out["topic_ids"], ["loi-2016-48:art012"])
+
+    def test_ambiguous_display_requires_an_exact_prompt_id(self):
+        import interrogate
+        entries = [
+            {"prompt_id": "t001", "topic_id": "law:art001",
+             "display": "الفصل 1 — تعريف"},
+            {"prompt_id": "t002", "topic_id": "circular:art001",
+             "display": "الفصل 1 — تعريف"},
+        ]
+        raw = ('{"nearest_topics": ["الفصل 1 — تعريف"], '
+               '"technical_paraphrase": "ما هو التعريف المقصود؟"}')
+        out = interrogate.parse_interrogation(raw, "define it", entries)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["topics"], [])
+
     def test_identical_paraphrase_is_none(self):
         self.assertIsNone(self._parse(
             '{"technical_paraphrase": "can i get a financement to open a pub?"}'))
@@ -2989,34 +3021,73 @@ class InterrogateTest(unittest.TestCase):
 
 
 class TopicMapTest(unittest.TestCase):
-    """The deterministic corpus topic map (Phase 8, item 1)."""
+    """The deterministic, source-grounded corpus topic map (Phase 9)."""
 
-    def test_builds_from_the_real_corpus_with_law_units(self):
+    def test_builds_complete_source_grounded_entries(self):
         import topic_map
         from pathlib import Path
         docs = Path(__file__).resolve().parent.parent / "docs"
         entries = topic_map.build_topic_map([docs])
-        self.assertGreater(len(entries), 200)
+        self.assertGreater(len(entries), 250)
         law = [e for e in entries if e["kind"] == "law_article"]
         sections = [e for e in entries if e["kind"] == "section"]
-        self.assertGreater(len(law), 150)            # the typed law units
+        circular = [e for e in sections
+                    if e["document"] == "Circulaire_BCT_2019-08.pdf"]
+        guide = [e for e in sections if e["document"].startswith("Guide")]
+        self.assertEqual(len(law), 198)               # every adopted law article
+        self.assertEqual(sum(e["heading"].startswith("الفصل")
+                             for e in circular), 20) # every circular chapter
         self.assertTrue(all(e.get("unit_id") for e in law))
-        # the topical titles live in the other documents' sections — e.g.
-        # the guide's murabaha financing section (a real interrogation topic)
-        self.assertTrue(any("المرابحة" in e["heading"] for e in sections))
-        self.assertTrue(any(e["document"].startswith("Guide")
-                            for e in sections))
-        # bounded prompt rendering
-        text = topic_map.for_prompt([docs])
-        self.assertLess(len(text.splitlines()), topic_map.TOPIC_PROMPT_MAX + 1)
-        self.assertIn("Loi_2016-48.pdf", text)
+        self.assertTrue(all(e.get("path") and e.get("description")
+                            for e in entries))
+        self.assertTrue(all(e.get("topic_id") and e.get("prompt_id")
+                            for e in entries))
+        self.assertEqual(len({e["topic_id"] for e in entries}), len(entries))
+        self.assertFalse(any(e["heading"] == "الفهرس" for e in entries))
+        self.assertTrue(any("المرابحة" in e["heading"] for e in guide))
+        # Bare structural labels are disclosed together with source excerpts.
+        law_article = next(e for e in law if e["unit_id"] == "loi-2016-48:art012")
+        self.assertIn("مرابحة", law_article["description"])
+        self.assertIn("—", law_article["display"])
+        self.assertIn("path", law_article)
 
-    def test_prompt_bounded_under_the_cap(self):
+    def test_prompt_is_bounded_and_contains_ids_paths_and_source_cues(self):
         import topic_map
         from pathlib import Path
         docs = Path(__file__).resolve().parent.parent / "docs"
-        text = topic_map.for_prompt([docs])
+        entries = topic_map.prompt_entries([docs])
+        text = topic_map.render_topic_map(entries)
         self.assertLessEqual(len(text.splitlines()), topic_map.TOPIC_PROMPT_MAX)
+        self.assertLessEqual(len(text), topic_map.TOPIC_PROMPT_CHAR_MAX)
+        self.assertIn("[t001]", text)
+        self.assertIn("LAW | العنوان الاول > الفصل الاول |", text)
+        self.assertIn("يهدف هذا القانون", text)
+
+    def test_only_documents_in_selected_data_dirs_are_topics(self):
+        import topic_map
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "small.md").write_text(
+                "# Demo\n\n## Fees\n\nOne fee applies.\n", encoding="utf-8")
+            entries = topic_map.build_topic_map([root])
+        self.assertTrue(entries)
+        self.assertTrue(all(e["document"] == "small.md" for e in entries))
+        self.assertFalse(any(e["document"] == "Loi_2016-48.pdf" for e in entries))
+
+    def test_cache_refreshes_when_a_source_document_is_added(self):
+        import topic_map
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "first.md").write_text(
+                "# First\n\n## Fees\n\nFee details.\n", encoding="utf-8")
+            before = topic_map.build_topic_map([root])
+            self.assertEqual({e["document"] for e in before}, {"first.md"})
+            (root / "second.md").write_text(
+                "# Second\n\n## Limits\n\nLimit details.\n", encoding="utf-8")
+            after = topic_map.build_topic_map([root])
+        self.assertEqual({e["document"] for e in after},
+                         {"first.md", "second.md"})
 
 
 class ModelsProbeTest(unittest.TestCase):
