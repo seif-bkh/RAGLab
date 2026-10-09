@@ -1,0 +1,1051 @@
+% =====================================================================
+% Internship Report — RAGLab
+% Document question-answering system for Arabic banking documents
+%
+% Compile with: pdflatex rapport_stage.tex (run twice).
+% Arabic expressions are transliterated so this file compiles with
+% pdfLaTeX without an Arabic font. Figures are drawn directly in LaTeX.
+%
+% Internship period: 3 August to 3 October 2026.
+% Events from 4–5 October are isolated in a post-internship note.
+% Each chapter, numbered or unnumbered, starts on a new page.
+% =====================================================================
+\documentclass[a4paper,12pt,openany]{report}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+
+\geometry{margin=2.4cm,headheight=15pt}
+\setstretch{1.3}
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{2}
+
+% ============================================================
+% Personal information to customize
+% ============================================================
+\newcommand{\StudentName}{[[INTERN_NAME]]}
+\newcommand{\SchoolName}{Private Higher School of Engineering and Technology}
+\newcommand{\HostOrganization}{Al Baraka Bank}
+\newcommand{\SupervisorName}{Ahlem BENHADDOUD}
+\newcommand{\InternshipPeriod}{3 August to 3 October 2026}
+\newcommand{\AcademicYear}{2025 -- 2026}
+\newcommand{\InternshipTopic}{Design and Evaluation of a Document Question-Answering
+System (RAG) for Arabic Banking Documents}
+
+\definecolor{genone}{HTML}{2F6FD0}
+\definecolor{genpivot}{HTML}{B57A14}
+\definecolor{gentwo}{HTML}{1F7A5C}
+\definecolor{genlast}{HTML}{B3205A}
+
+\hypersetup{
+  hidelinks,
+  pdftitle={Internship Report — RAGLab},
+  pdfauthor={\StudentName},
+  pdfsubject={RAG system for Arabic banking documents}
+}
+
+% With the report class, every chapter starts on a new page.
+\titleformat{\chapter}[display]
+  {\normalfont\bfseries\Huge}
+  {\chaptername~\thechapter}
+  {0.6em}
+  {\Huge}
+\titlespacing*{\chapter}{0pt}{0pt}{18pt}
+\titleformat{\section}{\normalfont\bfseries\Large}{\thesection}{0.6em}{}
+\titlespacing*{\section}{0pt}{2.2ex plus 0.5ex minus 0.2ex}{1.0ex}
+\titleformat{\subsection}{\normalfont\bfseries\large}{\thesubsection}{0.6em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Internship Report — RAGLab}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\fancypagestyle{plain}{%
+  \fancyhf{}
+  \fancyhead[L]{\small Internship Report — RAGLab}
+  \fancyhead[R]{\small\thepage}
+  \renewcommand{\headrulewidth}{0.3pt}
+}
+
+\begin{document}
+
+% ====================== TITLE PAGE ======================
+\begin{titlepage}
+\centering
+\vspace*{0.6cm}
+{\large\textbf{Republic of Tunisia}}\\[0.2cm]
+{\normalsize \SchoolName}\\[1.2cm]
+
+{\Large\bfseries INTERNSHIP REPORT}\\[0.7cm]
+{\large\bfseries \InternshipTopic}\\[1.3cm]
+
+\begin{tabular}{>{\bfseries}p{4.2cm}p{9.4cm}}
+Prepared by: & \StudentName \\[0.2cm]
+Host organization: & \HostOrganization \\[0.2cm]
+Internship period: & \InternshipPeriod \\[0.2cm]
+Supervisor: & \SupervisorName \\[0.2cm]
+Academic year: & \AcademicYear \\
+\end{tabular}
+
+\vfill
+{\small Internship Report — \AcademicYear}
+\end{titlepage}
+
+% ====================== FRONT MATTER ======================
+\pagenumbering{roman}
+
+\chapter*{Dedication}
+\addcontentsline{toc}{chapter}{Dedication}
+I dedicate this work to my family, for their constant support throughout this journey, and to
+everyone who encouraged me to turn an idea into a measured system.
+
+\clearpage
+\chapter*{Acknowledgements}
+\addcontentsline{toc}{chapter}{Acknowledgements}
+I would first like to thank \SupervisorName for her rigorous guidance, availability and scoping
+decisions, which helped shape this work. I also thank the team at \HostOrganization for welcoming
+me, providing access to the documents and sharing operational feedback that helped reveal defects
+not visible in testing. Finally, I thank the teaching staff at \SchoolName for the education that
+made this project possible.
+
+\clearpage
+\tableofcontents
+\clearpage
+\addcontentsline{toc}{chapter}{List of Figures}
+\listoffigures
+\clearpage
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+% ====================== INTRODUCTION ======================
+\chapter*{General Introduction}
+\addcontentsline{toc}{chapter}{General Introduction}
+
+Banks produce and consult a large volume of regulatory and procedural material, including laws,
+central-bank circulars, internal guides and training documents. Finding reliable information in
+these sources can be time-consuming. Giving this task to an unconstrained language model introduces
+an additional risk: it may answer confidently even when the documents do not provide the necessary
+evidence.
+
+This internship, carried out from \textbf{3 August to 3 October 2026}, focused on the design,
+implementation and evaluation of \textbf{RAGLab}, a document question-answering system based on
+Retrieval-Augmented Generation (RAG) and applied to a real Arabic banking corpus. The project had
+three main objectives:
+
+\begin{enumerate}
+  \item \textbf{Traceability:} every claim must be supported by a verbatim excerpt from the cited
+document, and every stated number must appear in that evidence.
+  \item \textbf{Honest refusal:} when the available evidence is insufficient, the system must refuse
+to answer and explain what is missing.
+  \item \textbf{Measured evaluation:} architectural choices must be compared using an explicit,
+reproducible protocol rather than selected on the basis of impressions alone.
+\end{enumerate}
+
+The report is organized into four numbered chapters. Chapter 1 presents the project context and
+scope; Chapter 2 explains the RAG principles and technical choices; Chapter 3 describes the
+architecture and its evolution; Chapter 4 analyses the results, limitations and operating
+conditions. A conclusion presents the findings and future work. Changes dated \textbf{4 and
+5 October 2026}, after the internship ended, are isolated in a separate note so they are not
+mistaken for work completed during the internship.
+
+The reported figures are linked to measurement campaigns or to sources listed in the appendices.
+Retrieval results expressed as \texttt{hit@k} are reported as percentages.
+
+% ====================== CHAPTER 1 ======================
+\chapter{Project Context and Scope}
+
+\section{Host Organization and Work Environment}
+The internship took place at \textbf{Al Baraka Bank}, an Islamic bank in Tunisia. The banking
+activities and products relevant to this project fall, among other things, within the framework of
+\textbf{Law No. 2016-48 of 11 July 2016 on banks and financial institutions}, which is one of the
+documents in the corpus.
+
+The project was carried out in an individual development environment using Python 3.11, a Git
+repository, a locally containerized service and continuous integration (CI), which served both as
+a quality gate and as a benchmark for real models. Two hardware and network constraints shaped the
+method: model-provider APIs were not accessible from the development workstation, and no GPU was
+available. Live measurements were therefore run in CI, and models were accessed through APIs.
+
+\section{Corpus and Business Problem}
+The evaluation corpus contains four real documents, all in Arabic:
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{4.6cm}p{2.9cm}p{6.4cm}}
+\toprule
+\textbf{Document} & \textbf{Type} & \textbf{Role in the Corpus} \\
+\midrule
+Law No. 2016-48 (11 July 2016) & Law & Primary legal reference (198 articles, 11 titles) \\
+BCT Circular No. 2019-08 & Circular & Operational guidance (20 chapters) \\
+Internal Guide to Islamic Banking Operations & Internal guide & Internal compliance policy and
+procedures \\
+Introduction to Islamic Finance (\emph{Madkhal}) & Training material & History, definitions and
+orders of magnitude \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three practical challenges motivated the project:
+\begin{itemize}
+  \item \textbf{A mismatch between the user's vocabulary and the document's vocabulary.} A user may
+ask, ``Can I open a business?'', while the corpus uses technical terms such as \emph{al-sigha},
+\emph{mahall al-aqd} or \emph{tamwil}.
+  \item \textbf{Asymmetric multilingualism.} The corpus is in Arabic, while questions may be asked
+in Arabic, French or English. A French question should be able to retrieve an Arabic passage
+without automatically translating either the document or the query.
+  \item \textbf{The cost of an error is high.} An incorrect answer about a rate, deadline or penalty
+may have legal consequences; linguistic plausibility alone is not enough.
+\end{itemize}
+
+\section{Internship Objectives}
+\begin{enumerate}
+  \item Build a complete pipeline: loading, chunking, embedding, indexing, retrieval, grounded
+generation and verification.
+  \item Compare accessible models and document their performance on the real corpus.
+  \item Make explicit refusal a first-class behaviour, supported by a taxonomy of reasons.
+  \item Deliver the system as a service with a stable, versioned and tested HTTP contract.
+  \item Instrument quality with offline tests, frozen question sets and an audit log.
+\end{enumerate}
+
+\section{Project Constraints}
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{6.0cm}p{8.2cm}}
+\toprule
+\textbf{Constraint} & \textbf{Methodological Consequence} \\
+\midrule
+No network access to model APIs from the workstation & Measurements on real models run in CI and
+are triggered explicitly to control cost \\
+No GPU & Use of API-hosted models, pinned and versioned \\
+Real corpus only & No synthetic documents in the final corpus; test sets are frozen and versioned \\
+Service under integration & HTTP endpoints are frozen; changes are additive and the contract is
+versioned \\
+Traceability requirement & Each result must be linked to a commit, log or execution identifier \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Working Method}
+After the methodological pivot described in Chapter 3, the project followed a protocol called
+\textbf{“step and plan”}. Before each step, a plan specifies the objective and scope; inputs;
+actions; outputs; automated checks; how the sponsor can test the result; the acceptance criterion;
+and the rollback point.
+
+Two rules complement this protocol. The local gate (compilation, offline checks, unit tests and
+inspection) must be green \textbf{before} publication; CI is then monitored until it is green as
+well. The question sets remain frozen: a campaign that modifies them is no longer directly
+comparable with earlier campaigns.
+
+Implementation was carried out with the assistance of a coding agent under a \textbf{written work
+contract} recording constraints, verified facts and previously encountered pitfalls. Every step
+remained subject to human validation: the agent proposes, measures and documents, while activation
+decisions remain with the project sponsor. This organization made it easier to resume work after
+interruptions and reduced repeated diagnosis of the same defects.
+
+% ====================== CHAPTER 2 ======================
+\chapter{Background and Technical Choices}
+
+\section{RAG Principles and Main Risks}
+A RAG system combines an information-retrieval engine, which selects passages from a document
+collection, and a language model, which drafts an answer from those passages. This architecture
+does not eliminate risk; it shifts risk to the quality of chunking, retrieval, evidence assessment
+and answer validation.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{3.5cm}p{5.0cm}p{5.7cm}}
+\toprule
+\textbf{Risk} & \textbf{Symptom} & \textbf{Mitigation} \\
+\midrule
+Arbitrary chunking & A definition is split and becomes unusable & Structural chunking (Section 3.4.1) \\
+Lexical mismatch & The query and document use different forms & Arabic normalization, bridges
+between writing systems and bounded interrogation \\
+Similarity false positives & Irrelevant passages are returned without warning & Deterministic
+sufficiency state and explicit refusal \\
+Hallucination & A plausible answer introduces a number absent from the source & Citation and
+number checks (Section 3.4.4) \\
+Loss of traceability & The passage used by the model cannot be verified & Verbatim citations,
+fragment identifiers and audit log \\
+Silent regressions & A local improvement degrades another case & Frozen test sets and paired
+measurements \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Chunking: Fixed Windows and Document Structure}
+\textbf{Fixed-window chunking} splits text every $N$ tokens, with overlap. It is simple but ignores
+document structure. \textbf{Structural chunking} respects boundaries such as headings, articles,
+paragraphs and tables; it requires a document-reconstruction step beforehand.
+
+Both modes were implemented and compared. The historical \texttt{size} mode uses 220 tokens with
+an overlap of 40. The \texttt{restructure} mode, which became the default, follows three steps:
+\begin{enumerate}
+  \item \textbf{Semantic normalization:} clean gazette headers, remove repeated headers, extract
+section markers (\emph{al-fasl}, \emph{al-unwan}, \emph{al-bab}) and reconstruct the visual order
+of Arabic lines extracted from PDFs.
+  \item \textbf{Breadcrumb enrichment:} add a context line of the form \texttt{h1 > h2 > h3} above
+each subsection heading and table.
+  \item \textbf{Recursive structural chunking:} split hierarchically on headings, blank lines, line
+breaks and spaces, with a target budget of 220/40 tokens.
+\end{enumerate}
+Linguistic repair of extracted text complements this process: some Arabic legal PDFs are extracted
+in visual order, which can corrupt numbers in particular.
+
+\section{Vector Representations}
+Multilingual embedding models project texts into a space where vector proximity represents semantic
+proximity. For Arabic, rich morphology and the coexistence of different writing systems make it
+harder to match a question with a document passage.
+
+Several providers were compared (Google, Jina, HuggingFace and NVIDIA). The selected embedding
+model is \texttt{nvidia/nemotron-3-embed-1b}, with a native dimension of 2048. Each index stores a
+fingerprint of the model and chunking configuration that produced it; a search using an
+incompatible fingerprint is rejected before the model is called.
+
+\section{Dense, Lexical and Hybrid Retrieval}
+Three strategies were compared:
+\begin{itemize}
+  \item \textbf{Dense retrieval:} cosine similarity between vectors.
+  \item \textbf{RRF:} reciprocal-rank fusion of dense retrieval and the BM25 lexical index
+(constant 60; $k_1=1.5$; $b=0.75$).
+  \item \textbf{Blend:} score fusion, $\lambda \cdot \text{cosine} + (1-\lambda)\cdot
+\text{normalized BM25}$, with $\lambda=0.7$.
+\end{itemize}
+The results in Chapter 4 showed no net gain from lexical fusion on this corpus. Dense retrieval
+was therefore retained as the default; the other modes remain explicitly available.
+
+\section{Grounded Answers and Evidence Sufficiency}
+The model must return a \texttt{grounded-v1} JSON object rather than free-form text. Each claim must
+be associated with one or more verbatim citations from the supplied passages. Three deterministic
+checks are applied:
+\begin{enumerate}
+  \item \textbf{Citation membership:} after normalization (Arabic, case and whitespace), each
+citation must appear in the referenced passage.
+  \item \textbf{Numeric check:} every number in a claim must appear in its supporting citations,
+including thousands separators and Eastern Arabic numerals.
+  \item \textbf{Policy check:} a cited source must have been retrieved, belong to the authorized
+documents and, when validity metadata is available, be in force.
+\end{enumerate}
+
+Before generation, a deterministic \textbf{sufficiency} layer compares the evidence required by the
+query intent with the content actually retrieved. It produces four states: sufficient,
+insufficient, contradictory or indeterminate. This state, not a similarity score, determines
+whether the system answers, refuses or attempts one bounded reinterpretation.
+
+\section{Evaluation Protocol}
+\textbf{Retrievability} is measured with \texttt{hit@1}, \texttt{hit@3} and \texttt{hit@5}: does
+the expected document and passage appear among the top $k$ results? Final behaviour is also
+examined, including grounded answers, reasoned refusals and citation compliance.
+
+Two frozen test sets serve as references: a 50-case set (10 verbatim, 20 paraphrases,
+15 cross-document and 5 out-of-scope cases) and a 10-question Arabic set covering five target
+categories: colloquial language, synonyms, implicit requests, compound requests and ambiguity.
+
+Comparisons are measured within the same run; a tolerance of $\pm 2$ percentage points is allowed
+between runs because hosted models are not bit-reproducible. Frozen test sets are never modified to
+improve a result.
+
+\section{Selected Models}
+Development checks, blind tests and prompt-injection scenarios led to the following model pair:
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{2.6cm}p{5.3cm}p{6.3cm}}
+\toprule
+\textbf{Role} & \textbf{Provider / Model} & \textbf{Rationale} \\
+\midrule
+Embeddings & NVIDIA \texttt{nemotron-3-embed-1b} (2048 dimensions) & Measured quality on the
+Arabic corpus, high native dimension and caching support \\
+Answer generation & xKiro \texttt{qwen/qwen3.8-max:free} & Highest rate of citations compliant
+with the \texttt{grounded-v1} contract; live cost checks \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+No fallback to another model is allowed: a different model causes an explicit error rather than a
+silent degradation. Automatic query translation, which was measured and documented as a historical
+approach, was removed.
+
+\section{Technical Stack}
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{3.2cm}p{5.6cm}p{5.4cm}}
+\toprule
+\textbf{Component} & \textbf{Choice} & \textbf{Alternative Rejected} \\
+\midrule
+Orchestration & Explicit Python code & LangChain / LlamaIndex: opaque behaviour and dependencies \\
+Vector database & Local persistent ChromaDB, cosine distance & Cloud database: cost and banking data \\
+HTTP calls & Standard-library \texttt{urllib} & Provider SDKs \\
+Service & FastAPI + uvicorn & — \\
+Chunking & \texttt{tiktoken} (\texttt{cl100k\_base}) with a fallback estimate & — \\
+PDF / DOCX & \texttt{pypdf} and direct OOXML reading & Office SDKs \\
+Tests / CI & \texttt{unittest} + GitHub Actions & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The repository uses no orchestration framework, external vector database or provider SDK. This
+choice simplifies auditing and deployment on an internal host.
+
+% ====================== CHAPTER 3 ======================
+\chapter{Architecture and Implementation}
+
+\section{Overview: Two Generations and a Pivot}
+The architecture evolved during the project. The first generation primarily addressed the question
+of how to compare retrieval methods. After a methodological pivot, the second generation added
+explicit layers for knowledge, understanding, control and auditing.
+
+\begin{figure}[H]
+\centering
+\begin{tabular}{c}
+\colorbox{genone!10}{\parbox{0.86\textwidth}{\centering
+  \textbf{Generation 1 — Information Retrieval Laboratory}\\
+  Test corpus, multiple providers, query variants, chunking experiments and retrieval fusion}}
+  \\[0.45em]
+$\Downarrow$ \textit{methodological pivot: 24--28 September 2026}\\[0.45em]
+\colorbox{gentwo!10}{\parbox{0.86\textwidth}{\centering
+  \textbf{Generation 2 — Governed Four-Layer Architecture}\\[0.2em]
+  1. Corpus and structure \quad 2. Knowledge \quad 3. Understanding \quad 4. Delivery and audit}}
+\end{tabular}
+\caption{Evolution of the RAGLab architecture during the internship.}
+\label{fig:architecture}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tabular}{p{3.6cm}p{10.2cm}}
+\toprule
+\textbf{Period} & \textbf{Milestone} \\
+\midrule
+4--23 September & Generation 1: flat, multi-provider pipeline; translation experiments and A/B
+comparisons \\
+24--28 September & Pivot: target-state report, gap analysis, refocusing on the real corpus and
+adoption of the “step and plan” protocol \\
+24 September--3 October & Generation 2: four-layer architecture, knowledge units and sufficiency
+controls \\
+4--5 October & Post-internship changes, described separately in the complementary note \\
+\bottomrule
+\end{tabular}
+\caption{Documented milestones. The 4--5 October milestones fall outside the internship period.}
+\label{fig:chronology}
+\end{figure}
+
+The engine shared by both generations remains deliberately simple: NVIDIA embeddings, a local
+cosine index, answer generation by the pinned model and citation checks. Most of the evolution
+concerns the corpus, chunking, and the knowledge, understanding and traceability layers added
+around that engine.
+
+\section{Generation 1: Information Retrieval Laboratory}
+The first generation was a comparison-oriented pipeline: test corpus; \texttt{size} and then
+\texttt{restructure} chunking; multi-provider embeddings and caching; ChromaDB indexing;
+\texttt{vector}/\texttt{rrf}/\texttt{blend} retrieval; automatically translated query variants;
+multi-provider answers; and citation checks.
+
+This generation answered the question, “Which chunking method, model and retrieval fusion perform
+best?” It did not explicitly determine whether the evidence was sufficient, whether the system
+should refuse, or how decisions should be traced. These limitations motivated the pivot.
+
+\section{Methodological Pivot (24--28 September 2026)}
+The pivot had four steps:
+\begin{enumerate}
+  \item \textbf{Reverse specification:} static code inspection, with each claim cited (file,
+symbol and line) and labelled as observed, inferred or unknown.
+  \item \textbf{Gap analysis:} comparison of the observed system with the target-state report.
+Citation checks, refusal categories and rejection of stale indexes already existed; intent,
+evidence planning, sufficiency, document governance and audit logging needed further work.
+  \item \textbf{Refocusing on the real corpus:} the web-compiled campaign was retired and the four
+real banking documents became the working corpus.
+  \item \textbf{Corpus repair:} 215 corrections to the law (29 batches), 35 to the circular
+(including 28 corrupted numbers), 23 to the guide and 21 to the training material. Each log was
+checked automatically and each document approved by the project sponsor. The local evaluation
+record then contained 339 chunks.
+\end{enumerate}
+
+\section{Generation 2: Layered Architecture}
+
+\subsection{Layer 1 — Corpus and Structure}
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{3.0cm}p{11.5cm}}
+\toprule
+\textbf{Module} & \textbf{Role} \\
+\midrule
+\texttt{loader.py} & PDF/DOCX/MD loading; Arabic normalization (NFKC, presentation forms,
+alif normalization, tatweel and diacritic removal); language detection \\
+\texttt{restructure.py} & Structural chunking; visual-order repair through zone reconstruction;
+adoption of corrected texts \\
+\texttt{chunker.py} & Historical \texttt{size} chunking (220/40); chunking fingerprint recording
+mode, size, overlap and tokenizer \\
+\texttt{docstore.py} & Application-pushed documents versioned by SHA-256 fingerprint; index marked
+stale until re-indexing \\
+\texttt{store.py} & Local cosine ChromaDB, BM25 lexical index, RRF/blend fusion, consistency checks
+and source-level deletion \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Two safeguards structure this layer. The index is \textbf{self-describing}: each chunk records the
+fingerprint of its chunking configuration and embedding space, and searches against an
+incompatible fingerprint are rejected. An \textbf{indexing lock} prevents inconsistent reads
+during ingestion and returns an explicit conflict instead.
+
+\subsection{Layer 2 — Knowledge}
+Built on Law 2016-48, this layer is deterministic and declarative: its data files are versioned,
+automatically validated and reviewable line by line.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{3.4cm}p{7.4cm}p{3.7cm}}
+\toprule
+\textbf{Element} & \textbf{Content} & \textbf{Check} \\
+\midrule
+Knowledge units & 198 units corresponding to the articles, with verbatim text, stable identifiers
+such as \texttt{loi-2016-48:artNNN}, hierarchical paths and governed functional types & 198/198
+coverage, literal text and stable identifiers \\
+Relations & 77 internal references and 1 anchor relation (circular to Article 11) & Verbatim evidence
+required; targets must exist \\
+Structured numbers & 53 records (14 rates, 28 deadlines, 5 caps, 6 penalties) and a correction table;
+served by \texttt{GET /numbers} & Each value must appear literally in its unit \\
+Governance & 6 axes: authority, validity, scope, audience, domain and source & Registry-to-corpus
+consistency \\
+Unit index & 198 descriptive rows in an isolated collection & Law-question measurement:
+100/100/100 vs. 67/92/92\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The addition of \texttt{GET /numbers} is an additive extension: read-only, filterable, usable even
+with an empty index, and it does not change existing endpoints.
+
+\subsection{Layer 3 — Understanding the Request}
+The design rule is: \textbf{deterministic first, model second, and never twice}.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{4.3cm}p{7.7cm}p{2.5cm}}
+\toprule
+\textbf{Module} & \textbf{Function} & \textbf{Status at Internship End} \\
+\midrule
+\texttt{intent.py} & Declarative intent classification; detection of compound requests and
+influential ambiguity & Active \\
+\texttt{evidence\_plan.py} & Derives evidence requirements from intent, never the answer & Active \\
+\texttt{sufficiency.py} & Compares the plan with retrieved passages; identifies sufficiency,
+insufficiency and contradictions; bounds guided retrieval turns & Active \\
+\texttt{decompose.py} & Breaks a question into micro-questions with one evidence requirement each &
+Built, not wired in \\
+\texttt{interrogate.py} & If nothing is covered, converts a practical request into a technical
+question in one bounded call & Active \\
+\texttt{relational\_expansion.py} & Expands retrieval along relations, appended to the results &
+Disabled (measured as neutral) \\
+\texttt{micro\_retrieval.py} & Micro-question retrieval with result fusion & Disabled (measured as
+unfavourable) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The topic map associated with interrogation was reconstructed on 4--5 October. Since this change
+occurred after the internship, it is described separately in the complementary note.
+
+Interrogation has three safeguards: \textbf{fail closed} (malformed output, invented topics or
+requirements, or an unchanged reformulation lead to refusal); \textbf{full disclosure} (the
+\texttt{understood\_as}, \texttt{original\_question} and \texttt{interrogation} fields); and
+\textbf{visible cost} (the call duration is exposed separately).
+
+\subsection{Layer 4 — Delivery and Audit}
+\begin{itemize}
+  \item \textbf{Generation:} the \texttt{grounded-v1} prompt treats the question and passages as
+untrusted data and requires strict JSON output (claims and evidence).
+  \item \textbf{Citation checks:} citation membership, numbers and policy are validated. Law
+passages carry stable knowledge-unit identifiers.
+  \item \textbf{Sufficiency enforcement:} if no evidence requirement is covered, the service refuses
+before generation; partial coverage allows one bounded regeneration.
+  \item \textbf{Scrubbing:} recognizable personal data (email, phone, Tunisian RIB/IBAN, national ID)
+are replaced with labels after validation.
+  \item \textbf{Audit log:} each request produces a JSONL record (identifier, timestamp, scrubbed
+question, status, sufficiency state, model, counters and latency), available through
+\texttt{GET /audit} with bounded retention.
+\end{itemize}
+
+\subsection{Request Lifecycle}
+\begin{verbatim}
+Question (ar / fr / en)
+  -> authentication, greeting shortcut, indexing lock
+  -> intent -> evidence plan
+  -> dense retrieval on the ORIGINAL question (never translated), top 5
+  -> sufficiency check on retrieved passages
+       |- sufficient -> direct generation (zero additional calls)
+       |- partial    -> one bounded regeneration for covered points
+       '- none       -> ONE bounded interrogation call -> new retrieval -> same check
+  -> context construction (3000-token budget; truncated passage is discarded)
+  -> grounded JSON generation -> citation checks -> scrubbing -> audit log
+  -> cited answer, or reasoned refusal (both are valid responses)
+\end{verbatim}
+
+\subsection{Feature Gates and Defaults}
+Experimental components are controlled by explicit feature gates. During the period described,
+the active gates covered sufficiency fields, sufficiency enforcement, interrogation, concept
+vocabulary and bridges between writing systems. Relational expansion and micro-question retrieval
+remained disabled based on measurements. Each disabled gate restores the prior behaviour, as
+verified by a dedicated test.
+
+\section{Service and Interfaces}
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{3.4cm}p{11.1cm}}
+\toprule
+\textbf{Aspect} & \textbf{Implementation} \\
+\midrule
+Endpoints & 27 routes: health, profiles and models, keys, inspection, chunks, indexing, retrieval,
+answers, evaluation, documents, diagnostics, audit and numbers \\
+Version & \texttt{SERVICE\_VERSION = 1.4.0} at the end of the internship; version 1.5.0 is
+post-internship \\
+Contract & Human-readable contract document and generated OpenAPI schema \\
+Authentication & Shared \texttt{X-Service-Token}, constant-time comparison; service intended to run
+behind the application gateway \\
+Errors & Single envelope \texttt{\{"detail": \{"reason": ...\}\}}, stable reasons and filtered
+sensitive values \\
+Evolution & Existing endpoints frozen; changes are additive \\
+Integration & CLI, local console and HTTP console for integration testing \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The service is delivered with a \texttt{Dockerfile} and \texttt{docker-compose.yml}, including
+volumes for the index, embedding cache and documents pushed by the application. The integration
+guide covers the HTTP contract, reference queries, interface mock-up and deployment.
+
+\section{Quality Engineering}
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{3.4cm}p{11.1cm}}
+\toprule
+\textbf{Mechanism} & \textbf{Content} \\
+\midrule
+Offline tests & Unit tests, deterministic checks, compilation, inspection and dependency checks \\
+Continuous integration & Offline gate on every push; manually triggered real-model campaigns; heavy
+harness, catalogs, retrieval judge and answer A/B tests \\
+Quality gates & Index fingerprints, refusal during indexing, no fallback, refusal before generation
+and fail-closed interrogation \\
+Reproducibility & Fingerprint-addressed caches; archived runs; results linked to a commit and run
+identifier \\
+Documentation & Contract, query guide, interface mock-up, deployment guide and work contract for
+follow-up sessions \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ====================== CHAPTER 4 ======================
+\chapter{Evaluation, Results and Limitations}
+
+\section{Corpus and Question Sets}
+The evaluation corpus contains four real documents that were repaired and approved. The local
+record reports \textbf{339 chunks} for the structural arm. CI produces 858 with the full tokenizer;
+this difference is related to the tokenization environment. These volumes should not be compared as
+if they came from the same counting setup.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{3.6cm}p{3.0cm}p{7.9cm}}
+\toprule
+\textbf{Set} & \textbf{Size} & \textbf{Composition} \\
+\midrule
+\texttt{questions\_50.json} & 50 cases (45 evaluable, 5 out of scope) & 10 verbatim,
+20 paraphrases, 15 cross-document (6 fr, 9 en); 32 ar, 8 fr and 10 en \\
+\texttt{questions\_targets.json} & 10 Arabic cases & 2 per category: colloquial language,
+synonyms, implicit, compound and ambiguous \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Every expected substring was checked automatically: it had to appear literally in the expected
+document and be distinctive within the corpus. The main test set contains 12 law cases, 10 circular
+cases, 11 guide cases and 12 training-material cases.
+
+\section{Measurement Protocol}
+\begin{itemize}
+  \item \textbf{Paired comparison:} compared arms are measured in the same run.
+  \item \textbf{Tolerance:} $\pm 2$ percentage points for comparisons across runs.
+  \item \textbf{Two stages:} deterministic, free BM25-only retrieval serves as a quick filter;
+embeddings and real models decide the live-stage results.
+  \item \textbf{Final behaviour:} response status (grounded answer or refusal) and citation
+compliance are examined in addition to \texttt{hit@k}.
+\end{itemize}
+
+\section{Chunking: Fixed Windows vs. Structural Chunking}
+Offline measurement (BM25 only, $k=20$) on the 50-case set:
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Arm} & \textbf{hit@1 (\%)} & \textbf{hit@3 (\%)} & \textbf{hit@5 (\%)} \\
+\midrule
+\texttt{size} 220/40 & 42 & 60 & 62 \\
+\texttt{restructure} (repaired, approved corpus) & \textbf{62} & \textbf{82} & \textbf{87} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+By language, results were: Arabic 43/57/60 then 67/87/93; English 44/89/89 then 67/100/100;
+French 33/33/33 in both arms. The lexical ceiling in French motivated vector-based evaluation.
+
+\textbf{Live} measurement (embeddings and real models, same question set):
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Arm} & \textbf{hit@1 (\%)} & \textbf{hit@3 (\%)} & \textbf{hit@5 (\%)} \\
+\midrule
+\texttt{size} & 51 & 64 & 71 \\
+\texttt{restructure} & \textbf{71} & \textbf{80} & \textbf{87} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The gain is \textbf{20 percentage points in hit@1}. Some cases missed by dense retrieval were
+retrieved by the lexical arm, motivating a deterministic reranker that was evaluated separately.
+
+\section{Retrieval Modes: Fusion Does Not Pay Off}
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lcccl}
+\toprule
+\textbf{Mode} & \textbf{hit@1 (\%)} & \textbf{hit@3 (\%)} & \textbf{hit@5 (\%)} &
+\textbf{Decision} \\
+\midrule
+\texttt{vector} & \textbf{71} & 80 & \textbf{87} & Retained as default \\
+\texttt{rrf} (BM25 fusion) & 71 & 80 & 82 & Tied at rank 1, lower recall \\
+\texttt{blend} ($\lambda=0.7$) & 62 & 80 & 84 & Lower at rank 1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+In French, dense retrieval scores 50/67/67, compared with 33/33/50 for RRF and 33/33/67 for the
+blend. The decision rule is to change the default only if a candidate wins without regressions on
+verbatim and out-of-scope cases. Dense retrieval was therefore retained; the other modes remain
+explicit, revisable options.
+
+\section{Answer-Model Independence}
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Answers} & \textbf{Refusals} & \textbf{Errors} &
+\textbf{Gate refusals} \\
+\midrule
+\texttt{qwen/qwen3.8-max:free} (selected) & 37 & 13 & 0 & 7 \\
+\texttt{moonshotai/kimi-k3} & 27 & 14 & 9 & 7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Status agreement between the two models is \textbf{0.720}. When both models answer, their cited
+sources are identical (Jaccard similarity = 1.000). With the context fixed, model disagreement is
+therefore mainly about whether to answer or refuse, rather than which passages to cite. This
+shifts the remaining work toward evidence completeness.
+
+\section{Knowledge-Layer Results}
+On the 12 law questions, the unit index was compared with structural chunking:
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Arm} & \textbf{hit@1 (\%)} & \textbf{hit@3 (\%)} & \textbf{hit@5 (\%)} \\
+\midrule
+Reference (structural chunking) & 67 & 92 & 92 \\
+Unit index & \textbf{100} & \textbf{100} & \textbf{100} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The ten target Arabic questions produced the following results:
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+\textbf{Category} & \textbf{hit@1 (\%)} & \textbf{hit@3 (\%)} & \textbf{hit@5 (\%)} \\
+\midrule
+Compound request & 100 & 100 & 100 \\
+Implicit and ambiguous & 50 & 100 & 100 \\
+Synonyms & 50 & 50 & 50 \\
+Colloquial language & 0 & 0 & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Activating a 16-entry institutional lexicon brought no gain to dense retrieval, although it
+improved the lexical arm. The lexicon was therefore left disabled for the dense default.
+
+\section{Robustness}
+Six adversarial scenarios are checked automatically by the citation validator: fabricated
+citation, citation borrowed from another source, calculated number, unknown citation identifier,
+citation marker embedded in a claim, and instruction injection in either the question or a
+passage. All six are rejected by the deterministic validator.
+
+An important limitation remains: the validator guarantees that words and numbers come from the
+source, but not that a claim logically follows from it. Other operational defects were corrected
+during the project, with regression tests: network errors leaking as HTTP 500 (replaced by an
+explicit 502), locking during ingestion, malicious filenames and container configuration in which
+a hard-coded token silently overrode environment variables.
+
+\section{Limitations}
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{4.7cm}p{9.8cm}}
+\toprule
+\textbf{Limitation} & \textbf{Impact} \\
+\midrule
+Citation checking $\neq$ entailment & A correctly sourced sentence can still be an abusive
+interpretation \\
+No similarity threshold & Five passages are passed on even if irrelevant; safety relies on
+sufficiency checks and refusal \\
+Single process & One profile, one index and one indexing operation at a time; no horizontal scaling \\
+Updates require re-indexing & Replaced documents may continue to serve old chunks until
+re-indexing \\
+Tokenizer & Without the \texttt{cl100k} vocabulary, token counts are estimates; CI is authoritative \\
+Heuristic language detection & Misclassification remains possible \\
+No conversation memory or streaming & Deliberate choices in the current configuration \\
+Small, correlated test sets & 50 + 10 cases provide neither a security guarantee nor a legal
+assurance \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The system is \textbf{not ready for production banking use}. It may be suitable for a supervised
+pilot using approved, non-confidential documents, subject to the required validations.
+
+\section{Cost and Operations}
+Fingerprint-based caching and free models keep offline campaign costs very low. Live campaigns are
+manually triggered and bounded. Each campaign publishes its figures alongside its run. Container
+packaging, persistent volumes, token-aware health checks and a deployment guide were prepared for
+the platform team.
+
+% ====================== CONCLUSION ======================
+\chapter*{Conclusion and Future Work}
+\addcontentsline{toc}{chapter}{Conclusion and Future Work}
+
+\section*{Outcome}
+The internship produced a measured and documented document question-answering system designed for
+a real Arabic banking corpus:
+\begin{itemize}
+  \item a complete pipeline, from document reading and repair through retrieval, grounded
+generation, citation checks and reasoned refusal;
+  \item a layered architecture (structure, knowledge, understanding, delivery and audit) resulting
+from an intentional change in method;
+  \item quantified results, including a 20-percentage-point gain in hit@1 from structural chunking
+and a 100/100/100 score for the unit index on law questions;
+  \item a documented, versioned service with an HTTP contract, audit log, personal-data scrubbing
+and containerized configuration.
+\end{itemize}
+
+\section*{Lessons Learned}
+\begin{enumerate}
+  \item \textbf{Measurement replaces opinion.} Chunking, retrieval and feature-activation choices
+were decided through paired comparisons.
+  \item \textbf{Governance is part of the architecture.} Plans, feature gates and frozen test sets
+reduced the risk of silent regressions.
+  \item \textbf{The real service remains essential.} Some defects appear only in operation, so
+testing must be complemented by checks against the deployed service.
+\end{enumerate}
+
+\section*{Future Work}
+\begin{enumerate}
+  \item Finalize identity and role decisions before use beyond an internal pilot.
+  \item Add topic metadata to chunks (\texttt{path}, \texttt{level}, \texttt{parent\_id}) in an
+isolated collection before any production re-indexing.
+  \item Measure faceted retrieval and any fusion with dense retrieval.
+  \item Re-run all campaigns on frozen test sets and document regressions.
+  \item Prepare for industrialization: multiple users, incremental updates, observability and
+continuous adversarial evaluation.
+\end{enumerate}
+
+% ====================== POST-INTERNSHIP NOTE ======================
+\chapter*{Post-Internship Update — 4--5 October 2026}
+\addcontentsline{toc}{chapter}{Post-Internship Update — 4--5 October 2026}
+
+\emph{Scope.} The items below are dated \textbf{4 and 5 October 2026}, after the internship end
+date of 3 October. They are retained to document the project's subsequent evolution, but are not
+counted as work completed during the internship.
+
+\section*{Phase 9: Topic Map and Operational Fixes}
+The topic map, previously derived only from section titles, was rebuilt from source-backed units:
+262 nodes, including 198 law units and 20 circular chapters, each with an identifier, path and
+excerpt. Interrogation now uses exact-match identifiers. The service moved to version 1.5.0 without
+changing the response format.
+
+Post-internship measurements produced the following results:
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{6.2cm}p{8.3cm}}
+\toprule
+\textbf{Measurement} & \textbf{Result} \\
+\midrule
+Retrieval only, 7 evidence-bearing cases & \texttt{hit@1/3/5}: 5/7 for dense retrieval \\
+Topic-map comparison, 12 live calls & 12/12 parsed without error; target topics reached rose
+from 4/5 to \textbf{5/5} \\
+End-to-end probe, 6 unchanged questions & \textbf{3 grounded answers and 3 refusals}; all
+generated answers validated; no provider errors \\
+Number of retrieved chunks (5, 12 or 20) & No change in outcome \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The tests also exposed several defects in the live service:
+\begin{itemize}
+  \item the guided retrieval turn never ran in the deployed service because the sufficiency check
+was called without a search function; this was fixed;
+  \item a rule containing \texttt{Quelle} also matched inside \texttt{Quelles}, classifying a
+procedural question as definitional; the French procedural markers were corrected;
+  \item identical documents are now rejected by SHA-256 fingerprint rather than filename, after
+859 duplicate chunks had been observed;
+  \item an eight-entry concept vocabulary and two additive fields now disclose when an answer was
+produced after the request was reinterpreted.
+\end{itemize}
+
+At the end of this post-internship update, the offline gate was green (463 unit tests and
+121 checks), CI was green, and the question sets and production index were unchanged. Remaining
+work concerned topic metadata at chunk level, a topic-retrieval arm, vocabulary facets and a final
+measurement campaign.
+
+% ====================== APPENDICES ======================
+\appendix
+
+\chapter{Glossary}
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{3.0cm}p{3.0cm}p{8.5cm}}
+\toprule
+\textbf{Term} & \textbf{Transliteration} & \textbf{Meaning} \\
+\midrule
+— & \emph{al-murabaha} & Sale at cost plus a known profit margin \\
+— & \emph{al-sigha} & Contractual form (offer and acceptance) \\
+— & \emph{al-fasl} & Article in the law; chapter in the circular \\
+— & \emph{nafidh} & In force \\
+— & \emph{kafin} & Sufficient (sufficiency state) \\
+— & \emph{ghayr kafin} & Insufficient \\
+— & \emph{mutaarid} & Contradictory (two sources disagree) \\
+RAG & — & Retrieval-Augmented Generation \\
+\texttt{hit@k} & — & Does the expected passage appear among the top $k$ results? \\
+RRF & — & Reciprocal Rank Fusion \\
+BM25 & — & A standard lexical ranking function \\
+Citation validator & — & Deterministic verification of citation membership and numbers \\
+Sufficiency & — & Comparison of evidence requirements with retrieved content \\
+Feature gate & — & A component switch with a verified fallback behaviour \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\emph{Note: Arabic terms are transliterated in this file so it can be compiled with
+\texttt{pdflatex} without an Arabic font.}
+
+\chapter{Result Provenance}
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{5.6cm}p{9.0cm}}
+\toprule
+\textbf{Result or Data} & \textbf{Source Listed in the Working Repository} \\
+\midrule
+4 documents, 339 chunks and repairs 215/35/23/21 & \texttt{audits/MASTER\_INDEX.md},
+\texttt{AGENTS.md} \\
+50 questions (10/20/15/5) and 10 target cases & \texttt{audits/QUESTIONS\_MATRIX.md},
+\texttt{audits/PHASE3\_INTERVENTIONS.md} \\
+BM25 42/60/62 to 62/82/87; live 51/64/71 to 71/80/87 &
+\texttt{audits/PHASE2\_BASELINES.md}, runs 3.1 and 3.2 \\
+Vector 71/80/87, RRF 71/80/82 and blend 62/80/84 &
+\texttt{audits/PHASE2\_BASELINES.md}, run 3.2 \\
+Status agreement 0.720; Jaccard 1.000 & \texttt{audits/PHASE2\_BASELINES.md}, run 3.3 \\
+Unit index 100/100/100 vs. 67/92/92 & \texttt{audits/PHASE4\_KNOWLEDGE.md} \\
+198 units, 77 relations, 53 numbers and 6 axes & \texttt{audits/PHASE4\_KNOWLEDGE.md} \\
+Target categories 50/70/70 & \texttt{audits/PHASE3\_INTERVENTIONS.md} \\
+Phase 9: 5/7, 4/5 to 5/5, 3 answers and 3 refusals & \texttt{audits/PHASE9\_STRUCTURE/};
+post-internship results \\
+Service version at internship end & \texttt{service.py}, \texttt{CONTRACT.md} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\chapter{Reproducing the Tests}
+\begin{verbatim}
+# Environment
+cd <repository>/raglab
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# Offline quality gate (no model calls)
+./run_tests.sh --offline
+
+# Inspect and index the real corpus, then ask a question
+python main.py inspect --data-dir ../docs
+python main.py ingest --reset --data-dir ../docs
+python main.py answer "..." --query-lang ar
+
+# HTTP service and integration test console
+python -m uvicorn service:app
+python local_front.py --base-url http://localhost:8000
+\end{verbatim}
+
+\chapter{Condensed Timeline of Milestones}
+\emph{The available summary log mainly details milestones from 4 September onward. It does not
+break down each day from 3 August to 3 September; the table below is therefore not a complete daily
+log. The 4--5 October changes are excluded here and appear in the post-internship note.}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{p{2.6cm}p{12.0cm}}
+\toprule
+\textbf{Period} & \textbf{Main Activities} \\
+\midrule
+4--6 September & First complete pipeline; multiple providers; query translation; variant fusion;
+vector validation; initial measurement harnesses \\
+7--8 September & Structural chunking, offline harness, live-model A/B tests, work contract and
+interactive console \\
+11--16 September & Extraction of the HTTP service and profiles; integration console;
+authentication token; output scrubbing; numeric checks; document API and endpoint freeze \\
+23--25 September & Chunk browser; reverse specification; gap analysis; production-image packaging \\
+28--30 September & Refocusing on the real corpus; document-by-document audits; linguistic repairs;
+approval of corrected texts; 50-question test set \\
+1 October & Formal baselines; dense-retrieval decision and lexicon deactivation; knowledge and
+understanding layers; version 1.3.0 \\
+2 October & Sufficiency fields activated; interrogation; remote diagnostics; deployment; token
+incident fixed; version 1.4.0 \\
+3 October & End of the internship period used in this report \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\vfill
+\begin{center}
+\small\emph{Report prepared by \StudentName{} — internship at \HostOrganization, \InternshipPeriod,
+supervised by \SupervisorName.}
+\end{center}
+
+\end{document}
