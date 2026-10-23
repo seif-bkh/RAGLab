@@ -500,6 +500,24 @@ below:
  "dropped_for_budget": 0, "seconds": 0, "inference_performed": false}
 ```
 
+**Soft refusal wording (1.5.0, default ON).** Since 2026-10-23 the human-facing
+`answer` of a refusal is composed by `answer.compose_refusal` for ALL six
+reasons, in `en`/`fr`/`ar`:
+
+- when the payload carries a `referral` (its `clarifications`, or its
+  `missing_requirements` when no clarification exists), `answer` opens with a
+  softer bridge and quotes it — e.g. Arabic: «لا أملك جوابًا صريحًا مدعومًا
+  بالمستندات عن سؤالك، لكن أقرب ما فيها: …»;
+- otherwise, when an `understood_as` concept exists (the demand-interrogation
+  paraphrase), `answer` reads «إن كنت تقصد «…»، فإني لا أملك جوابًا صريحًا.»;
+- with neither, the reason-specific legacy sentence is returned unchanged.
+
+The `reason` vocabulary, the `referral` structure, `requirements_missing`,
+the audit trail and every machine-readable field are unchanged — only the
+display string changes. Set `SOFT_REFUSAL_ENABLED=0` to restore the exact
+pre-2026-10-23 wording. The console still renders its structural `[إحالة]`
+line from the `referral` payload, so a brief, accepted duplication may appear.
+
 **(c) answered** — validated, cited claims:
 
 ```json

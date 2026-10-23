@@ -296,6 +296,14 @@ SUFFICIENCY_FIELDS_ENABLED = os.getenv("SUFFICIENCY_FIELDS_ENABLED", "1") == "1"
 # always-answer behavior.
 ANSWER_SUFFICIENCY_COMMITMENT = os.getenv("ANSWER_SUFFICIENCY_COMMITMENT", "1") == "1"
 
+# Soft refusals (owner decision 2026-10-23, «كثيرا ما يكون الرد قاسيا»): when a
+# refusal carries a referral (clarifications / missing requirements) or an
+# understood-as concept, the human-facing `answer` opens with a softer bridge
+# and quotes them, instead of the bare reason sentence. Applies to EVERY
+# refusal reason; reason codes, the referral payload and the audit trail are
+# unchanged. SOFT_REFUSAL_ENABLED=0 restores the exact pre-2026-10-23 wording.
+SOFT_REFUSAL_ENABLED = os.getenv("SOFT_REFUSAL_ENABLED", "1") == "1"
+
 # Phase 8 (2026-10-02, owner directives): intelligent DEMAND INTERROGATION.
 # When a question is insufficient (غير كافٍ) AND nothing covers it, ONE
 # bounded call through the answer model re-expresses the request as the

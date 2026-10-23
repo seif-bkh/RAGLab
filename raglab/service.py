@@ -1032,18 +1032,22 @@ def create_app(profile: dict | None = None, *, generator=None,
                 # tied to evidence absence and carries a referral (the
                 # missing requirements + clarifications).
                 import decompose
-                from answer import refusal_message
+                from answer import compose_refusal
                 d = decompose.decompose(question)
                 language = state_box.get("language") or "ar"
+                # The referral is built first; the human-facing soft refusal
+                # text is composed only once referral + understood_as are
+                # final (owner decision 2026-10-23).
+                referral = {"missing_requirements": missing,
+                            "clarifications": d["clarifications"]}
                 refusal = {"status": "refused", "reason": "evidence_insufficient",
-                        "answer": refusal_message("evidence_insufficient", language),
+                        "answer": "",
                         "claims": [], "sources": [], "model": "(none — refused before generation)",
                         "language": language, "validation_ok": True, "cached": False,
                         "seconds": 0.0,
                         "refusal_reason": s["reason"],
                         "requirements_missing": missing,
-                        "referral": {"missing_requirements": missing,
-                                     "clarifications": d["clarifications"]}}
+                        "referral": referral}
                 if interrogation is not None:
                     # still insufficient after the paraphrase — the honest
                     # refusal, but the referral carries what the
@@ -1058,10 +1062,15 @@ def create_app(profile: dict | None = None, *, generator=None,
                         "confidence": interrogation["confidence"],
                         "seconds": state_box["interrogation_seconds"]}
                     if interrogation["topics"]:
-                        refusal["referral"]["clarifications"] = [
+                        referral["clarifications"] = [
                             *d["clarifications"],
                             "أقرب مواضيع المدونة لطلبك: "
                             + "؛ ".join(interrogation["topics"][:2])]
+                refusal["answer"] = compose_refusal(
+                    "evidence_insufficient", language,
+                    referral=referral,
+                    understood_as=refusal.get("understood_as"),
+                    enabled=getattr(local, "SOFT_REFUSAL_ENABLED", True))
                 return refusal
             # PARTIAL: some requirements are covered — one bounded
             # regeneration answers ONLY the covered micro-questions, and the

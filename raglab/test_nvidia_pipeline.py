@@ -3247,6 +3247,123 @@ class RefusalMessageByReasonTest(unittest.TestCase):
                          refusal_message("insufficient_evidence", "ar"))
 
 
+class SoftRefusalWordingTest(unittest.TestCase):
+    """2026-10-23 owner decision: soften the refusal wording when the payload
+    carries a referral or an understood-as concept; keep the legacy sentence
+    otherwise. Reason codes, referral structure and the audit trail are
+    untouched, and SOFT_REFUSAL_ENABLED=0 restores the old text exactly."""
+
+    REASONS = ("private_or_live_request", "no_context", "evidence_insufficient",
+               "insufficient_evidence", "unsourced_number", "invalid_output")
+
+    def test_disabled_returns_legacy_text_for_every_reason_and_language(self):
+        from answer import compose_refusal, refusal_message
+        for reason in self.REASONS:
+            for lang in ("ar", "fr", "en"):
+                self.assertEqual(
+                    compose_refusal(reason, lang, enabled=False),
+                    refusal_message(reason, lang),
+                    f"{reason}/{lang}")
+
+    def test_no_referral_and_no_concept_returns_legacy_text(self):
+        from answer import compose_refusal, refusal_message
+        for reason in self.REASONS:
+            self.assertEqual(
+                compose_refusal(reason, "ar", enabled=True),
+                refusal_message(reason, "ar"))
+            self.assertEqual(
+                compose_refusal(reason, "ar", referral={},
+                                understood_as="  ", enabled=True),
+                refusal_message(reason, "ar"))
+
+    def test_referral_branch_quotes_clarifications_in_three_languages(self):
+        from answer import compose_refusal
+        referral = {"missing_requirements": ["wide_evidence"],
+                    "clarifications": ["أقرب مواضيع المدونة: الفصل 11"]}
+        ar = compose_refusal("evidence_insufficient", "ar",
+                             referral=referral, enabled=True)
+        fr = compose_refusal("evidence_insufficient", "fr",
+                             referral=referral, enabled=True)
+        en = compose_refusal("evidence_insufficient", "en",
+                             referral=referral, enabled=True)
+        self.assertIn("أقرب مواضيع المدونة: الفصل 11", ar)
+        self.assertIn("أقرب ما فيها", ar)
+        self.assertIn("éléments les plus proches", fr)
+        self.assertIn("closest material is", en)
+        # the soft bridge replaces rather than appends the harsh base sentence
+        self.assertNotEqual(
+            ar, __import__("answer").refusal_message(
+                "evidence_insufficient", "ar"))
+
+    def test_missing_requirements_used_when_no_clarifications(self):
+        from answer import compose_refusal
+        out = compose_refusal(
+            "evidence_insufficient", "ar",
+            referral={"missing_requirements": ["procedural_evidence"],
+                      "clarifications": []}, enabled=True)
+        self.assertIn("procedural_evidence", out)
+        self.assertIn("أقرب ما فيها", out)
+
+    def test_concept_only_branch_quotes_understood_as(self):
+        from answer import compose_refusal
+        ar = compose_refusal("evidence_insufficient", "ar",
+                             understood_as="من هو المضارب بالعمل؟", enabled=True)
+        self.assertEqual(
+            ar, "إن كنت تقصد «من هو المضارب بالعمل؟»، فإني لا أملك جوابًا صريحًا.")
+        fr = compose_refusal("evidence_insufficient", "fr",
+                             understood_as="Qui peut être mudarib ?", enabled=True)
+        self.assertIn("Si vous vouliez dire", fr)
+        en = compose_refusal("evidence_insufficient", "en",
+                             understood_as="Who may be the working partner?",
+                             enabled=True)
+        self.assertIn("If you meant", en)
+
+    def test_referral_takes_precedence_over_concept(self):
+        from answer import compose_refusal
+        out = compose_refusal(
+            "evidence_insufficient", "ar",
+            referral={"missing_requirements": [],
+                      "clarifications": ["إحالة واحدة"]},
+            understood_as="مفهوم آخر", enabled=True)
+        self.assertIn("إحالة واحدة", out)
+        self.assertNotIn("مفهوم آخر", out)
+
+    def test_soft_text_never_blames_personal_accounts(self):
+        """The needle guard from RefusalMessageByReasonTest extends to the
+        soft output: a corpus-coverage refusal must never read as an
+        account/credentials refusal."""
+        from answer import compose_refusal
+        needles = ("الحسابات", "comptes", "accounts", "كلمات",
+                   "identifiants", "credentials")
+        for lang in ("ar", "fr", "en"):
+            text = compose_refusal(
+                "insufficient_evidence", lang,
+                referral={"missing_requirements": ["wide_evidence"],
+                          "clarifications": ["x"]}, enabled=True)
+            for needle in needles:
+                self.assertNotIn(needle, text, f"{lang}/{needle}")
+
+    def test_unknown_language_falls_back_to_english_bridge(self):
+        from answer import compose_refusal
+        out = compose_refusal(
+            "evidence_insufficient", "de",
+            referral={"missing_requirements": [],
+                      "clarifications": ["hinweis"]}, enabled=True)
+        self.assertIn("closest material is", out)
+
+    def test_cfg_wrapper_reads_the_flag(self):
+        from answer import soft_refusal_message, refusal_message
+        on = SimpleNamespace(SOFT_REFUSAL_ENABLED=True)
+        off = SimpleNamespace(SOFT_REFUSAL_ENABLED=False)
+        referral = {"missing_requirements": [], "clarifications": ["مرجع"]}
+        self.assertIn("مرجع", soft_refusal_message(
+            on, "evidence_insufficient", "ar", referral=referral))
+        self.assertEqual(
+            soft_refusal_message(off, "evidence_insufficient", "ar",
+                                 referral=referral),
+            refusal_message("evidence_insufficient", "ar"))
+
+
 class DiagBridgeTest(unittest.TestCase):
     """diag_bridge.verdict — the pure verdict logic of the remote bridge
     diagnostic (the owner's duplicated-index case: df guard blocks the

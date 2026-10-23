@@ -97,6 +97,76 @@ def refusal_message(reason: str | None, language: str) -> str:
     an unknown language falls back to English then Arabic)."""
     table = REFUSAL_MESSAGES.get(reason or "", REFUSALS)
     return table.get(language) or table.get("en") or table.get("ar") or ""
+
+
+# Soft-refusal bridges (owner decision 2026-10-23, «كثيرا ما يكون الرد قاسيا,
+# فإذا توفرت الإحالة اذكرها، وإلا فأرسل إن كنت تقصد + مفهوم الطلب + فإني لا
+# أملك جوابا صريحا»). Applied to EVERY refusal reason, but only when the payload
+# actually carries a referral (clarifications / missing requirements) or an
+# understood-as concept; without them the reason-specific legacy sentence is
+# returned unchanged. Reason codes, the referral structure and audit fields
+# never change — only the human-facing `answer` string.
+SOFT_REFUSAL_BRIDGES: dict[str, dict[str, str]] = {
+    "referral": {
+        "ar": "لا أملك جوابًا صريحًا مدعومًا بالمستندات عن سؤالك، لكن أقرب ما فيها: {referral}",
+        "fr": "Je n’ai pas de réponse explicite fondée sur les documents, mais voici les éléments les plus proches : {referral}",
+        "en": "I don’t have an explicit document-backed answer, but the closest material is: {referral}",
+    },
+    "concept": {
+        "ar": "إن كنت تقصد «{concept}»، فإني لا أملك جوابًا صريحًا.",
+        "fr": "Si vous vouliez dire « {concept} », je n’ai pas de réponse explicite.",
+        "en": "If you meant “{concept}”, I don’t have an explicit answer.",
+    },
+}
+
+
+def _refusal_referral_text(referral: dict | None) -> str:
+    """Flatten a referral payload to one display string. Curated
+    clarifications win; when absent, the missing requirements name the gap."""
+    if not isinstance(referral, dict):
+        return ""
+    parts = [str(p) for p in (referral.get("clarifications") or [])
+             if str(p).strip()]
+    if not parts:
+        parts = [str(p) for p in (referral.get("missing_requirements") or [])
+                 if str(p).strip()]
+    return "؛ ".join(parts)
+
+
+def compose_refusal(reason: str | None, language: str, *,
+                    referral: dict | None = None,
+                    understood_as: str | None = None,
+                    enabled: bool = True) -> str:
+    """Human-facing refusal text for one reason.
+
+    enabled=False, or no referral and no concept -> the exact legacy
+    reason-specific sentence (refusal_message), so pre-2026-10-23 behavior is
+    fully reproducible with SOFT_REFUSAL_ENABLED=0. An unknown language falls
+    back to English like refusal_message does.
+    """
+    base = refusal_message(reason, language)
+    if not enabled:
+        return base
+    lang = (language or "ar").lower()[:2]
+    if lang not in REFUSALS:
+        lang = "en"
+    referral_text = _refusal_referral_text(referral)
+    if referral_text:
+        return SOFT_REFUSAL_BRIDGES["referral"][lang].format(
+            referral=referral_text)
+    concept = (understood_as or "").strip()
+    if concept:
+        return SOFT_REFUSAL_BRIDGES["concept"][lang].format(concept=concept)
+    return base
+
+
+def soft_refusal_message(cfg, reason: str | None, language: str, *,
+                         referral: dict | None = None,
+                         understood_as: str | None = None) -> str:
+    """cfg-aware wrapper: reads SOFT_REFUSAL_ENABLED from the live config."""
+    return compose_refusal(
+        reason, language, referral=referral, understood_as=understood_as,
+        enabled=getattr(cfg, "SOFT_REFUSAL_ENABLED", True))
 ERRORS = {
     "en": "The answer service is temporarily unavailable. No unverified answer was returned.",
     "fr": "Le service de réponse est temporairement indisponible. Aucune réponse non vérifiée n’a été fournie.",
@@ -385,7 +455,9 @@ def local_private_refusal(cfg, question, language=None):
             'cached': False, 'inference_performed': False, 'validation_ok': True,
             'provider_ok': True, 'seconds': 0, 'status': 'refused',
             'reason': 'private_or_live_request',
-            'answer': refusal_message('private_or_live_request', language)}
+            'answer': compose_refusal(
+                'private_or_live_request', language,
+                enabled=getattr(cfg, 'SOFT_REFUSAL_ENABLED', True))}
 
 
 def build_answer_generator(cfg, *, call_budget=1):
@@ -460,7 +532,9 @@ class AnswerGenerator:
         base["sources"] = sources
         if not sources:
             return {**base, "status": "refused", "reason": "no_context",
-                    "answer": refusal_message("no_context", language)}
+                    "answer": compose_refusal(
+                        "no_context", language,
+                        enabled=getattr(self.cfg, "SOFT_REFUSAL_ENABLED", True))}
         messages = answer_messages(question, language, sources, self.prompt_version)
         max_tokens = getattr(self.cfg, "ANSWER_MAX_TOKENS", 4096)
         key = fingerprint({"model": self.model, "prompt_version": self.prompt_version,
@@ -491,7 +565,9 @@ class AnswerGenerator:
             reply = response.get("text") if isinstance(response, dict) else None
             return {**base, "status": "refused", "reason": "unsourced_number",
                     "validation_ok": False,
-                    "answer": refusal_message("unsourced_number", language),
+                    "answer": compose_refusal(
+                        "unsourced_number", language,
+                        enabled=getattr(self.cfg, "SOFT_REFUSAL_ENABLED", True)),
                     "error": safe_error(exc),
                     # the model's reply, so the offending claim/number is visible
                     "raw_preview": str(reply or "")[:1200],
@@ -500,7 +576,9 @@ class AnswerGenerator:
         except (ValueError, KeyError, TypeError) as exc:
             reply = response.get("text") if isinstance(response, dict) else None
             return {**base, "status": "refused", "reason": "invalid_output", "validation_ok": False,
-                    "answer": refusal_message("invalid_output", language),
+                    "answer": compose_refusal(
+                        "invalid_output", language,
+                        enabled=getattr(self.cfg, "SOFT_REFUSAL_ENABLED", True)),
                     "error": safe_error(exc),
                     # Diagnostic only (nothing downstream parses it): 1200 chars is
                     # enough to see the claim(s) and the quote that broke membership,
@@ -516,7 +594,9 @@ class AnswerGenerator:
                            dict.fromkeys(e["source_id"] for e in c["evidence"])) for c in claims)
         return {**base, "status": "answered" if claims else "refused",
                 "reason": "supported" if claims else "insufficient_evidence",
-                "claims": claims, "answer": answer if claims else refusal_message("insufficient_evidence", language),
+                "claims": claims, "answer": answer if claims else compose_refusal(
+                    "insufficient_evidence", language,
+                    enabled=getattr(self.cfg, "SOFT_REFUSAL_ENABLED", True)),
                 "served_model": response.get("served_model"), "usage": response.get("usage", {}),
                 "seconds": response.get("seconds", 0.0)}
 
