@@ -1,0 +1,468 @@
+name: Large multilingual answer harness
+
+on:
+  push:
+    branches: ["arena/01a071ba-raglab", "arena/01a0741e-raglab"]
+    paths: ["raglab/benchmarks/hard_harness_plan.json"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+
+concurrency:
+  group: hard-harness-${{ github.ref }}
+  cancel-in-progress: true  # a newly versioned protocol replaces an obsolete run
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      phase: ${{ steps.plan.outputs.phase }}
+      key_secret: ${{ steps.plan.outputs.key_secret }}
+      sources_run: ${{ steps.plan.outputs.sources_run }}
+      dataset_run: ${{ steps.plan.outputs.dataset_run }}
+      resume_run: ${{ steps.plan.outputs.resume_run }}
+      authors_run: ${{ steps.plan.outputs.authors_run }}
+      predictions_run: ${{ steps.plan.outputs.predictions_run }}
+      parallelism: ${{ steps.plan.outputs.parallelism }}
+      candidate_key_secret: ${{ steps.plan.outputs.candidate_key_secret }}
+      grader_key_secret: ${{ steps.plan.outputs.grader_key_secret }}
+      candidate_parallelism: ${{ steps.plan.outputs.candidate_parallelism }}
+      author_key_secrets: ${{ steps.plan.outputs.author_key_secrets }}
+      answer_shard_list: ${{ steps.plan.outputs.answer_shard_list }}
+      author_shard_order: ${{ steps.plan.outputs.author_shard_order }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          HAS_GEMINI_KEY: ${{ secrets.GEMINI_API_KEY != '' }}
+          HAS_GOOGLE_KEY: ${{ secrets.GOOGLE_API_KEY != '' }}
+        run: |
+          python - <<'PY'
+          import json, os
+          p=json.load(open('raglab/benchmarks/hard_harness_plan.json'))
+          assert p['phase'] in {'sources','author','compile','evaluate','grade'}
+          if p['llm']['provider']=='xkiro':
+              assert p['llm']['model']=='qwen/qwen3.8-max:free'
+              assert p['llm']['credential_secret'] in {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'}
+          else:
+              assert p['llm']['provider']=='google'
+              assert p['google_fallback_authorized'] and p['google_fallback_active']
+              assert p['llm']['free_tier_project_confirmed'] is True
+              assert p['llm']['model'] in {'gemini-3.1-flash-lite','gemini-3.5-flash'}
+              assert p['llm']['credential_secret'] in {'GEMINI_API_KEY','GOOGLE_API_KEY'}
+          key_secret=p['llm']['credential_secret']
+          if p['llm']['provider']=='google':
+              aliases=p['llm'].get('credential_aliases',[key_secret])
+              assert set(aliases) <= {'GEMINI_API_KEY','GOOGLE_API_KEY'}
+              available={'GEMINI_API_KEY':os.environ.get('HAS_GEMINI_KEY')=='true','GOOGLE_API_KEY':os.environ.get('HAS_GOOGLE_KEY')=='true'}
+              key_secret=next((name for name in aliases if available[name]),key_secret)
+          candidate=p.get('candidate_llm',p['llm'])
+          assert candidate['provider']=='xkiro' and candidate['model']=='qwen/qwen3.8-max:free'
+          assert candidate['credential_secret'] in {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'}
+          # The judging role may sit on a third provider on purpose: the answerer must not
+          # grade itself, and a free-tier ceiling that blocks grading must not force the
+          # candidate model to be swapped. Gateway slugs are approved one by one.
+          grader=p.get('grader_llm',p['llm'])
+          if grader['provider']=='experiential':
+              assert grader['model']=='glm-5.3-flash'
+              assert grader['credential_secret']=='EXPERIENTIAL_API_KEY'
+              assert grader.get('credits_acknowledged') is True, 'Experiential Labs bills tokens'
+          # A free-tier key is latency-bound per worker, not rate-bound at low
+          # fan-out; several shards may share it because a 429 is paced in-client.
+          parallelism=int(p.get('author_parallelism', 1 if p['llm']['provider']=='google' else 2))
+          assert 1 <= parallelism <= 4
+          # A reference role may use another provider from the candidate, but only
+          # between the two approved free profiles; nothing else is accepted.
+          author=p.get('author_llm',p['llm'])
+          for name,profile in (('author_llm',author),('llm',p['llm']),('candidate_llm',candidate),
+                               ('grader_llm',grader)):
+              if profile['provider']=='xkiro':
+                  assert profile['model']=='qwen/qwen3.8-max:free', (name,profile['model'])
+                  assert profile['credential_secret'] in {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY'}, name
+              elif profile['provider']=='experiential':
+                  assert profile['model']=='glm-5.3-flash', name
+                  assert profile['credential_secret']=='EXPERIENTIAL_API_KEY', name
+              else:
+                  assert profile['provider']=='google', name
+                  assert p['google_fallback_authorized'] and p['google_fallback_active']
+                  assert profile.get('free_tier_project_confirmed') is True, name
+                  assert profile['model'] in {'gemini-3.1-flash-lite','gemini-3.5-flash'}, name
+          counts=p['counts_per_language']
+          assert sum(counts.values())==int(p['questions_per_language'])
+          base=counts['supported']+counts['out_of_scope']+counts['insufficient_information']
+          derived=-(-3*int(p['questions_per_language'])//int(p['answer_shard_size']))
+          assert int(p['answer_shards'])==derived, f'answer_shards must be {derived}'
+          # The authoring step needs one named secret per provider it may use, so a
+          # role cannot borrow another role's credential.
+          secrets=sorted({candidate['credential_secret'],p['llm']['credential_secret'],author['credential_secret']})
+          assert set(secrets) <= {'XKIRO_API_KEY_JINKO','XKIRO_API_KEY','GEMINI_API_KEY','GOOGLE_API_KEY'}
+          fields={'phase':p['phase'],'key_secret':key_secret,'parallelism':str(parallelism),
+                  'candidate_key_secret':candidate['credential_secret'],'candidate_parallelism':'2',
+                  'grader_key_secret':grader['credential_secret'],
+                  'author_key_secrets':','.join(secrets),
+                  'answer_shard_list':__import__('json').dumps(list(range(derived)))}
+          # Negative families (out of scope, insufficient evidence) live in the last
+          # shards and none of them had been reached, so least-progressed shards are
+          # queued first instead of spending every run on supported families.
+          target=int(p['author_shards']); per=-(-900//target)
+          accepted={}
+          try:
+              accepted={int(k):int(v) for k,v in json.load(open(
+                  'raglab/benchmarks/hard_harness_accepted/manifest.json')).get('shards',{}).items()}
+          except FileNotFoundError:
+              pass
+          order=sorted(range(target),key=lambda shard:(accepted.get(shard,0)>=per,accepted.get(shard,0),-shard))
+          # Plain integers, not objects: a matrix array of objects would bind matrix.shard
+          # to the whole object and every per-shard path/name would collapse to "Object".
+          fields['author_shard_order']=json.dumps(order)
+          for name in ('min_interval_seconds','max_retry_delay_seconds','quota_retry_attempts'):
+              if name in p['llm'].get('pacing',{}): assert float(p['llm']['pacing'][name]) > 0
+          for key in ('sources_run','dataset_run','resume_run','authors_run','predictions_run'):
+              value=str(p.get(key,'')); assert not value or value.isdigit(); fields[key]=value
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+              for k,v in fields.items(): f.write(f'{k}={v}\n')
+          PY
+
+  sources:
+    if: needs.plan.outputs.phase == 'sources'
+    needs: plan
+    name: Audit original source pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -r raglab/requirements-harness.txt
+      - run: python -m compileall -q raglab && cd raglab && python -m unittest -v test_nvidia_pipeline test_hard_harness
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/hard_harness/
+          key: hard-harness-v1-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: hard-harness-v1-${{ github.ref_name }}-
+      - name: Read original PDFs and audit references
+        env:
+          HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.key_secret] }}
+          HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.key_secret }}
+          PYTHONUNBUFFERED: "1"
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
+        run: python raglab/hard_harness_main.py sources
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache/hard_harness/
+          key: hard-harness-v1-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Publish source checkpoints
+        if: always()
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: python raglab/hard_harness_main.py publish --phase sources
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hard-harness-sources
+          path: raglab/results/hard_harness/
+          retention-days: 30
+          if-no-files-found: warn
+
+  author:
+    if: needs.plan.outputs.phase == 'author'
+    needs: plan
+    name: Author and audit 100 paired families
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.plan.outputs.parallelism) }}
+      matrix:
+        # Least-progressed first (plan output), so a bounded run works on what is
+        # missing rather than on what is already nearly finished.
+        shard: ${{ fromJSON(needs.plan.outputs.author_shard_order) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -r raglab/requirements-harness.txt
+      - name: Download audited original sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ needs.plan.outputs.sources_run }}
+        run: gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name hard-harness-sources --dir raglab/results/hard_harness
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/hard_harness/
+          key: hard-author-v1-${{ github.ref_name }}-${{ matrix.shard }}-${{ github.run_id }}
+          restore-keys: hard-author-v1-${{ github.ref_name }}-${{ matrix.shard }}-
+      - name: Recover audited families from the previous run if cache was evicted
+        if: needs.plan.outputs.resume_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME_RUN: ${{ needs.plan.outputs.resume_run }}
+        run: |
+          DIR=$(printf '.cache/hard_harness/artifact_resume/%s/author_%02d' "$RESUME_RUN" ${{ matrix.shard }})
+          gh run download "$RESUME_RUN" --repo "$GITHUB_REPOSITORY" --name "hard-harness-author-${{ matrix.shard }}" --dir "$DIR" || echo 'Previous shard artifact unavailable; request caches are still retained.'
+      - id: paths
+        run: echo "output_dir=$(printf 'raglab/results/hard_harness/author_%02d' ${{ matrix.shard }})" >> "$GITHUB_OUTPUT"
+      - name: Check for a shared quota pause before authoring
+        id: gate
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: python raglab/hard_harness_main.py gate --phase author --shard ${{ matrix.shard }}
+      - name: Author references without candidate answers
+        id: work
+        if: steps.gate.outputs.run == 'true'
+        env:
+          HARNESS_DEADLINE_MINUTES: "45"
+          HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.key_secret] }}
+          HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.key_secret }}
+          XKIRO_API_KEY_JINKO: ${{ secrets.XKIRO_API_KEY_JINKO }}
+          XKIRO_API_KEY: ${{ secrets.XKIRO_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
+        run: |
+          set +e
+          python raglab/hard_harness_main.py author --shard ${{ matrix.shard }}
+          RESULT=$?
+          python raglab/hard_harness_main.py record-pause --phase author --shard ${{ matrix.shard }}
+          exit "$RESULT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.work.outputs.paused == 'true'
+        with:
+          name: hard-harness-pause-author-${{ matrix.shard }}
+          path: ${{ steps.paths.outputs.output_dir }}/manifest.json
+          retention-days: 30
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache/hard_harness/
+          key: hard-author-v1-${{ github.ref_name }}-${{ matrix.shard }}-${{ github.run_id }}
+      - name: Publish audited draft checkpoint
+        if: always()
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: python raglab/hard_harness_main.py publish --phase $(printf 'author_%02d' ${{ matrix.shard }})
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hard-harness-author-${{ matrix.shard }}
+          path: ${{ steps.paths.outputs.output_dir }}/
+          retention-days: 30
+          if-no-files-found: warn
+
+  compile:
+    if: always() && needs.plan.result == 'success' && ((needs.plan.outputs.phase == 'author' && needs.author.result == 'success') || needs.plan.outputs.phase == 'compile')
+    needs: [plan, author]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -r raglab/requirements-harness.txt
+      - name: Recover source and author shards
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ needs.plan.outputs.sources_run }}
+          AUTHORS_RUN: ${{ needs.plan.outputs.authors_run || github.run_id }}
+        run: |
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name hard-harness-sources --dir raglab/results/hard_harness
+          for SHARD in $(seq 0 8); do
+            DIR=$(printf 'raglab/results/hard_harness/author_%02d' "$SHARD")
+            gh run download "$AUTHORS_RUN" --repo "$GITHUB_REPOSITORY" --name "hard-harness-author-$SHARD" --dir "$DIR"
+          done
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/hard_harness/
+          key: hard-compile-v1-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: hard-compile-v1-${{ github.ref_name }}-
+      - name: Audit negatives and freeze separate question/reference files
+        env:
+          HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.key_secret] }}
+          HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.key_secret }}
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
+          PYTHONUNBUFFERED: "1"
+        run: python raglab/hard_harness_main.py compile-dataset
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache/hard_harness/
+          key: hard-compile-v1-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Publish dataset checkpoints
+        if: always()
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: python raglab/hard_harness_main.py publish --phase dataset
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hard-harness-questions
+          path: raglab/results/hard_harness/dataset/public/
+          retention-days: 30
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hard-harness-answer-keys
+          path: raglab/results/hard_harness/dataset/references/
+          retention-days: 30
+          if-no-files-found: warn
+
+  retrieval:
+    if: needs.plan.outputs.phase == 'evaluate'
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -r raglab/requirements-harness.txt
+      - name: Download questions ONLY (no answer key)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATASET_RUN: ${{ needs.plan.outputs.dataset_run }}
+        run: gh run download "$DATASET_RUN" --repo "$GITHUB_REPOSITORY" --name hard-harness-questions --dir raglab/results/hard_harness/dataset/public
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/hard_harness/
+          key: hard-retrieval-v1-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: hard-retrieval-v1-${{ github.ref_name }}-
+      - name: Native Nemotron query retrieval, never oracle context
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
+          PYTHONUNBUFFERED: "1"
+        run: python raglab/hard_harness_main.py retrieve
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache/hard_harness/
+          key: hard-retrieval-v1-${{ github.ref_name }}-${{ github.run_id }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hard-harness-retrieval
+          path: raglab/results/hard_harness/retrieval/
+          retention-days: 30
+
+  answer:
+    needs: [plan, retrieval]
+    name: Answer 100 questions without access to the key
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.plan.outputs.candidate_parallelism) }}
+      matrix:
+        # Sized from the frozen dataset version, so a scaled pass never spawns 30
+        # workers that each fail to find their shard file.
+        shard: ${{ fromJSON(needs.plan.outputs.answer_shard_list) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -r raglab/requirements-harness.txt
+      - name: Download retrieved public inputs ONLY
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name hard-harness-retrieval --dir raglab/results/hard_harness/retrieval
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/hard_harness/
+          key: hard-answer-v1-${{ github.ref_name }}-${{ matrix.shard }}-${{ github.run_id }}
+          restore-keys: hard-answer-v1-${{ github.ref_name }}-${{ matrix.shard }}-
+      - id: paths
+        run: echo "output_dir=$(printf 'raglab/results/hard_harness/predictions_%02d' ${{ matrix.shard }})" >> "$GITHUB_OUTPUT"
+      - name: Check for a shared quota pause before answering
+        id: gate
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: python raglab/hard_harness_main.py gate --phase predict --shard ${{ matrix.shard }}
+      - name: Run candidate; completed outputs (including failures) are checkpointed
+        id: work
+        if: steps.gate.outputs.run == 'true'
+        env:
+          HARNESS_DEADLINE_MINUTES: "32"
+          HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.candidate_key_secret] }}
+          HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.candidate_key_secret }}
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set +e
+          python raglab/hard_harness_main.py predict --shard ${{ matrix.shard }}
+          RESULT=$?
+          python raglab/hard_harness_main.py record-pause --phase predict --shard ${{ matrix.shard }}
+          exit "$RESULT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.work.outputs.paused == 'true'
+        with:
+          name: hard-harness-pause-predict-${{ matrix.shard }}
+          path: ${{ steps.paths.outputs.output_dir }}/manifest.json
+          retention-days: 30
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache/hard_harness/
+          key: hard-answer-v1-${{ github.ref_name }}-${{ matrix.shard }}-${{ github.run_id }}
+      - name: Publish answer checkpoint
+        if: always()
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: python raglab/hard_harness_main.py publish --phase $(printf 'predictions_%02d' ${{ matrix.shard }})
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hard-harness-predictions-${{ matrix.shard }}
+          path: ${{ steps.paths.outputs.output_dir }}/
+          retention-days: 30
+          if-no-files-found: warn
+
+  grade:
+    if: always() && needs.plan.result == 'success' && ((needs.plan.outputs.phase == 'evaluate' && needs.answer.result == 'success') || needs.plan.outputs.phase == 'grade')
+    needs: [plan, answer]
+    name: Compare against frozen separate reference answers
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -r raglab/requirements-harness.txt
+      - name: Download answer keys (grader only) and predictions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATASET_RUN: ${{ needs.plan.outputs.dataset_run }}
+          PREDICTIONS_RUN: ${{ needs.plan.outputs.predictions_run || github.run_id }}
+        run: |
+          gh run download "$DATASET_RUN" --repo "$GITHUB_REPOSITORY" --name hard-harness-answer-keys --dir raglab/results/hard_harness/dataset/references
+          for SHARD in $(echo '${{ needs.plan.outputs.answer_shard_list }}' | tr -d '[] ' | tr ',' ' '); do
+            DIR=$(printf 'raglab/results/hard_harness/predictions_%02d' "$SHARD")
+            gh run download "$PREDICTIONS_RUN" --repo "$GITHUB_REPOSITORY" --name "hard-harness-predictions-$SHARD" --dir "$DIR"
+          done
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/hard_harness/
+          key: hard-grade-v1-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: hard-grade-v1-${{ github.ref_name }}-
+      - name: Calibrated semantic comparison; never exact-string grading alone
+        env:
+          HARNESS_DEADLINE_MINUTES: "105"
+          HARNESS_API_KEY: ${{ secrets[needs.plan.outputs.grader_key_secret] }}
+          HARNESS_CREDENTIAL_ALIAS: ${{ needs.plan.outputs.grader_key_secret }}
+          TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/hard_harness/tokenizer
+          PYTHONUNBUFFERED: "1"
+        run: python raglab/hard_harness_main.py grade
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache/hard_harness/
+          key: hard-grade-v1-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Publish comparison checkpoint
+        if: always()
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: python raglab/hard_harness_main.py publish --phase grading
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hard-harness-comparison
+          path: raglab/results/hard_harness/grading/
+          retention-days: 30
+          if-no-files-found: warn

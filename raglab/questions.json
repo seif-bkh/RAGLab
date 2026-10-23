@@ -1,0 +1,33 @@
+{
+  "description": "Evaluation questions for RAGLab, derived from the two fictional Atlas Bank product sheets (French + Arabic) in data/. All numbers, products and banks are invented.",
+  "note": "A case is correct when the top-k results contain a chunk matching expected_substring (normalized, language-aware via expected_lang). Out-of-scope cases have no expected match.",
+  "cases": [
+    {
+      "id": "q11",
+      "question": "ما هو المبلغ الأدنى لفتح دفتر التوفير أطلس؟",
+      "language": "ar",
+      "category": "cross-lingual",
+      "expected_substring": "100",
+      "expected_lang": "fr"
+    },
+    {
+      "id": "q14",
+      "question": "How do I change my online banking password?",
+      "language": "en",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q15",
+      "question": "Quels sont les horaires d'ouverture de l'agence de Marseille ?",
+      "language": "fr",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q16",
+      "question": "كيف أتقدم بطلب للحصول على قرض عقاري؟",
+      "language": "ar",
+      "category": "out-of-scope"
+    }
+  ],
+  "_comment": "Legacy early set, trimmed 2026-09-28 to the docs/-corpus cases (the 13 fictional-bank cases were removed with their corpora)."
+}

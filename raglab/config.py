@@ -1,0 +1,354 @@
+"""config.py — every knob of the lab lives here, with no hidden defaults.
+
+Loads .env (if present). The supported CLI uses only Nemotron embeddings and
+xKiro Qwen answers. Legacy constants remain for historical offline regressions;
+they are not selectable through the supported CLI.
+"""
+
+import os
+from pathlib import Path
+
+from pipeline_policy import ANSWER_MODEL as SELECTED_ANSWER_MODEL, ANSWER_PROVIDER as SELECTED_ANSWER_PROVIDER
+
+# Load .env from this project folder. Missing .env is fine: we just fail
+# later, loudly, when a command actually needs a key.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    print("[config] python-dotenv not installed; ignoring .env (install requirements.txt)")
+
+
+# ---------------------------------------------------------------------------
+# Paths (relative to this project folder)
+# ---------------------------------------------------------------------------
+PROJECT_DIR = Path(__file__).resolve().parent
+DATA_DIR = PROJECT_DIR / "data"
+CHROMA_DIR = PROJECT_DIR / "chroma_db"
+RESULTS_DIR = PROJECT_DIR / "results"
+QUESTIONS_FILE = PROJECT_DIR / "questions.json"
+
+CHROMA_COLLECTION_NAME = "raglab_docs"
+
+# ---------------------------------------------------------------------------
+# Embedding provider
+# ---------------------------------------------------------------------------
+# Runtime is pinned to NVIDIA Nemotron; CLI rejects retired providers/settings.
+# The following generic model is retained only for historical offline utilities.
+# `gemini-embedding-2` is the current multilingual model (100+ languages) and
+# works with AI Studio keys. `gemini-embedding-001` (text-only, older) also
+# works; the embedder handles both automatically.
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "nvidia")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
+
+# Jina embeddings — EMBEDDING_PROVIDER = "jina" -------------------------------
+# Hosted multilingual embeddings via https://api.jina.ai/v1/embeddings
+# (needs JINA_API_KEY; raw HTTPS call, no SDK dependency). The model supports
+# 100+ languages incl. Arabic (and text+image; we use text inputs only).
+# Jina v5 tasks map to our inputs automatically: retrieval.passage for
+# documents, retrieval.query for questions. Output is L2-normalized by the API
+# (normalized=true) and always an object per input (never truncated).
+JINA_EMBEDDING_MODEL = os.getenv("JINA_EMBEDDING_MODEL",
+                                 "jina-embeddings-v5-omni-small")
+# Known embedding dimension for the sanity check. 0 = auto-detect from the
+# first real embedding (recommended).
+JINA_EMBEDDING_DIM = int(os.getenv("JINA_EMBEDDING_DIM", "0") or 0)
+# API base (override only for proxies/mirrors).
+JINA_EMBEDDING_BASE_URL = os.getenv("JINA_EMBEDDING_BASE_URL",
+                                    "https://api.jina.ai/v1/embeddings")
+# Batch inputs per request (Jina accepts many texts in one call; a bigger
+# batch means fewer requests per ingest, so a per-minute quota suffocates
+# less often).
+JINA_EMBEDDING_BATCH_SIZE = int(os.getenv("JINA_EMBEDDING_BATCH_SIZE", "64"))
+# Provider-scoped cache: Jina vectors live in a different space than Gemini,
+# so the A/B runs never clobber each other's resumable caches.
+JINA_EMBEDDING_CACHE_PATH = PROJECT_DIR / os.getenv(
+    "JINA_EMBEDDING_CACHE_FILE", "embeddings_cache_jina.json")
+
+# NVIDIA NIM: exact requested model IDs. No catalog-driven substitutions.
+# Hosted Nemotron-3-Embed-1B accepts passage/query and native 2048 dimensions.
+# Reduced dimensions from the model card are NOT supported by this hosted API.
+NVIDIA_EMBEDDING_MODEL = os.getenv("NVIDIA_EMBEDDING_MODEL",
+                                  "nvidia/nemotron-3-embed-1b")
+NVIDIA_EMBEDDING_DIM = int(os.getenv("NVIDIA_EMBEDDING_DIM", "0") or 0)
+NVIDIA_EMBEDDING_BASE_URL = os.getenv(
+    "NVIDIA_EMBEDDING_BASE_URL", "https://integrate.api.nvidia.com/v1/embeddings")
+NVIDIA_EMBEDDING_BATCH_SIZE = int(os.getenv("NVIDIA_EMBEDDING_BATCH_SIZE", "32"))
+NVIDIA_EMBEDDING_CACHE_PATH = PROJECT_DIR / os.getenv(
+    "NVIDIA_EMBEDDING_CACHE_FILE", "embeddings_cache_nvidia.json")
+NVIDIA_TRANSLATION_MODEL = os.getenv("NVIDIA_TRANSLATION_MODEL",
+                                    "moonshotai/kimi-k3")
+# Empty by default. Benchmarks always disable fallback: an unavailable model
+# is an incomplete experiment, never another model's score under its name.
+NVIDIA_TRANSLATION_FALLBACK_MODELS = os.getenv("NVIDIA_TRANSLATION_FALLBACK_MODELS", "")
+NVIDIA_TRANSLATION_BASE_URL = os.getenv(
+    "NVIDIA_TRANSLATION_BASE_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
+NVIDIA_API_TIMEOUT = float(os.getenv("NVIDIA_API_TIMEOUT", "180"))
+NVIDIA_API_ATTEMPTS = int(os.getenv("NVIDIA_API_ATTEMPTS", "2"))
+NVIDIA_CHAT_STREAM = os.getenv("NVIDIA_CHAT_STREAM", "1") == "1"
+NVIDIA_MIN_INTERVAL = float(os.getenv("NVIDIA_MIN_INTERVAL", "1.6"))
+NVIDIA_MAX_RETRY_DELAY = float(os.getenv("NVIDIA_MAX_RETRY_DELAY", "30"))
+
+# Local multilingual embeddings — EMBEDDING_PROVIDER = "huggingface" ----------
+# Fully offline: no API key, no daily quota, no cost. The model runs on YOUR
+# machine (CPU is fine). Recommended model: Qwen3-Embedding-0.6B (Apache-2.0,
+# 1024 dims, 32K context, 100+ languages including Arabic, ~640MB download;
+# multilingual-MTEB leader-class at laptop size, +8% over BGE-M3 at the same
+# parameter count). Battle-tested alternative: BAAI/bge-m3 (MIT, 1024 dims,
+# 100+ languages). Requires `pip install sentence-transformers` (see
+# requirements.txt — commented, like the other optional providers).
+HF_EMBEDDING_MODEL = os.getenv("HF_EMBEDDING_MODEL",
+                               "Qwen/Qwen3-Embedding-0.6B")
+# Device: "" = let sentence-transformers pick (CPU / CUDA / MPS / auto).
+HF_EMBEDDING_DEVICE = os.getenv("HF_EMBEDDING_DEVICE", "").strip()
+# Local inference batch size during ingestion (lower = less RAM).
+HF_EMBEDDING_BATCH_SIZE = int(os.getenv("HF_EMBEDDING_BATCH_SIZE", "8"))
+# Known embedding dimension, for the CI sanity check. 0 = auto-detect from
+# the loaded model (recommended).
+HF_EMBEDDING_DIM = int(os.getenv("HF_EMBEDDING_DIM", "0") or 0)
+# Query/document discriminative prompts (task instructions). Family-aware by
+# default and only when True: Qwen3 uses its built-in "query" prompt, BGE-M3
+# the retrieval instruction, E5 the "query:" / "passage:" prefixes. Set to
+# "false" to embed raw text (symmetric, sometimes better for short chunks).
+HF_EMBEDDING_USE_PROMPTS = os.getenv("HF_EMBEDDING_USE_PROMPTS",
+                                     "true").strip().lower() in \
+    {"1", "true", "yes", "on"}
+# Optional explicit overrides (applied when USE_PROMPTS=True and non-empty).
+HF_EMBEDDING_QUERY_PROMPT = os.getenv("HF_EMBEDDING_QUERY_PROMPT", "")
+HF_EMBEDDING_DOC_PROMPT = os.getenv("HF_EMBEDDING_DOC_PROMPT", "")
+
+
+def active_embedding_model() -> str:
+    """The model string actually in use for the configured provider.
+
+    Used everywhere an embedding model name is recorded (ingest metadata,
+    evaluation run config, cache identity) so a provider switch never labels
+    gems as the wrong model's vectors — embedding spaces are provider-specific
+    and switching requires a full re-ingest (--reset).
+    """
+    if (EMBEDDING_PROVIDER or "").strip().lower() in {
+            "huggingface", "hf", "sentence_transformers",
+            "sentence-transformers"}:
+        return HF_EMBEDDING_MODEL
+    if (EMBEDDING_PROVIDER or "").strip().lower() == "jina":
+        return JINA_EMBEDDING_MODEL
+    if (EMBEDDING_PROVIDER or "").strip().lower() == "nvidia":
+        return NVIDIA_EMBEDDING_MODEL
+    return EMBEDDING_MODEL
+
+# Gemini-specific knobs ------------------------------------------------------
+# Both Gemini embedding models default to 3072 dimensions. MRL lets you
+# truncate; Google recommends 768 / 1536 / 3072 (lower = smaller/faster,
+# nearly identical quality). Set to 0/None to use the model default (3072).
+# NOTE: embeddings produced with different dimensions are NOT comparable —
+# keep queries and documents on the same setting, and re-ingest after a change.
+GEMINI_OUTPUT_DIMENSIONALITY = 768
+
+# `gemini-embedding-2` does NOT accept task_type; Google recommends putting
+# task instructions in the prompt instead. When True the embedder prefixes:
+#   documents -> "title: none | text: ..."
+#   queries    -> "task: search result | query: ..."
+# Set False to send raw text (then documents and queries embed symmetrically).
+# `gemini-embedding-001` always uses task_type=RETRIEVAL_DOCUMENT/QUERY.
+GEMINI_USE_TASK_PROMPTS = True
+
+# Batch size sent to the provider per API call, and retry policy for rate limits.
+EMBEDDING_BATCH_SIZE = 16
+EMBEDDING_MAX_RETRIES = 5
+EMBEDDING_RETRY_BASE_DELAY = 2.0  # seconds, doubled after each failed attempt
+
+# Cache file for embeddings, keyed by sha256(model + chunk text), JSON on disk.
+EMBEDDING_CACHE_PATH = PROJECT_DIR / "embeddings_cache.json"
+
+# ---------------------------------------------------------------------------
+# Chunking
+# ---------------------------------------------------------------------------
+# Chunking strategy. 'size' is the historical behaviour (CHUNK_SIZE_TOKENS windows). 'manual' reads
+# raglab/benchmarks/chunk_maps/<document>.json: boundaries a reader reviewed against the document's own
+# structure, one subject per chunk, every character covered exactly once. It is off by default because a
+# map is a corpus *version* — retrieval, the citation contract and every published number depend on which
+# segmentation produced them, so switching is a deliberate act, and store.py's chunk fingerprint records
+# which maps were in force (a stale collection refuses to serve rather than mixing two segmentations).
+# 'restructure' is the current default strategy (see restructure.py):
+# Stage 1 semantic normalization of messy extraction -> clean hierarchical
+# Markdown, Stage 2 context enrichment (breadcrumb lines above sub-headings
+# and tables), Stage 3 recursive structural chunking over the separator list
+# ["\n# ", "\n## ", "\n### ", "\n\n", "\n", " "].
+CHUNKING_MODE = os.getenv("CHUNKING_MODE", "restructure").strip().lower()
+if CHUNKING_MODE not in {"size", "manual", "restructure"}:
+    raise ValueError('CHUNKING_MODE must be "size", "manual" or "restructure", '
+                     'got %r' % CHUNKING_MODE)
+# Stage 1 of restructure: repair visual-order (word-flipped) Arabic lines from
+# PDF extraction using a bigram plausibility scorer. Set 0 to keep raw order.
+RESTRUCTURE_RTL_REPAIR = os.getenv("RESTRUCTURE_RTL_REPAIR", "1")
+CHUNK_MAP_DIR = Path(os.getenv("CHUNK_MAP_DIR", str(PROJECT_DIR / "benchmarks" / "chunk_maps")))
+# A manual chunk larger than this is treated as a failed review, not a design choice.
+CHUNK_MAX_TOKENS = int(os.getenv("CHUNK_MAX_TOKENS", "900"))
+
+CHUNK_SIZE_TOKENS = int(os.getenv("CHUNK_SIZE_TOKENS", "220"))
+CHUNK_OVERLAP_TOKENS = int(os.getenv("CHUNK_OVERLAP_TOKENS", "40"))
+SPLIT_ON_HEADINGS_FIRST = True
+# Overlap is applied at SENTENCE boundaries (never mid-sentence): the tail of
+# a chunk is a list of whole trailing sentences, so the next chunk never opens
+# with an unreadable fragment. Set False to fall back to word-level overlap.
+CHUNK_OVERLAP_SENTENCE_AWARE = True
+
+# Tokenizer used by the chunker for counting ("cl100k_base" is the standard
+# choice for text-embedding-3-large; it handles Arabic, French and English).
+TOKENIZER_BACKEND = "tiktoken"
+TOKENIZER_MODEL = "cl100k_base"
+
+# ---------------------------------------------------------------------------
+# Storage / retrieval
+# ---------------------------------------------------------------------------
+# Boilerplate sections (document front-matter/title and legal/conditions
+# sections, tagged section_type by chunker.py) are retrieval magnets — they
+# mention product names, "fees", "rates" etc. without answering anything.
+# When True they are chunked (visible in `inspect`) but NOT stored, so they
+# cannot outrank real content. Set False to index everything.
+INDEX_EXCLUDE_BOILERPLATE = True
+STORE_BATCH_SIZE = 64          # records per chroma add() call
+RETRIEVAL_TOP_K = 5            # default for `query`
+RRF_RANK_CONSTANT = 60         # k used in reciprocal rank fusion: 1 / (k + rank)
+EVAL_TOP_K = 20                # how many hits evaluation records per question
+
+# Score-blend hybrid (`--hybrid-blend`): score = LAMBDA * cosine +
+# (1 - LAMBDA) * normalized BM25 (BM25 normalized by its own max per query
+# variant). 1.0 = pure vector; 0.0 = pure keyword. Dense similarity stays the
+# primary signal, BM25 boosts chunks sharing query tokens — the experiment
+# after RRF showed RRF trades hit@1 for hit@3/5, so the blend aims to keep
+# both.
+HYBRID_BLEND_LAMBDA = float(os.getenv("HYBRID_BLEND_LAMBDA", "0.7"))
+
+# BM25 sees ONLY the chunk text by default. The question often names the
+# source document ("BCT circular 2019-08", "the internal guide") while the
+# chunk text does not (the title lives in metadata/source), so keyword hits
+# miss the right document. When True, keyword_search appends the source file
+# name + heading to each corpus text — a cheap, powerful document cue.
+KEYWORD_SEARCH_INCLUDE_METADATA = os.getenv(
+    "KEYWORD_SEARCH_INCLUDE_METADATA", "true").strip().lower() in \
+    {"1", "true", "yes", "on"}
+
+# Tie-break policy for best_variant_merge when two DIFFERENT chunks each top
+# their own query variant (both relative_score == 1.0):
+#   - "variant_order": original-language variant first (old behavior; the
+#      translated champion is demoted even when it holds the answer);
+#   - "raw"          : highest raw score wins (fixed cross-lingual top-1 but
+#      reintroduced the same-language score bias and hurt verbatim hit@1);
+#   - "same_lang_margin": prefer the champion whose query language matches the
+#      chunk's language, then the champion with the biggest relative margin
+#      over its variant's second-best (a sharp answer beats a broad match).
+# CI measures all three with cached embeddings and keeps the best (reported).
+FUSION_TIE_BREAK = os.getenv("FUSION_TIE_BREAK", "same_lang_margin").strip()
+
+# ---------------------------------------------------------------------------
+# Query translation and optional grounded generation
+# ---------------------------------------------------------------------------
+QUERY_TRANSLATION_ENABLED = os.getenv(
+    "QUERY_TRANSLATION_ENABLED", "0").strip().lower() not in {"0", "false", "no", "off"}
+QUERY_TRANSLATION_PROVIDER = os.getenv("QUERY_TRANSLATION_PROVIDER", "nvidia").strip().lower()
+# Legacy Gemini provider remains available explicitly.
+QUERY_TRANSLATION_MODEL = os.getenv("QUERY_TRANSLATION_MODEL", "gemini-3.5-flash-lite")
+QUERY_TRANSLATION_FALLBACK_MODELS = os.getenv("QUERY_TRANSLATION_FALLBACK_MODELS", "gemini-3.6-flash")
+QUERY_TRANSLATION_CACHE_PATH = PROJECT_DIR / "translations_cache.json"
+QUERY_TRANSLATION_PROMPT = os.getenv("QUERY_TRANSLATION_PROMPT", "banking-v2")
+QUERY_TRANSLATION_STRICT = os.getenv("QUERY_TRANSLATION_STRICT", "0") == "1"
+QUERY_TRANSLATION_BATCH_SIZE = 8
+# best = original + translated variants with the legacy normalized score merge.
+# translated = corpus-language query only; original = no translation.
+QUERY_VARIANT_STRATEGY = os.getenv("QUERY_VARIANT_STRATEGY", "original")
+
+# Phase-3 intervention 2: governed institutional lexicon (raglab/lexicon.py) as a
+# deterministic query expansion BEFORE embedding and BM25. OFF by default until
+# the owner reviews the seed table; an empty/off lexicon reproduces the current
+# behaviour exactly. Separate from the retired translation path by construction.
+LEXICON_ENABLED = os.getenv("LEXICON_ENABLED", "") == "1"
+
+# Phase-3 intervention 3: deterministic feature-based reranker (raglab/rerank.py)
+# applied to the retrieved candidate pool BEFORE the top-k cut. ON by default
+# since 2026-10-01 (owner decision, after both measurements: deterministic arm
+# 62/82/87 -> 62/89/89, live same-run 69/78/84 -> 71/80/87 with fr preserved and
+# no verbatim/OOS regression — raglab/audits/PHASE3_INTERVENTIONS.md). It only
+# reorders retrieved candidates — it can never introduce unretrieved text.
+RERANK_ENABLED = os.getenv("RERANK_ENABLED", "1") == "1"
+# Phase-5 item 3: relational expansion under the declared intent policy.
+# Default OFF — activation is the owner's data-driven gate (the plan's item 6).
+RELATIONAL_EXPANSION_ENABLED = os.getenv("RELATIONAL_EXPANSION_ENABLED", "0") == "1"
+
+# Phase-5 item 5: sufficiency fields on POST /answer (additive-only, §2.7).
+# ACTIVATED BY THE OWNER 2026-10-02 (directive «شغلها») after the measured
+# trial (audits/PHASE7_EXPERIMENTS.md: local 20-question trial zero false
+# refusals; live run 36939129036 refused-before-model 11/50 with the
+# refusals concentrated on OOS + retrieval-miss questions). Default ON:
+# /answer carries evidence_status / requirements_covered /
+# requirements_missing / conflicts / refusal_reason. Setting
+# SUFFICIENCY_FIELDS_ENABLED=0 restores the pre-activation response exactly.
+SUFFICIENCY_FIELDS_ENABLED = os.getenv("SUFFICIENCY_FIELDS_ENABLED", "1") == "1"
+
+# Phase-6 item 2: the answer's COMMITMENT to the sufficiency state.
+# ACTIVATED BY THE OWNER 2026-10-02 (directive «شغلها», same trial data as
+# above). ON means: an insufficient question is refused BEFORE any model
+# call (refusal tied to evidence absence, with a referral listing the
+# missing requirements); a PARTIALLY covered question is downgraded — one
+# bounded regeneration answers ONLY the covered micro-questions and the
+# response is tagged partial. ANSWER_SUFFICIENCY_COMMITMENT=0 restores the
+# always-answer behavior.
+ANSWER_SUFFICIENCY_COMMITMENT = os.getenv("ANSWER_SUFFICIENCY_COMMITMENT", "1") == "1"
+
+# Soft refusals (owner decision 2026-10-23, «كثيرا ما يكون الرد قاسيا»): when a
+# refusal carries a referral (clarifications / missing requirements) or an
+# understood-as concept, the human-facing `answer` opens with a softer bridge
+# and quotes them, instead of the bare reason sentence. Applies to EVERY
+# refusal reason; reason codes, the referral payload and the audit trail are
+# unchanged. SOFT_REFUSAL_ENABLED=0 restores the exact pre-2026-10-23 wording.
+SOFT_REFUSAL_ENABLED = os.getenv("SOFT_REFUSAL_ENABLED", "1") == "1"
+
+# Phase 8 (2026-10-02, owner directives): intelligent DEMAND INTERROGATION.
+# When a question is insufficient (غير كافٍ) AND nothing covers it, ONE
+# bounded call through the answer model re-expresses the request as the
+# nearest TECHNICAL question the corpus covers (choosing from the
+# deterministic corpus topic map — never inventing), then the paraphrase is
+# RE-EVALUATED deterministically by the same retrieval + sufficiency
+# engines. Sufficient -> the paraphrase is answered, fully disclosed
+# (understood_as + the interrogation analysis); still insufficient -> the
+# honest refusal with a better referral. Fail-closed on any malformed
+# output.
+# PHASE 8 CLOSED — ACTIVATED BY THE OWNER 2026-10-02, on the first live
+# measurement on their own server (audits/PHASE8_INTERROGATION.md,
+# «القياس الحي الأول»): «هل يمكن أن أفتح بيت دعارة؟» was answered through the
+# paraphrase «ما هي الشروط الشرعية والقانونية لصحة المعاملات المالية...؟» with
+# 4 cited claims and full disclosure (the corpus holds no prohibited-activity
+# topic, so that paraphrase is the nearest one it offers), and «هل يمكن أن
+# أتمتع بقرض؟» produced an excellent paraphrase that the deterministic
+# re-evaluation still found insufficient → the honest refusal with the
+# richer referral. Both outcomes are the designed behavior; the two payload
+# bugs that transcript exposed (original-question sufficiency leaking into an
+# answered payload; the interrogation's cost invisible) were fixed the same
+# day and are pinned by InterrogationTest. Deterministic arm: 409 checks
+# EXIT=0, including the zero-extra-call guarantee on sufficient questions.
+# Default ON: setting REPHRASE_INTERROGATION_ENABLED=0 restores the plain
+# refusal exactly (InterrogationTest.test_gate_off_is_the_pure_refusal).
+REPHRASE_INTERROGATION_ENABLED = os.getenv("REPHRASE_INTERROGATION_ENABLED", "1") == "1"
+
+# Experiment 3 (2026-10-01): per-micro retrieval & fusion — retrieval runs
+# per decomposed micro-question and RRF-fuses the pools. Default OFF;
+# measured deterministic-first, then live same-run, before any activation.
+PER_MICRO_RETRIEVAL_ENABLED = os.getenv("PER_MICRO_RETRIEVAL_ENABLED", "0") == "1"
+
+# Phase-6 item 3: the request audit trail (always on — it is operational
+# bookkeeping, never changes a response). Entries live under RESULTS_DIR.
+AUDIT_LOG_MAX_ENTRIES = int(os.getenv("AUDIT_LOG_MAX_ENTRIES", "500"))
+RETRIEVAL_CANDIDATE_K = 20
+
+# Selected measured profile. Old .env values are rejected, not silently used.
+ANSWER_PROVIDER = os.getenv("ANSWER_PROVIDER", SELECTED_ANSWER_PROVIDER).strip().lower()
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", SELECTED_ANSWER_MODEL)
+ANSWER_PROMPT_VERSION = os.getenv("ANSWER_PROMPT_VERSION", "grounded-v1")
+ANSWER_WORKERS = int(os.getenv("ANSWER_WORKERS", "1"))
+ANSWER_MAX_TOKENS = int(os.getenv("ANSWER_MAX_TOKENS", "4096"))
+ANSWER_CONTEXT_TOKENS = int(os.getenv("ANSWER_CONTEXT_TOKENS", "3000"))
+ANSWER_TOP_K = int(os.getenv("ANSWER_TOP_K", "5"))
+ANSWER_NEIGHBOR_RADIUS = int(os.getenv("ANSWER_NEIGHBOR_RADIUS", "0"))
+ANSWER_CACHE_PATH = PROJECT_DIR / "answers_cache.json"
+STORE_REJECT_INVALID_VECTORS = True

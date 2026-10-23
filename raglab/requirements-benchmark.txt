@@ -1,0 +1,9 @@
+# CI superset: the pinned core (via requirements.txt), the chrF++ scorer the
+# translation-similarity tests import, and the HTTP stack test_service.py
+# needs (FastAPI's TestClient talks over httpx). Nothing here is used by the
+# core CLI: main.py keeps running on requirements.txt alone.
+-r requirements.txt
+sacrebleu==2.5.1
+fastapi==0.141.1
+python-multipart==0.0.32
+httpx==0.28.1

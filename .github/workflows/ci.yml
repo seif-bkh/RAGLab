@@ -1,0 +1,82 @@
+name: RAGLab CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------- offline
+  compile-offline:
+    name: Compile + offline inspect (no API)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: raglab/requirements-benchmark.txt
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-benchmark.txt
+        working-directory: raglab
+
+      - name: Compile all modules
+        run: python -m compileall -q .
+        working-directory: raglab
+
+      - name: Offline regression tests (no API, stubbed HF provider)
+        run: |
+          set -o pipefail
+          python tests_offline.py 2>&1 | tee /tmp/offline_main.txt
+          python -m unittest -v test_nvidia_pipeline test_hard_harness test_service 2>&1 | tee -a /tmp/offline_main.txt
+        working-directory: raglab
+
+      # This sandbox cannot fetch workflow logs, and that cost a whole round trip once already: a
+      # failure-only annotation carrying the ACTUAL captured output is readable through the API
+      # instead. (An earlier version re-ran the commands; the rerun could pass while the original
+      # step failed, hiding the real cause — this one reports the captured output.)
+      - name: Report which offline test failed, for a runner whose logs cannot be fetched
+        if: failure()
+        run: |
+          cd raglab
+          set +e
+          summary=$(grep -aE "^(FAIL|ERROR:|Ran |OK$|FAILED)" /tmp/offline_main.txt | tail -30)
+          detail=$(grep -aA 15 -E "^(FAIL|ERROR:)" /tmp/offline_main.txt | tail -c 1800)
+          tail_full=$(tail -c 900 /tmp/offline_main.txt)
+          message=$(printf 'summary:\n%s\n----detail----\n%s\n----tail----\n%s' "$summary" "$detail" "$tail_full" \
+            | sed -e 's/%/%25/g' -e 's/:/%3A/g' | tr '\n' '|')
+          echo "::error::offline failure: $message"
+        shell: bash
+
+      - name: Offline inspect (load + chunk only, zero API calls)
+        run: python main.py inspect
+        working-directory: raglab
+
+      - name: Dependency sanity
+        run: python -m pip check
+
+  # ------------------------------------------- deployment artifact (Docker)
+  docker-build:
+    name: Docker image build + import smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the service image (repo-root context so docs/ ships in)
+        run: docker build -t raglab-service .
+
+      - name: Import smoke — requirements-service.txt completeness
+        # Proves the image's dependency set satisfies the real module graph
+        # (service builds the app at import time; no keys needed for that).
+        run: >
+          docker run --rm --entrypoint python raglab-service
+          -c "import service, profiles, answer, sufficiency, micro_retrieval, models_probe; print('image imports OK')"

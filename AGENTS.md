@@ -1,0 +1,1507 @@
+# AGENTS.md — working contract for this repository
+
+If you are an agent (or human) resuming work on RAGLab: **read this file first, follow it,
+and keep it updated whenever you learn something that changes the truth.** It is the
+contract between sessions. Facts here were verified by running things, not guessed.
+
+Last verified: 2026-10-05 (branch `arena/01a10905-raglab`).
+
+---
+
+## 1. What this repo is
+
+A RAG lab for Islamic-banking documents (Arabic/French/English): load → chunk → embed
+(NVIDIA `nemotron-3-embed-1b`, 2048 dims) → hybrid retrieval → cited answers
+(xKiro gateway, `qwen/qwen3.8-max:free`). No LangChain/LlamaIndex; stdlib HTTPS only.
+
+Current state of the work:
+
+- **Two chunking modes** in `raglab/semantic_chunking.py` + `raglab/restructure.py`,
+  selected by `CHUNKING_MODE` env var: `size` (legacy recursive 220/40) and
+  `restructure` (the new strategy).
+- **The new strategy is a 3-step workflow the user designed** — follow it, don't redesign:
+  1. semantic normalization → hierarchy-explicit Markdown;
+  2. context breadcrumbs above sub-headings/tables;
+  3. recursive structural chunking over
+     `["\n# ", "\n## ", "\n### ", "\n\n", "\n", " "]` at the usual 220/40 token budget.
+- **Benchmark set**: `raglab/questions_50.json` — **50 cases** (2026-09-30, complete:
+  owner approved the 2.1 matrix with «أنجز» and batches أ–د were authored the same
+  session; ids q01–q50 with no gaps) over the four `docs/` documents only:
+  `verbatim` (10), `paraphrase` (20), `cross-lingual` (15 = fr 6 + en 9),
+  `out-of-scope` (5, must have NO expected match). Languages: 32 ar / 8 fr / 10 en;
+  per document Loi 12 / Circulaire 10 / Guide 11 / Madkhal 12. Every
+  expected_substring is a verbatim span of the ADOPTED corrected codices
+  (post-2026-09-30 adoption), machine-verified present in its expected document's
+  adopted-arm chunks AND distinctive corpus-wide (shared concepts like murabaha
+  carry document-distinctive evidence); the design + execution record lives in
+  `raglab/audits/QUESTIONS_MATRIX.md`. The five target-state categories and the
+  multi-evidence schema will be RE-INTRODUCED as individually reviewed steps (2.4).
+  All pre-2026-09-28 numbers are historical (their corpora/cases no longer match).
+  Never copy from `raglab/questions.json`, `questions_real.json`, or
+  `benchmarks/retrieval_dev.json`.
+- **BM25-only A/B harness**: `raglab/harness50.py` (no API calls; deterministic).
+- **Governed institutional lexicon** (Phase-3 intervention 2, 2026-10-01):
+  `raglab/lexicon.py` — a managed seed table (16 entries: abbreviation,
+  en/fr equivalents, colloquial->formal; every target verified present in the
+  adopted corrected codex, enforced by a governance test) expanded
+  deterministically BEFORE embedding and BM25 via `retrieval.retrieve`, behind
+  `LEXICON_ENABLED` (default OFF). The seed table was ADOPTED as-is by the
+  owner 2026-10-01; flipping the default awaits the target-category
+  authoring-round measurement. Strictly separate from the retired translation
+  path. Exact whole-word surface forms; Arabic definite forms need their own
+  rows. Plan + record: `raglab/audits/PHASE3_INTERVENTIONS.md`.
+- **Target-category set** (Phase-3 authoring round, 2026-10-01, ADOPTED by
+  the owner together with the live-measurement authorization):
+  `raglab/questions_targets.json` — 10 Arabic cases, 2 per target
+  category (colloquial/synonyms/implicit/compound/ambiguous; ambiguous cases
+  carry declared influential-ambiguity notes; implicit/compound carry 2
+  requirements each). Every evidence substring verified present in the
+  restructure arm (fatal=0). The adopted 50-case set stays frozen as the
+  regression baseline. Deterministic pre-measurement (BM25 arm): lexicon lifts
+  t01 3->1 with zero regressions; the set is deliberately BM25-hard
+  (synonyms/colloquial lexical gaps) — the decisive measurement is the live
+  arm (a real-test.yml target-set step, pending owner authorization).
+  Integrity guarded by `TargetSetIntegrity`; record:
+  `raglab/audits/PHASE3_INTERVENTIONS.md`. **Live measurement DONE (run
+  36840207930, tag `real-test-targets2-20261001`)**: deployed arm 50/70/70
+  (compound 100/100/100, implicit+ambiguous 50/100/100, synonyms 50/50/50,
+  colloquial 0/0/0); `LEXICON_ENABLED=1` changes NOTHING (identical numbers —
+  its BM25 lift does not transfer to the vector arm) → data says keep the
+  lexicon default OFF (owner gate). No 50-set regression same-run
+  (71/80/87, verbatim 50/60/80, OOS 0.286). **Owner gate round 4
+  (2026-10-01): lexicon stays OFF (final — its BM25 lift does not transfer),
+  PHASE 3 CLOSED** (colloquial gap t01/t02 registered as a Phase-5 LM-path
+  input; no algorithmic repair per the standing 2026-09-28 rejection).
+- **Phase-4 knowledge layer (plan stage)**: `raglab/audits/PHASE4_KNOWLEDGE.md`
+  — the 8-item plans for building the knowledge layer on Loi 2016-48 (owner's
+  2026-10-01 choice): units.py with functional types and stable ids, the
+  governance-axes registry, the two minimal relations tables (grounding +
+  cross-references), the structured-numbers path as a NEW additive endpoint
+  (first input: the Circulaire corrections table, option ج 2026-09-28), and
+  unit-line test indexing. **Item 1 BUILT (2026-10-01, execution record in the
+  plan)**: `raglab/units.py` + declared data `raglab/units_loi_2016_48.json`
+  — 198/198 articles, verbatim codex text (blank separator lines preserved),
+  stable `loi-2016-48:artNNN` ids, العنوان>الباب>الفصل paths, governed
+  TYPE_RULES (first match wins; distribution 7/28/3/56/104 + numeric flag on
+  66) **ADOPTED as-is (owner gate round 4, 2026-10-01) — item 1 COMPLETE**;
+  read-only layer, no deploy change. Guarded by `UnitsExtraction`. **Item 2
+  BUILT**: `raglab/governance.py` — declared 6-axis registry (law fully
+  registered: قانون / سلطة تشريعية عليا / JORT 58-2016 / نافذ / العموم /
+  البنوك والمؤسسات المالية; the other three docs explicitly DEFERRED);
+  axes ride on chunk metadata at ingest via `store.store_chunks` (additive —
+  no retrieval/eval change). Guarded by `GovernanceRegistry` (fingerprint
+  checks: registry+deferred == corpus, no phantoms, no empty axes).
+  **Item 3 BUILT**: `raglab/relations.py` + declared data
+  `raglab/relations_loi_2016_48.json` — the two minimal tables per the plan:
+  grounding (Circulaire 80/2019 → loi-2016-48:art011, verbatim codex
+  evidence «وخاصة الفصل 11 منه وما بعده», documented MASTER_INDEX §6) and
+  internal cross-references (77 deterministic edges from the item-1 units;
+  ONLY the literal «من هذا القانون» form counts, so other-law references
+  never become edges). validate_relations enforces verbatim evidence +
+  existing targets; no graph store. Guarded by `RelationsExtraction`.
+  **Item 4 BUILT**: `raglab/legal_numbers.py` + declared data
+  `legal_numbers_loi_2016_48.json` — 53 deterministic records (14 نسبة /
+  28 أجل / 5 حد مالي / 6 عقوبة مالية) from the governed NUM_WORDS
+  vocabulary (scale words multiply; duals carry their value; unknown tokens
+  reject, never guess), every raw span verbatim in its unit; the option-ج
+  Circulaire corrections table (15 rows) with every official value anchored
+  verbatim in the adopted codex. NEW ADDITIVE ENDPOINT GET /numbers (the
+  first sanctioned addition under the §2.7 freeze: read-only, works on an
+  empty index, filters unit_id/kind, serves records + corrections; no
+  existing endpoint touched). Guarded by `LegalNumbersExtraction` +
+  `test_numbers_endpoint_structured_and_filtered`. **Item 5 BUILT
+  (live measurement authorized, owner round 7)**: `raglab/unit_index.py` —
+  the 198 description lines indexed on the existing retrieval machinery in
+  an ISOLATED collection; the 12 law cases judged by the shared
+  normalized-containment rule against the same-run restructure baseline;
+  new real-test.yml step (`--live`) posts the units-index ANNO with the
+  automated gate (hit@5 >= baseline). Guarded by `UnitIndexMeasure`.
+  **LIVE RESULT (run 36851358899, tag `real-test-units-20261001`): units
+  index 100/100/100 vs same-run baseline 67/92/92 — GATE PASS** (every law
+  question, cross-lingual included, finds its article at rank 1 on the
+  description surface).
+- **Phase-5 understanding layer (plan ADOPTED, item 1 BUILT)**:
+  `raglab/audits/PHASE5_UNDERSTANDING.md` is the adopted contract (owner
+  round 8); `raglab/intent.py` — deterministic-first intent: declared
+  INTENT_RULES (ordered, first-match-wins, Arabic + Latin patterns for
+  cross-lingual), explained decisions (fired_rules), personal framing,
+  explicit-document scope only, compound splitting, influential-ambiguity
+  detection (MASTER_INDEX §6 shared concepts) resolved by explicit scope;
+  unclassified = declared default path. Measured: 0% unclassified on BOTH
+  adopted sets (iterative honest derivation from 50%/60%). INERT layer —
+  nothing in the deployed path imports it (regression-guarded); wiring is
+  item 3 behind a measured env gate. Guarded by `IntentClassification`.
+  **Item 2 BUILT**: `raglab/evidence_plan.py` — declared DERIVATION_RULES
+  deriving evidence REQUIREMENTS from intent (what must be present, never
+  the answer; عقوبي needs the penalty unit AND its governing rule; the
+  unclassified get the wide no-assumption requirement; compound gets
+  sub-plans). Honest iterative derivation: strict-definition first pass 75%
+  → entity/purpose refinement → 100% consistency on both sets (16/16 +
+  2/2 typed-evidence cases; untyped evidence reported, never guessed).
+  Read-only layer, regression-guarded inert. Guarded by
+  `EvidencePlanDerivation`. **Item 3 BUILT (live measurement authorized,
+  owner round 10; default stays OFF pending the data)**:
+  `raglab/relational_expansion.py` — retrieval expansion along the Phase-4
+  relations under the DECLARED intent policy (internal edges: إجرائي from /
+  استثناء both directions; grounding Circulaire→art011 only when the request
+  names BOTH families AND Circulaire evidence was retrieved; depth <= 2,
+  node cap 4; تعريفي/رقمي/مقارن never expand). Extras occupy TAIL slots
+  only (head vector hits keep ranks), carry via_relation metadata and full
+  verbatim unit text. Wired in retrieval.py behind
+  RELATIONAL_EXPANSION_ENABLED (default 0). Deterministic BM25 measurement:
+  neutral (6+2 queries expanded, zero flips). Live same-run comparison step
+  added to real-test.yml (both sets, expansion vs baselines). LIVE
+  (run 36871131542): NEUTRAL on the vector arm too — 50set 71/80/87 vs
+  71/80/87, targets 50/70/70 vs 50/70/70, zero regression. Default stays
+  OFF pending the owner's activation gate. Rescue mechanism proven by
+  test. Guarded by `RelationalExpansion` (6).
+- **Phase-5 item 4 BUILT** — `raglab/sufficiency.py` (read-only layer,
+  inert-import guard): deterministic sufficiency & conflict — requirement-
+  by-requirement coverage of the item-2 plan against the retrieved pool,
+  four explicit states (كافٍ/غير كافٍ/متعارض/غير محسوم), DECLARED
+  adjustable precedence (law > Circulaire > Guide > Madkhal — flipping it
+  flips the winning text, test-proven), conflict detection via the adopted
+  Circulaire corrections table, bounded guided rounds (cap 2, depth 20,
+  rarest-retrievable-terms batches). Refusal names the missing
+  requirements (evidence absence, never classification failure).
+  Deterministic BM25 measurement on both sets: ZERO false sufficiency,
+  ZERO false refusal, all 5 OOS «غير كافٍ» (transition criterion met);
+  4 reasoned escalations (q35/q39/q42/q44); t02/t03 insufficient with
+  named gaps (colloquial gap stays visible); t05–t08 differentiated per
+  sub-requirement. CLI: `python sufficiency.py --sets ...`. Guarded by
+  `SufficiencyCheck` (9) — suite 197 OK.
+- **Phase-5 item 5 BUILT** — the sufficiency state reaches POST /answer as
+  OPTIONAL response fields (additive-only, §2.7 freeze), gated by
+  SUFFICIENCY_FIELDS_ENABLED (config.py, default OFF; flows into the
+  service config automatically). ON adds exactly
+  sufficiency.RESPONSE_FIELDS: evidence_status, requirements_covered,
+  requirements_missing, conflicts, refusal_reason (names the missing
+  requirements — evidence absence, never classification failure). OFF
+  keeps the response byte-identical (explicit regression test). The pool
+  comes from chat.ask's inert return_pool switch (no second retrieval);
+  df cached per (name, count); greeting/local-privacy paths stay
+  field-free by design. Inert-layer guard updated (one gated reference in
+  service.py, none elsewhere). Tests: SufficiencyFieldsTest (4) + the
+  OFF regression in ServiceTest — suites 197 + 52 OK.
+- **Phase 6 COMPLETE (2026-10-01, owner directive «أنجز ما تبقى»; records in
+  raglab/audits/PHASE6_DELIVERY.md; SERVICE_VERSION 1.3.0):**
+  1. Stable unit ids on cited sources (`unit_id` on law chunks, additive)
+     + DETERMINISTIC citation-gate expansion (declared
+     CITATION_GATE_POLICY): cited source must be actually retrieved, its
+     document ALLOWED (the corpus document set MEASURED from the live index,
+     cached — never hard-coded) and IN FORCE (gov_status == نافذ where the
+     axis is registered; deferred docs pass unflagged). Optional args — all
+     existing callers unchanged. Guarded by `CitationGateExpansion` (5).
+  2. Sufficiency COMMITMENT behind ANSWER_SUFFICIENCY_COMMITMENT (default
+     OFF) via chat.ask's inert pre_generate hook (one retrieval, decision
+     BEFORE any model call): nothing covered -> refused
+     (reason evidence_insufficient) with a REFERRAL naming the missing
+     requirements + advisory clarifications; partially covered -> ONE
+     bounded regeneration over the covered micro-questions only, tagged
+     partial/answered_requirements/unanswered_requirements. Guarded by
+     `SufficiencyCommitmentTest` (6, incl. the same-question-same-effect
+     determinism test = the phase-6 close gate).
+  3. raglab/audit.py — per-request JSONL trail under RESULTS_DIR (outside
+     the repo by design): trace id, UTC ts, PII-scrubbed question (scrubbed
+     BEFORE writing), status/evidence_status/model/counts/latency; retention
+     AUDIT_LOG_MAX_ENTRIES (default 500, oldest dropped); GET /audit?limit=
+     (1..500). Operational only — never changes a response. Guarded by
+     `AuditTrail` (3) + HTTP tests.
+  4. CONTRACT.md (§3.10 expanded, §3.16 /audit) + COOKBOOK.md (§2.9 the
+     three understanding/sufficiency env gates + worked sequence).
+  Suites: 215 (pipeline) + 58 (service) OK; offline gate EXIT=0. Phase 7
+  remains pending owner decisions (identity provider, disclosure policy,
+  reference precedence).
+- **1.3.0 LIVE (run 36934799191, tag real-test-phase6-20261001): zero
+  regression everywhere** (50set 71/80/87, targets 50/70/70, units-index
+  100/100/100 PASS, answer smoke validated). NEW: sufficiency measured on
+  the LIVE vector arm (`sufficiency.py --live`): 50set كافٍ37/غير كافٍ10/
+  غير محسوم3, FS=3 FR=4 agree=0.86; targets 8/2, FS=1 FR=1 agree=0.80 —
+  honest reading recorded in PHASE6_DELIVERY.md (lexical anchoring's
+  precision bound on the vector arm; fields-for-display = reasonable
+  activation candidate, commitment stays OFF pending the owner's review of
+  the 9 disagreement cases in the preserved sufficiency_live.json).
+- **Phase-7 decision brief** written: raglab/audits/PHASE7_DECISION_BRIEF.md
+  (identity/roles options, disclosure policy, reference precedence
+  confirmation, activation gates table, change-cycle question).
+- **The seven experiments EXECUTED (owner directive «أنجزها كلها»,
+  2026-10-01; records in raglab/audits/PHASE7_EXPERIMENTS.md):**
+  1. gates live-arm measurement in CI (commitment outcomes + disagreement
+     ids in the sufficiency annotation);
+  2. precedence flip proven (winner flips official<->raw; mixed questions
+     unaffected — conflict needs both values anchored);
+  3. `raglab/micro_retrieval.py` — per-micro retrieval & RRF fusion behind
+     PER_MICRO_RETRIEVAL_ENABLED (default OFF; single-micro short-circuits
+     to plain); local BM25: neutral on hit@k (+1 paraphrase@1) with rank
+     dilution on multi-requirement cases (t06 9->13, t08 8->14); live A/B
+     step added (micro_50/micro_targets vs same-run baselines); guarded by
+     `MicroRetrievalTest` (6);
+  4. `raglab/change_cycle.py` — the document change cycle as declared
+     tooling (registration gates, chunk preview, impact plan, blockers;
+     never mutates docs/ or registries); guarded by `ChangeCycleTest` (3);
+  5. threshold tuning data now produced by CI (disagreement ids); any
+     change must keep the deterministic zero-error gate green;
+  6. `AdversarialGateTest` (6): cross-source forged quote, invented quote,
+     computed number, unknown citation, inline marker, question injection —
+     all refused by the deterministic gate; semantic identity claims
+     documented as a known (out-of-scope) limit;
+  7. `raglab/demo_service.py` — a live no-keys demo service (deterministic
+     embedder + quote-bot through the REAL citation gate, real docs corpus,
+     rrf, all phase-5/6 gates ON) for the owner to try interactively.
+  Suites: 224 (pipeline) + 64 (service) OK; offline gate EXIT=0.
+  LIVE results (run 36939129036, zero regression everywhere; records in
+  PHASE7_EXPERIMENTS.md): per-micro fusion on the live vector arm
+  50set 71/80/87 -> 69/78/87 (targets identical) — dilutes, gate stays
+  OFF, the phase-5 close-gate chase ends 'tried, measured, rejected';
+  commitment live: refused-before-model 11/50 + 2/10 targets, zero
+  partial; disagreement sets identified (FS=q01,q02,q03;
+  FR=q28,q29,q33,q42; targets t01,t03) — thresholds NOT touched without
+  the owner (FR cases are retrieval misses, FS cases are the mixed
+  Circulaire/law definition pattern).
+  Known ops note: gh artifact/log downloads (Azure blob) EOF'd for hours
+  after this run — check-run annotations API carries the headline
+  numbers when that happens.
+- **Sandbox reset #54 (2026-10-02) recovered**: the git dir reverted to
+  the base 6441655 with the working tree intact — recovery is
+  `git fetch origin arena/01a0d2f5-raglab && git reset --soft FETCH_HEAD
+  && git add -A && git commit` (the delta vs the remote was exactly the
+  one unpushed commit). .venv and /home/user/rebuild_venv.sh were wiped
+  and recreated (script restored verbatim; it hard-resets ONLY when HEAD
+  is still 6441655, so it is safe to run after the soft reset).
+- **RAGLab CI (ci.yml) red 9ad538c..d8b9803, fixed at cf8224f**: the
+  offline trio passed locally in every env, but ChangeCycleTest pinned
+  chunks_after_addition == 339 — a fallback-estimator count (offline
+  sandboxes cannot download the tiktoken BPE file; CI can, so chunk
+  counts differ). Lesson: NEVER pin exact chunk counts in tests; assert
+  structure. Second lesson: the ci.yml failure annotation used to RE-RUN
+  the commands — a rerun can pass while the original step failed (and a
+  1400-char tail drowns in trailing store logs). It now tees the actual
+  step output and reports summary + FAIL/ERROR detail + tail.
+- **OWNER ACTIVATION 2026-10-02 (directive «شغلها»)**: SUFFICIENCY_FIELDS_ENABLED
+  and ANSWER_SUFFICIENCY_COMMITMENT now default ON in config.py (env "0"
+  restores the pre-activation response; PER_MICRO stays OFF — rejected by
+  data; RELATIONAL_EXPANSION stays OFF — neutral). Protocol executed:
+  flip -> full offline gate EXIT=0 (64 service + 364 total; suites that test
+  other behaviors pin the pre-activation gates explicitly in their
+  overrides) -> live verification run on tag real-test-activation-20261002.
+  COOKBOOK §2.9 and PHASE7_DECISION_BRIEF decision-4 updated.
+  LIVE VERIFICATION (run 36964247574, tag real-test-activation-20261002,
+  SUCCESS with the activated defaults): zero regression — 50set 71/80/87,
+  targets 50/70/70, units-index 100/100/100 PASS, OOS separation unchanged
+  (0.286/0.146); the live answer smoke answered with validation_ok=True
+  through the activated path; live commitment outcomes: refused-before-model
+  10/50 (q28,q29,q32,q33,q42,q46,q47,q48,q49,q50) + 2/10 targets, zero
+  partial (q44 كافٍ this run — within the known run-to-run jitter).
+- **models_probe.py (2026-10-02, owner request for personal-machine use)**:
+  read-only free/available-model probe for all three answer providers
+  (xKiro verified_free = tier+zero-price fail closed; NVIDIA visibility-only
+  — its catalog carries no pricing; Google chat_capable filtering). Missing
+  key = status not crash; bounded 2MB reads; no credential material in
+  reports or error paths. Guarded by ModelsProbeTest (6). COOKBOOK §2.10.
+  Companion: service GET /models lists the REGISTERED models (registry, not
+  live discovery).
+- **Docker + local_front integration (2026-10-02, owner's deployment shape)**:
+  local_front.py now renders the activated sufficiency layer (evidence state,
+  covered/missing, refusal reason + referral, partial tag — all .get()-guarded
+  so an opted-out service renders as before); its smoke suite checks field
+  coherence. E2E verified through the owner's own front against the demo
+  service: answered question renders '[كفاية الدليل] كافٍ · مغطى: …', OOS
+  question renders the refusal + referral + 'refused before generation'.
+  ci.yml gained a docker-build job (image build + import smoke proving
+  requirements-service.txt satisfies the module graph — docker is NOT
+  available in this sandbox, CI is the honest verification path).
+  SERVICE.md env table now lists the three gates; .env.example documents
+  them for the compose env_file. Guarded by PackagingTest (3). Sandbox
+  resets #57/#58 during this work — recovery recipe held both times.
+- **DEPLOYMENT.md handoff (2026-10-02, tag deploy-handoff-20261002)**: a
+  self-contained Arabic deployment document for the owner's platform team
+  (what it is, requirements, literal steps, env table incl. the mandatory
+  token change + CORS restriction, front-facing contract notes incl. the
+  refused-is-correct semantics, daily ops, security, rollback). Compose
+  gained a token-aware healthcheck (/health sits behind the token
+  middleware, so the probe reads RAGLAB_SERVICE_TOKEN from the container
+  env — 30s interval, 3 retries). README points to DEPLOYMENT.md;
+  PackagingTest guards the healthcheck. Sandbox reset #59 mid-round:
+  recovery recipe held again.
+- **401 fix (2026-10-02, platform team hit it live)**: compose's hardcoded
+  `RAGLAB_SERVICE_TOKEN: change-me…` in environment: OVERRIDES raglab/.env
+  (env_file precedence) — the owner's token never reached the container, and
+  local_front had no --token flag + a misleading 401 message. Fixes: token
+  removed from compose environment: (raglab/.env owns it; PackagingTest
+  asserts `RAGLAB_SERVICE_TOKEN:` is absent from compose); local_front
+  gained --token and honest 401 guidance (where the value lives, that .env
+  edits need `docker compose up -d` to recreate); service prints a loud boot
+  warning when switching is on with no token (preserves the safety intent of
+  the removed hardcode). E2E against the real service with a token on :8001:
+  no-token → guidance, --token/env → full doctor 200. LocalFrontClientTest
+  (5, stdlib fake HTTP server). DEPLOYMENT.md gained a troubleshooting table
+  (401 / .env not hot-reloading / the historical override / open-switching
+  warning). Lesson: compose `environment:` beats `env_file` — never hardcode
+  a secret's default there.
+- **local_front full-surface verification (2026-10-02, owner asked whether
+  the front covers the session's updates)**: three gaps found and closed —
+  the front had no --audit (phase-6 trail), no --numbers (phase-4 legal
+  numbers), and did not render 1.3.0 unit ids. Added: show_audit/show_numbers
+  renderers + --audit [LIMIT] / --numbers (--unit-id/--kind filters) +
+  unit ids on source headers. Also the demo service root is now
+  content-negotiated (browser -> Arabic page, API client -> standard JSON)
+  so --smoke passes 25/25 against it. E2E verified every front command
+  against the running service: --ask legal (fields + unit id
+  loi-2016-48:art140), --ask OOS (refusal + referral), --search, --audit
+  (trail with per-request evidence states), --numbers (53 records, by-kind
+  breakdown), --smoke 25/25. LocalFrontClientTest now 8 tests (fake server
+  guards every path with the token like the real service).
+- **Field case from the owner's server (2026-10-02, feeds Exp 5)**: their
+  front-chat English questions all refused before the model. Verified:
+  pub/coffeeshop = CORRECT refusals (Arabic equivalents refuse too — content
+  absent); 'what is murabaha?' = FALSE refusal — df('murabaha')=0 (the Latin
+  word never appears in the corpus) and the cross-script anchor engine is
+  exact-lexical, so murabaha never bridges to المرابحة; single-term questions
+  also need CROSS_ANCHOR_MIN=2 even if bridged. Controlled triple experiment
+  on the demo (same service/corpus): pure-English refused, embedded-Arabic
+  'what is murabaha (المرابحة)?' ANSWERED, Arabic answered كافٍ. The 50set en
+  questions pass only because they carry embedded Arabic terms. Options
+  recorded for the owner in PHASE7_EXPERIMENTS.md (embed the Arabic term
+  today; a declared transliteration-bridge table behind an OFF gate + single-
+  rare-anchor rule; RAGLAB_TOP_K 5->20 to match the measured config). No
+  code changed — the fix paths are declared-rules/threshold territory.
+- **Cross-script bridge BUILT & ACTIVATED (2026-10-02, the murabaha field
+  case; owner re-sent the failing question after the build offer — read as
+  the directive)**: sufficiency.CROSS_SCRIPT_BRIDGES (murabaha/mudaraba/
+  musharaka/sukuk/ijara/takaful/riba/salaf/istisna + spelling variants →
+  their Arabic terms). A bridged DISTINCTIVE term anchors SINGLY (curated
+  equivalence) but stays df-checked (<= CROSS_DF_MAX) so bridges onto
+  boilerplate can never anchor; anchoring ONLY — retrieval/matching/
+  citation gate untouched; same-script Arabic unaffected. Measured (BM25
+  arm, gate ON vs OFF): 50set كافٍ 37→38, غير محسوم 4→3 (q42 upgraded to
+  the correct كافٍ), FS=0 FR=0 agree=1.0 BOTH ways; targets identical;
+  df guard verified (df=999 refuses); pub/coffeeshop still refuse. Bridge
+  corpus df all under the bar (مرابحة=17 … مضاربة=28). Gate
+  CROSS_SCRIPT_BRIDGES_ENABLED (default 1; "0" restores exact-lexical).
+  KNOWN demo limitation (honest): the demo's stub embedder cannot cross
+  scripts in RETRIEVAL (0/20 murabaha chunks for the pure-English query),
+  so the demo still refuses that one — on the real NVIDIA arm the evidence
+  arrives (live cross-lingual 73/80/80) and the bridge anchors it; the
+  live CI run is the decisive check (recorded in PHASE7_EXPERIMENTS.md).
+  Guarded by SufficiencyBridgeTest (6).
+- **Cross-script COVERAGE gate fixed behind two OFF gates (2026-10-05, the
+  Phase-9 answer probe; owner picked the bridge+shape scope and an
+  OFF-by-default arm)**: TM03 (fr) / TM04 (en) retrieved the right guide
+  sections and were still refused, and top_k 5→12→20 changed nothing.
+  Reproduced OFFLINE with no model call via sufficiency.bm25_store() +
+  sufficiency.check() on the 339-chunk corpus: the corpus is Arabic-only, so
+  a Latin-script question shares ZERO terms with the chunk that answers it —
+  shared_terms=[] and _anchors()=False on chunk_0049 (BM25 rank 8, INSIDE
+  top-20) and chunk_0043, so no requirement can ever be covered. The seed
+  bridge table only carries Islamic-finance TRANSLITERATIONS; the guide's own
+  operational vocabulary («documentary credit», «opération de change») had no
+  row. Two additions, both DECLARED REVIEW DATA only — no decision rule
+  changed: (1) sufficiency.FIELD_BRIDGE_TERMS / FIELD_BRIDGE_PHRASES (phrase
+  keys because «credit» alone is not «مستندي»), matched on the raw token
+  sequence with Latin accents folded, so «opération DE change» resolves even
+  though question_terms() drops «de»; (2) DEFINITION_SHAPE_PATTERNS via
+  _shape_patterns() — the guide defines with an equative sentence
+  («… هو تعهد مكتوب صادر من بنك …»), not a definition verb. Looseness was
+  measured BEFORE declaring: «هو + noun» 1/339 chunks (chunk_0043 itself),
+  tight purpose forms 3/339, vs rejected «هو + …» 14/339 and
+  «يستعمل|يهدف|الغرض» 55/339; the cap is pinned by a test. NOTE the chunk
+  count is environment-dependent — 339 with the char4 fallback estimator
+  (this sandbox cannot fetch tiktoken's BPE file) vs 858 with cl100k_base in
+  CI — so the looseness cap is a SHARE (1 in 100, floor 5), never an absolute
+  count; the first absolute version (5) passed locally and failed CI with
+  "matched 6/858", which is why the share form exists. The same split scales
+  the corpus df ~2.5x, and _df_cap already scales with it (76 at 858 chunks),
+  so the bridged terms stay under the bar in both environments. Measured
+  2x2 (measure_cross_script_coverage.py --arms, each arm a real subprocess):
+  bridges alone turn TM03 كافٍ end-to-end; TM04 is كافٍ in the GATE PROBE
+  (evidence forced into the pool) but stays غير كافٍ one-shot because
+  section 5.1 sits at BM25 ranks 29/27/36 — its remaining blocker is
+  retrieval depth, not the gate; the shape-only arm changes NOTHING, which is
+  the empirical proof that anchoring was the first failure. The two frozen
+  sets are identical in all four arms (FS=0 FR=0 agreement=1.0; 50set
+  38/9/3, targets 8/2). Gates SUFFICIENCY_FIELD_BRIDGES_ENABLED and
+  SUFFICIENCY_DEFINITION_SHAPE_ENABLED, default "0" WHEN THIS PARAGRAPH WAS
+  WRITTEN — the deployed behavior was byte-identical to then. Superseded
+  below: the owner activated the arm the same day. Live arm: any tag carrying -xfix
+  (matched with `contains`, so it COMBINES with a top-k tag —
+  phase9-answer-topk20-xfix-<date> runs the arm at top_k=20) or
+  phase9_cross_script_fix=true. Run phase9-answer-<date> at the SAME commit as
+  the control, or the answer differences cannot be attributed to the arm. NOT
+  yet run. STILL OPEN, out of the approved
+  scope: the guided round is dead for cross-lingual questions (every question
+  term has df=0 in an Arabic corpus, so `rest` is empty and the loop breaks —
+  guided_rounds=[] on both cases), and one hard-coded REFUSALS string serves
+  every reason (answer.py:19-23 → 385/414/423/439), which is why TM06's mint
+  question is refused with a personal-accounts explanation.
+  Guarded by FieldBridgeAndDefinitionShapeTest (10);
+  raglab/audits/PHASE9_STRUCTURE/13_CROSS_SCRIPT_COVERAGE.md.
+- **Cross-script arm ACTIVATED + the two open items closed (2026-10-05, owner
+  decisions after measuring on their own index)**: (1) all three gates now
+  default "1" — SUFFICIENCY_FIELD_BRIDGES_ENABLED,
+  SUFFICIENCY_DEFINITION_SHAPE_ENABLED, SUFFICIENCY_GUIDED_BRIDGED_ENABLED —
+  "0" on any of them restores the pre-fix behavior byte-for-byte (pinned by a
+  fresh-interpreter test). Justification: live 2/2 answered with the arm vs
+  2/2 refused without it on the owner's 1713-chunk index at top_k=5, with
+  understood_as ABSENT in all four answered runs, i.e. the interrogation never
+  ran and the ORIGINAL question passed the first pass. (2) The guided round is
+  no longer dead: a Latin-script question's own terms all have df=0 in an
+  Arabic corpus, so the round selected nothing and broke at once
+  (guided_rounds=[] on both cases). It now searches the DECLARED Arabic
+  equivalents (same governed table, no model call), rarest first. Measured over
+  an 8-arm matrix: with bridges+shape+guided, TM04 goes from غير كافٍ to كافٍ on
+  the offline arm even though its evidence sits at BM25 ranks 27/29/36 — the
+  round reaches what the first window cannot; shape alone does not rescue it and
+  neither does guided alone. Both frozen sets are byte-identical in ALL EIGHT
+  arms (FS=0 FR=0 escalated=3 rescues=0 agreement=1.0; 38/9/3 and 8/2). Cost,
+  declared: up to MAX_GUIDED_ROUNDS extra retrievals, only on the path that was
+  already failing. (3) Refusal text is now per-reason. The owner's live case:
+  «هل يمكنني فتح بيت دعارة؟» was correctly refused but explained with the
+  personal-accounts/credentials wording, because ONE REFUSALS string served six
+  sites (answer.py 311/385/415/424/439 + service.py 995). REFUSAL_MESSAGES now
+  maps all six reasons x en/fr/ar and refusal_message() picks one; the `reason`
+  vocabulary is UNCHANGED so the contract holds, REFUSALS stays exported and
+  keeps the private-data wording, and an unknown reason falls back to it.
+  diag_bridge also had to be fixed to be usable at all here: it counted
+  SUBSTRING df while _anchors() counts TOKENIZED normalized terms, which made it
+  report صرف df=335 DF-BLOCKED on an index where the term was in fact anchoring
+  (measured inflation on 339 chunks: صرف 95 vs 14, ربا 48 vs 13, تكافل 6 vs 3).
+  Guarded by RefusalMessageByReasonTest (5) and DiagBridgeTest (7).
+- **CORRECTION to the item above (same day): the guided round was STILL dead on
+  the deployed path.** sufficiency's round is guarded by `search_fn is not
+  None`, and service.py called check() with NO search_fn at both sites (915,
+  the pre-generation gate, and 960, the paraphrase re-check). Every number that
+  "proved" the round works came from sufficiency.measure(), which HAS always
+  passed one — so the claim "the guided round is no longer dead" was true of
+  the harness only. Found from the owner's live run: both cross-script
+  questions refused at 0.0s with no understood_as on a verified-fresh image
+  (`True True True` + the diag_bridge `counting:` header). raglab/
+  diag_sufficiency.py measures the asymmetry directly — it runs check() TWICE
+  over the SAME pool, once as /answer does and once with a search_fn; on the
+  339-chunk corpus TM03 is غير كافٍ as served and كافٍ with one round
+  (query «صرف عمليات», +20 hits). service.py now passes a search_fn built from
+  the request's own retrieval profile, under the SAME
+  SUFFICIENCY_GUIDED_BRIDGED_ENABLED switch, so "0" restores the no-round
+  behavior exactly. No new regression run was needed: the frozen-set numbers
+  were produced by measure(), i.e. WITH the round already running
+  (guided_rescues=0 in every arm). COST: up to MAX_GUIDED_ROUNDS extra
+  retrievals at ROUND_K=20, only on requests that were ALREADY going to refuse.
+  GOVERNANCE: service.py may hold exactly ONE `import sufficiency`, inside the
+  gate — so the flag is read inside _commitment_gate, not at module scope;
+  SufficiencyCheck.test_inert_layer_no_deployed_imports caught the first
+  attempt. Guarded by DiagSufficiencyTest (5) plus two tests pinning that the
+  round needs a search_fn and that BOTH check() call sites forward one.
+- **ROOT CAUSE of TM03 was intent classification, not the bridge arm
+  (2026-10-05, found from the owner's rebuild).** intent.py's تعريفي rule
+  carried a BARE r"Quelle", and re.search finds it inside «Quelles» — so
+  «Quelles sont les étapes et modalités de réalisation d'une opération de
+  change…» classified as تعريفي (fired_rules: 'Quelle'), the plan demanded
+  definition_or_purpose_unit, and the guide's 5.3 section is PROCEDURAL, so it
+  could never cover it. The anchored r"Quel\b" beside it already refused to
+  match; the bare form is now anchored, and إجرائی gained the French procedural
+  markers it was missing ENTIRELY (étapes/modalités/procédure/comment). No
+  bridge, shape or guided round can fix a misclassified intent — sections 9-14
+  were all treating a symptom of this. Measured: TM03 goes to إجرائي /
+  procedural_evidence and is now كافٍ in all three columns (one-shot, guided,
+  gate-probe), i.e. it no longer needs the round at all; TM04 still does. Both
+  frozen sets byte-identical (FS=0 FR=0 agreement=1.0; 38/9/3 and 8/2), and the
+  French SINGULAR still classifies تعريفي — anchoring narrows, it does not
+  remove. NOT gated: this is a wrong-pattern fix with measured zero regression.
+- **Two bugs the owner's run exposed in my own tooling.** diag_sufficiency.py
+  printed "service.py passes no search_fn" UNCONDITIONALLY, so it printed that
+  on a container already rebuilt with the wiring; deployed_forwards_search_fn()
+  now reads the installed service.py and picks the message, degrading to
+  "could not read" rather than asserting. And the guided round re-issued the
+  SAME query every round (owner's output: two rounds, both «صرف عمليات»);
+  searched_terms now drops already-searched terms BEFORE truncating, so round 2
+  takes the next rarest terms or stops. Cost: fewer retrievals, not more.
+  test_guided_rounds_bounded_and_rescuing pinned len(rounds)==MAX_GUIDED_ROUNDS
+  exactly — it was pinning that waste; it now pins <= the cap and that no two
+  rounds search the same terms.
+- **VERIFIED END TO END on the owner's deployment (854 chunks, cap 76, after
+  deleting 859 duplicate chunks: 35 + 824, baked corpus untouched).** TM03 (fr)
+  is `answered/supported`, كافٍ / procedural_evidence, 7 claims over 3 sources
+  (chunk_0138/0139/0140, heading 5.3) with `understood_as` ABSENT — a French
+  question about «les étapes et modalités» answered verbatim from an
+  Arabic-only corpus with NO interrogation, i.e. the first pass alone suffices
+  once intent is classified correctly and the duplicates are gone. TM04 (en) is
+  `answered/supported` too, but STILL via the interrogation (9.636s): on the
+  deployment's vector retrieval the guided round does NOT flip it
+  (with_rounds is also غير كافٍ), whereas the harness — BM25 over 339 chunks —
+  does. Same correct, disclosed outcome; different rescuer than sections 12/14
+  describe. Post-dedup df: every bridge term anchors (صرف 25, اعتماد 22,
+  مستندي 11, ربا 26, مرابحة 31 …) except عمليات df=279 vs cap 76 — the guard
+  working correctly, it is in 33% of chunks. سلف is a DEAD ROW in the bridge
+  table: df=0 tokenized, because the corpus only has «سلفة» (measured locally:
+  1 chunk by substring, 0 tokenized), so the old "6" was containment, not a
+  term. Measured and REJECTED: dropping above-cap terms from the round's query
+  is exactly neutral on all six probes and both frozen sets, so there is no
+  measured benefit to justify a production change.
+- **Three owner decisions implemented (2026-10-06).** (1) `reject_409`:
+  POST /documents now refuses content that is SHA-256-identical to a BAKED
+  corpus file with 409 `document_already_in_corpus`, naming the file. The
+  collision is keyed by CONTENT HASH, NOT NAME — that is exactly how
+  `reglement` slipped past DocumentStore's own dedupe (byte-identical to the
+  baked Circulaire under a different id). TRAP the existing test caught: the
+  pushed-documents dir is deliberately part of every profile's corpus
+  (service.py appends documents.root to data_dirs), so without
+  `exclude=documents.root` the guard rejected re-pushing an already-pushed
+  document and broke the documented "identical bytes -> 200 unchanged"
+  contract. (2) `remove_row`: `salaf -> سلف` deleted from
+  CROSS_SCRIPT_BRIDGES and diag_bridge's term list — tokenized df=0 because
+  the corpus only has «سلفة». (3) `keep_on`: the guided round stays default
+  ON even though it rescues nothing on the owner's deployment, because the
+  frozen-set regression is zero across all eight arms and the cost is confined
+  to requests that were already refusing. Guarded by
+  DocumentsApiTest.test_push_of_baked_corpus_content_is_rejected_409 and
+  test_baked_match_is_content_keyed_not_name_keyed.
+- **Off-topic re-aiming: the label exists, is measured, and is IGNORED
+  (2026-10-06).** «هل يمكنني فتح حانة؟» came back answered/supported with five
+  claims about bank LICENSING. interrogate.py asks the model for
+  `non_banking` (lines 63/70) and the harnesses score `classification_match`,
+  but service.py only COPIES the label into the payload (1018, 1047) — no
+  branch acts on it. intent.py's `personal` flag is likewise computed and never
+  read in the deployed path. Owner decisions (both_parts + rows_minimal):
+  (a) CONCEPT_VOCABULARY — 8 declared Arabic colloquial->corpus rows behind
+  SUFFICIENCY_CONCEPT_VOCABULARY_ENABLED, applied in _anchors' SAME-SCRIPT
+  branch (the cross-script branch never fires for an Arabic question) under the
+  same df guard, and added to the guided round's terms. Measured: the users'
+  words are absent (حانة/خمارة/بار/ملهى/قمار/كازينو/رهان/مخدرات all df=0) while
+  the corpus's own are present (خمر 3, ميسر 2, محرمات 6).
+  (b) scope_note + answered_reaimed_question (additive), printed by
+  local_front.show_answer BEFORE the claims — the live case printed five
+  authoritative claims and only then disclosed the re-aim.
+  MEASUREMENT CORRECTION: I had reported «كحول» as present in 33 chunks. False
+  — _hit_terms strips the leading «ك» as a prefix, so it normalizes to «حول»
+  (tokenized df 33, SUBSTRING df 0): the word is absent and the 33 was the
+  common word «حول». It is therefore NOT a table target, and
+  test_every_declared_target_is_really_present_and_distinctive now pins every
+  declared target to be genuinely present AND under the scaled cap.
+  SCOPE LIMIT, declared in the code: the rows make evidence REACHABLE, they do
+  not make the corpus answer the question asked — the guide regulates whether a
+  BANK may finance an activity involving prohibited elements, not whether a
+  person may open a venue. Both frozen sets identical, all six probes
+  unchanged.
+- **Root cause of the 'still refused after rebuild' (2026-10-02, CONFIRMED
+  end-to-end)**: the owner's index has 1713 chunks vs the baked-in 339 — the
+  corpus is duplicated ~5x through pushed documents. df(المرابحة) = 17 x 5
+  ~ 85 > CROSS_DF_MAX=30, so the bridge's honest df guard blocks the anchor
+  (a guard doing its job on a polluted index). Reproduced live on the demo:
+  clean -> answers; +4 pushed Guide copies -> df=57 -> REFUSED (their exact
+  symptom); delete the dups -> answers again. Deliverable:
+  raglab/diag_bridge.py (remote one-shot diagnostic: paginates /chunks for
+  exact bridge-term df + the per-doc rollup, /search window check, verdict
+  with the exact fix; token-aware via local_front.Api). Guarded by
+  DiagBridgeTest (3). Remediation for the owner: menu 14 -> remove the
+  pushed duplicates (DELETE purges chunks immediately), verify with
+  diag_bridge, re-ask. Platform-team process note: do not push documents
+  that are already baked into the image (docs/). If duplication is
+  INTENTIONAL, the declared cap can be made corpus-relative (owner decision,
+  measured first).
+- **Scaled df cap (2026-10-02, from the owner's diag output)**: their
+  numbers (1713 chunks, df(المرابحة)=67, retrieval 5/5) revealed a deeper
+  layer than duplication — their env downloads tiktoken, chunking the same
+  corpus into 858 pieces (vs 339 with the fallback estimator), so df counts
+  scale ~2.5x and the ABSOLUTE cap 30 would break even on a deduplicated
+  index. Fix: rarity is a SHARE — cap = max(30, ceil(30*N/339)) with N
+  carried by build_df (__corpus_size__); on the calibrated corpora the cap
+  is EXACTLY 30 (measured byte-identical: 38/9/3 FS=FR=0 agree=1.0, targets
+  8/2). At the owner's size: cap 152 -> df 67 passes. Boundary measured:
+  CONCENTRATED duplication (one doc x5) legitimately still blocks (share
+  10.6% > 8.9%). diag_bridge now computes the scaled cap, splits pushed
+  docs into re-pushes-of-baked (delete; they are often DEGRADED
+  re-extractions — their pushed law copy: visual-order, no codex, 543 vs
+  233 chunks) vs genuinely-new (keep — their tarif-2026.md). Tests:
+  SufficiencyBridgeTest 9, DiagBridgeTest 5. LIVE VERIFIED (run
+  36996279416, tag real-test-relcap-20261002, SUCCESS): on the tiktoken-
+  chunked live arm the scaled cap FIXED a live false refusal — q42 left
+  the disagreement list (FR 4->3, agree 0.86->0.88, refused-before-model
+  10->9, كافٍ 37->38) with FS unchanged at 3 (zero new false sufficiency);
+  targets identical. Demo E2E limits documented
+  (stub embedder cannot cross scripts in retrieval — the decisive check is
+  the owner's server; their /search reaches المرابحة 5/5).
+- **murabaha case CLOSED (owner's production transcript, 2026-10-02)**:
+  the question now ANSWERS on their server — generated answer, 3 cited
+  claims with verbatim quotes across all three documents, the typed unit
+  id loi-2016-48:art012 on the law citation, كافٍ fields rendered; the OOS
+  question in the same session still refused before the model. Full chain
+  recorded in PHASE7_EXPERIMENTS.md. Standing recommendations: TOP_K 20
+  (they run 5), push only genuinely-new documents.
+- **PHASE 8 BUILT (2026-10-02, owner: «جميل، ابن الفكرة» after the design
+  discussion; historical 1.4.0 behavior, with topic-map details superseded by
+  the Phase-9 entry below)**: demand interrogation — an insufficient practical question
+  is re-expressed as the nearest TECHNICAL question instead of being
+  refused. SEQUENCE architecture (the deterministic path stays free):
+  كافٍ -> answer directly, zero extra calls; غير كافٍ with nothing covered
+  -> ONE bounded interrogation call through the answer model (descriptive
+  questions ABOUT the request; topics chosen VERBATIM from the
+  deterministic corpus topic map — topic_map.py: law typed units + doc
+  section headings, ~265 topics, prompt-bounded 400) -> the paraphrase is
+  RE-EVALUATED by the same retrieval+sufficiency engines -> answered with
+  full disclosure (understood_as/original_question/interrogation in the
+  response + audit + a local_front line «فُهم طلبك كـ») or refused with a
+  better referral (nearest corpus topics). FAIL-CLOSED: malformed output /
+  invented topics (verbatim map containment) / invented requirements
+  (SHAPE_PATTERNS kinds only) / identical paraphrase -> normal refusal.
+  Gate REPHRASE_INTERROGATION_ENABLED default OFF at build time
+  (activation = the owner's, after the live measurement protocol in
+  audits/PHASE8_INTERROGATION.md) — SUPERSEDED: see the PHASE 8 CLOSED
+  entry below. Files: topic_map.py, interrogate.py,
+  config.py, service.py (inside the commitment gate's nothing-covered
+  branch; the partial path untouched), local_front.py. Tests:
+  InterrogateTest 6 (service E2E: answered-with-disclosure, zero calls on
+  sufficient, gate-off pure refusal, malformed fail-closed, better
+  referral, injection-inert) + InterrogateTest 8 + TopicMapTest 2
+  (pipeline). Offline gate EXIT=0 (399 tests).
+- **PHASE 8 LIVE-FIX (2026-10-02, from the owner's first live ON-run)**:
+  «هل يمكن أن أفتح بيت دعارة؟» was ANSWERED via the paraphrase «الشروط
+  الشرعية والقانونية لصحة المعاملات...» (4 gated claims; disclosure
+  shown) and «هل يمكن أن أتمتع بقرض؟» was honestly refused with the
+  better referral — both as designed. Two defects found in the transcript
+  and fixed: (1) the answered-via-paraphrase payload carried the ORIGINAL
+  question's «غير كافٍ» + refusal_reason (stale state_box['s']) — now the
+  answered path reports the PARAPHRASE's verdict (state_box['s']=s2) and
+  never attaches a refusal reason (audit likewise); (2) the interrogation
+  call's cost was invisible (loan question showed 0.0s while paying the
+  call) — now interrogation.seconds in the payload/front line and
+  interrogation_seconds in the audit (recorded even fail-closed);
+  top-level seconds stay generation-only. Also verified: the corpus has
+  NO prohibited-activities topic, so the chosen paraphrase is genuinely
+  nearest (no prompt steering warranted). Notes to the owner: S1/S4 were
+  the SAME text via baked + pushed copies (delete the 5 re-pushes);
+  RAGLAB_TOP_K=20 might flip the loan paraphrase from refusal to answer.
+  Gate stayed default OFF at that point. Offline gate EXIT=0 (409 tests,
+  sacrebleu reinstalled after the environment reset).
+- **PHASE 8 CLOSED — ACTIVATED (2026-10-02, owner decision)**: the demand
+  interrogation is now the DEFAULT behavior of POST /answer —
+  REPHRASE_INTERROGATION_ENABLED defaults to "1" in config.py;
+  =0 restores the plain refusal byte-for-byte (guard:
+  InterrogationTest.test_gate_off_is_the_pure_refusal). Decision basis: the
+  first live ON-run on the owner's server (both questions took the designed
+  path — see the LIVE-FIX entry + audits/PHASE8_INTERROGATION.md «القياس
+  الحي الأول»), the two transcript defects already fixed and pinned, and
+  the deterministic gate. New test pinning the DEFAULT itself (a service
+  built with NO gate override still interrogates and answers):
+  InterrogationTest.test_gate_default_is_on_and_drives_the_service_without_override
+  — offline gate EXIT=0 (410 tests). SERVICE_VERSION bumped 1.3.0 -> 1.4.0
+  (additive-only: the interrogation disclosure fields understood_as /
+  original_question / interrogation{...,seconds}; CONTRACT §3.17 + the §3.1
+  field notes, SERVICE.md, COOKBOOK §2.11, .env.example all updated).
+  HONEST LIMIT recorded in the audit: the live measurement covered TWO
+  practical questions, not the full protocol set (pub/coffeeshop/aviation/
+  "bank services"), and the two control classes (a sufficient question
+  unchanged, an out-of-scope question still refused) are pinned
+  deterministically but were NOT re-measured live after activation —
+  recommended as the owner's first post-deploy check. Deploy: code +
+  default changed, so `git pull && docker compose up --build -d`.
+- **PHASE 9 FOLLOW-UP (2026-10-05, owner sequence: vector retrieval first,
+  then the 84.6% topic-label gap)**: vector-only run `37245380571` (tag
+  `phase9-stage1-vector-20261005`, commit `965634f`) covered 7 evidence-bearing
+  cases; hit@1/3/5 = 5/7 in dense-only and reranker-on arms; no answers were
+  generated in that retrieval-only measurement. `topic_map.py` then moved from
+  heading-only choices to 262 source-grounded nodes with paths/excerpts and
+  exact-matched prompt IDs; SERVICE_VERSION 1.4.0 -> 1.5.0 (HTTP shape
+  unchanged). Offline gate EXIT=0 (417 tests;
+  `raglab/logs/test_run_20261005_011647.log`). Corrected paired live map probe
+  `37251040562` sent 12 xKiro calls across six cases: all parsed, no call
+  errors, target hits 4/5 -> 5/5; diagnostic only, no retrieval or answer
+  generation. See `raglab/audits/PHASE9_STRUCTURE/11_TOPIC_MAP_LIVE_COMPARISON.md`.
+  Initial end-to-end probe `37252874521` ran all six unchanged questions through
+  `POST /answer`; a saved-artifact replay `37253849145` made no provider calls.
+  The later trace-enabled K=5 arm `37263044824`, plus K=12 `37263803281` and
+  K=20 `37264116035`, all returned HTTP 200 for six cases: 3 answered / 3
+  refused, all three generated answers validated, seven logical calls and zero
+  provider/HTTP errors. Expected-document retrieval was already 5/5 in the
+  original pass and 2/2 after interrogation at K=5, and stayed identical at
+  K=12/20. This is not a final-citation metric.
+  The K=12/20 harness/workflow support and stage classification landed in
+  `67e74b2`; CI run `37263688467` passed the offline suite and Docker/import
+  smoke. Trace distinguishes document hit, reranked input-position/chunk, and
+  requirement coverage. TM03/TM04 retrieve the expected Guide and relevant
+  sections in the top five, but sufficiency still refuses them (TM04's source
+  has a direct definition, yet `definition_or_purpose_unit` has no covering
+  chunk). Raising top_k did not change the outcomes. TM06's after-interrogation
+  pass is sufficient, then generation returns `reason=insufficient_evidence`
+  with no supported claims; the audit now classifies that as
+  `answer_generation_no_supported_claims`, distinct from the
+  `evidence_insufficient` gate. Exact refusal text, per-pass trace, final
+  answers, and limits are recorded in
+  `raglab/audits/PHASE9_STRUCTURE/12_PHASE9_ANSWER_PROBE_RESULTS.md`.
+  The first attempt `37252759793` stopped at preflight with no provider calls.
+  Nothing changed in `questions_50.json`, `questions_targets.json`, production
+  service/index, or the default top_k; the measurements do not justify changing
+  defaults or expanding the topic map.
+- Current Arena session branch: **arena/01a10905-raglab**, based on
+  54b993f8 (from arena/01a107b8-raglab). Tokenizer-dependent historical-map
+  count validation was removed in commit `39eaf79`; corrected map run
+  `37251040562` completed. Regular CI on code commit `67e74b2` passed
+  (run `37263688467`; offline regression suite and Docker/import smoke).
+  Local `--validate-only` could not finish because sandbox Python lacks
+  `tiktoken`, but the per-arm GitHub preflights passed.
+- **Phase-5 item 6 BUILT (owner directive 2026-10-01)** —
+  `raglab/decompose.py` (read-only): the intermediate decomposition layer.
+  EVERY question → reformulated micro-questions, each with its partial
+  intent, its ONE requirement (item-2 plan, consumed as-is), and the
+  Phase-4 ANSWERABLE SURFACES with live counts (definition 28 / penalty 7 /
+  procedure 56 / delegation 3 units, 53 structured number records +
+  GET /numbers, 77 internal-reference edges). Compound → per sub-question;
+  «من حيث» comparisons → one micro per compared aspect; influential
+  ambiguity → advisory clarification naming the concept and its shared
+  documents. DECLARED review data: MICRO_TEMPLATES, ANSWERABLE_SURFACES,
+  subject-extraction patterns (INTENT_RULES/DERIVATION_RULES consumed
+  unmodified). Measured: 50/50 + 10/10 decomposed (55 + 17 micros), ZERO
+  contract violations (no unasked requirement, no surface-less micro, no
+  ambiguity without clarification). CLI: `python decompose.py [--question ...]`.
+  Guarded by `DecompositionCheck` (10) — suite 207 OK. Wiring it into the
+  deployed path (e.g. per-micro retrieval) is a separate owner gate.
+- **Deterministic reranker** (Phase-3 intervention 3, 2026-10-01):
+  `raglab/rerank.py` — governed-weight deterministic signals (rank prior,
+  query-term coverage in text/heading, exact phrase, degenerate-length penalty;
+  stop list for the coverage features only) reordering the retrieved candidate
+  pool before the top-k cut, wired in `retrieval.retrieve` behind
+  `RERANK_ENABLED` (default OFF). It can only reorder retrieved candidates.
+  Deterministic measurement on the adopted BM25 arm: 62/82/87 -> 62/89/89
+  (hit@1 and verbatim/OOS unregressed). Live measurement (tag
+  real-test-rerank-20261001, run 36832594492, same-run comparison):
+  vector 69/78/84 -> rerank 71/80/87 with fr preserved 50/67/67 and q44
+  recovered — the best mode on the live arm. Embedding jitter between runs is
+  +-2pp (q44 flip), so same-run tables are the honest comparison; details in
+  `raglab/audits/PHASE3_INTERVENTIONS.md`. ACTIVATED as the default
+  2026-10-01 (owner decision; RERANK_ENABLED defaults to 1 — set 0 to disable).
+- **Model-independence tool** (re-introduced 2026-10-01, step 2.4-ج):
+  `raglab/answer_ab.py` — ONE retrieval per question fed identically to N answer
+  models (`--model provider/model-id`, first is the reference); pairwise status
+  agreement + source-Jaccard, substance-divergent question lists, per-model
+  refusal/gate counts; offline-testable with injected factories. A provider-
+  failing arm is data, not a dead run (status="error" rows, per-arm error
+  counts, raised exceptions caught per question). Running it (step 3.3) spends
+  answer-model calls and happens via CI exclusively:
+  `.github/workflows/answer-ab.yml` (manual trigger, or the answer-ab-* tag
+  fallback when dispatch is blocked for the app token) — it ingests the
+  restructure arm, runs the owner-authorized arms (2026-10-01: pinned
+  xkiro/qwen + nvidia/kimi-k3), posts the ANNO summary as an annotation and
+  uploads the report JSON. Plans: `raglab/audits/PHASE2_MACHINERY.md`;
+  baselines and records: `raglab/audits/PHASE2_BASELINES.md`.
+- **Real-model A/B + retrieval modes**: `.github/workflows/real-test.yml`
+  (manual trigger, spends API calls, reads repo secrets) + `raglab/real_report.py`
+  (table builder). Since step 3.2 (2026-10-01) the run also evaluates the
+  restructure collection in `--hybrid` (RRF) and `--hybrid-blend` modes, and
+  real_report.py renders the vector/rrf/blend comparison (overall, by language,
+  by category, per-mode OOS scale, misses, flips) into the markdown report and
+  the ANNO annotation — the data the hybrid-default decision reads. Plans and
+  records: `raglab/audits/PHASE2_BASELINES.md`.
+- **CI**: `.github/workflows/ci.yml` — API-free, runs on every push, must stay green.
+- **Interactive console** (added 2026-09-08, session `arena/01a08139-raglab`):
+  `raglab/app.py` — one menu over every lab function (inspect/ingest/query/
+  answer/chat/evaluate/sanity/diagnostics) that also lets the user switch the
+  embedding provider/model (all `build_embedder` providers) and the answer/chat
+  provider/model (xKiro pinned SKU, NVIDIA build-endpoint chat models, Google
+  free-tier Gemini via `llm_smoke`, Kira AI `kiraai.vn` OpenAI-compatible
+  gateway e.g. `glm-5.3-free`), and manages API keys per provider
+  (keep/change/add → written to `raglab/.env`, masked to 8 chars). Custom model
+  IDs typed in the selection menus are remembered per provider in
+  `app_state.json` (`record_custom_model`, capped at 20/provider) and
+  re-offered next session; menu 2 → 3 reviews/removes them. Non-pinned xKiro
+  SKUs run through `GatewayChatClient` (NvidiaClient on
+  `api.xkiro.com/v1`) as EXPERIMENTAL calls — the pinned SKU alone keeps
+  `build_answer_generator`'s live free-price check, and no benchmark number is
+  attributed to experimental SKUs. Greetings (fr/en/ar) are answered locally,
+  zero calls; invalid_output prints the failed check, offers a re-ask, and the
+  search-chunks action (citation-gate normalization) tells boundary-crossing
+  quotes from paraphrases. It is a lab
+  surface like `chat.py`: it builds its OWN collections
+  (`raglab_app_<provider>_<model>_<chunking>`) via a `SimpleNamespace` copy of
+  config (`build_lab_config`), never mutates the module config, and the pinned
+  `pipeline_policy` checks still gate `main.py`. Selections live in
+  `raglab/app_state.json` (gitignored) — never in `.env`. Offline coverage:
+  `tests_offline.py` drives a stubbed HF+nvidia-chat profile end-to-end
+  (state → lab config → ingest → retrieve → cited answer) plus env-writer,
+  state round-trip, greeting, locate_text, model-memory and gateway-wiring
+  checks. Known subtlety: `config.active_embedding_model()` is
+  a closure over module globals, so the lab copy MUST override it with a lambda
+  returning the selected model or store.py mislabels chunks.
+- **HTTP microservice** (added 2026-09-11, same session): `raglab/service.py`
+  (FastAPI+uvicorn, `requirements-service.txt`) exposes the SAME runtime as the
+  console over REST: `/health`, `/models`, `/profile` (+ optional
+  `POST /profile` behind `RAGLAB_ALLOW_PROFILE_SWITCH=1`), `/search`,
+  `/answer` (greetings answered locally, refusals are HTTP 200 + reason),
+  `/ingest` as a background thread + `/ingest/status`. Profile from
+  `RAGLAB_*` env vars at boot (validated loudly, SystemExit on bad combos);
+  keys from env only; Dockerfile + docker-compose.yml at the repo root
+  (`RAGLAB_CACHE_DIR` relocates caches into a volume). Single replica by
+  design (local ChromaDB); no built-in auth — must sit behind a gateway.
+  **The refactor to know about**: the runtime half of app.py moved to
+  `raglab/profiles.py` (registries, SUPPORTED_*, build_lab_config,
+  Gateway/Google chat clients, build_generator, collection naming, ingest,
+  greeting logic, collection_count/stored_index_info); app.py re-exports it
+  (existing callers/tests unchanged) and keeps only the console (menus, key
+  prompts, app_state.json, model-ID memory). profiles.py imports chat.py;
+  service.py imports profiles.py and NOTHING from app.py. Offline coverage:
+  `test_service.py` (19 tests, stubbed HF embedder + injected fake generator,
+  TestClient) added to run_tests.sh and ci.yml; requirements-benchmark.txt
+  gained fastapi+httpx for it. Full docs with the env-var table:
+  `raglab/SERVICE.md`.
+- **`raglab/CONTRACT.md`** (same session): the HTTP contract for client/fullstack
+  teams — ground rules (status ladder, error envelope, spend table), the state
+  model (profile → collection → index lifecycle, keys, switching), full
+  endpoint reference with real example payloads (captured from the offline
+  fixture via a throwaway script), a 24-reason error catalog, and integration
+  recipes (boot sequence, answer rendering incl. refused/greeting, chat =
+  client-side history, provider picker, long-op polling). MACHINE-truth for
+  field names is /openapi.json; CONTRACT.md is the behavior contract.
+- **`raglab/local_front.py`** (same session): the console's twin over REST —
+  same 13 menus as app.py (status/doctor, providers & models, keys, inspect,
+  chunk search, sanity, ingest, retrieval, answer, chat, evaluate, settings,
+  diagnostics), every action an endpoint call. Imports NOTHING from the lab,
+  only urllib + JSON; stateless except front_state.json (custom model-ID
+  memory, 20/provider). Also one-shot flags: --status, --ask, --search,
+  --ingest (polls /ingest/status), --smoke, --interactive, --no-keycheck,
+  --base-url. `--smoke` runs the state-aware suite (20 checks keyless) that
+  reads /health + /models to decide what /search, /answer and /ingest SHOULD
+  do in the current state: keyless → expects 503 missing_api_key, keys +
+  empty index → expects 409 empty_index, ready → one live /search + /answer.
+  `test_service.py::LocalFrontOverHttp` boots a real uvicorn on port 0 and
+  requires the suite to pass over actual HTTP in CI; `ConsoleEndpointsTest`
+  covers the keys/inspect/chunks-search/sanity/evaluate/profile-switch
+  endpoints directly (stubbed). Exit codes 0/1/2 (ok / failed / unreachable).
+- **Windows native run + production image** (2026-09-24, session
+  `arena/01a0d2f6-raglab`): two packaging layers for the same service, both
+  additive (endpoint freeze untouched).
+  1. Windows, no Docker: `raglab/setup.ps1` (venv + requirements-service.txt
+     + .env), `raglab/run_server.ps1` (docker-compose equivalent: uvicorn on
+     0.0.0.0:8000, token resolved -Token>env>.env), `raglab/run_front.ps1`
+     (UTF-8 console + token auto-pickup) + `.bat` twins; guide `raglab/WINDOWS.md`.
+  2. `Dockerfile.prod` (multi-stage: deps venv + baked cl100k_base via
+     TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache → slim non-root uid 10001 runtime
+     with HEALTHCHECK `raglab/container_healthcheck.py` that treats 401 as
+     alive because the API is token-gated). Served with `--network none` in
+     CI (`.github/workflows/docker-image.yml`: tag `v*` → build + offline
+     smoke (docker/offline_smoke.py copied into the container) + GHCR push
+     `ghcr.io/seif-bkh/raglab-service` + Release exports; dispatch default =
+     build+smoke only). Exports ship in TWO packagings of the same docker-save
+     tar: `.tar.gz` (Linux/macOS) + `.zip` (Windows) + one `.sha256` sidecar;
+     `docker/save-image.sh|.ps1` produce them locally and
+     `docker/load-image.sh|.ps1|(load-image.bat)` verify+load+print the run
+     command on the target. `docker-compose.prod.yml` = image-only compose
+     (pull_policy env-tunable, prod volume names).
+     Guide: `raglab/PROD_IMAGE.md`. Offline means START/SERVE offline — the
+     provider calls (NVIDIA/xKiro) egress by design; HTTPS_PROXY works
+     (stdlib HTTPS clients).
+
+## 1b. Target-state transition: the gap analysis (2026-09-24)
+
+The user delivered a **target-state design report** (external, Arabic) for evolving this
+lab into a governed "banking RAG decision system": intent understanding + evidence plan,
+sufficiency checks, conflict precedence, document governance, controlled vocabulary,
+knowledge units with functional types, relations, structured numeric data, per-user
+permissions, audit logging. Its transition plan's Phase 1 is exactly: match the
+current-state spec against the target report, converting its assumptions into facts.
+
+**`RAGLAB_GAP_ANALYSIS.md`** (repo root, Arabic, evidence-cited like RAGLAB_SPEC.md) is
+that deliverable. Key outcomes (all verified in code this session):
+
+- The target's assumed "simple RAG" current state is wrong in BOTH directions. Ahead of
+  assumptions: post-generation citation gate (verbatim quote + numeric membership,
+  `answer.py:100-219`), explicit output contract (`grounded-v1/v2`), structured refusal
+  taxonomy, fingerprint staleness refusal, docstore content-hash versioning, structural
+  chunking with breadcrumbs + Arabic visual-order repair, full hybrid machinery
+  (BM25+RRF/blend), Arabic normalization shared by docs AND queries
+  (`evaluate.prepare_query_text`), disciplined measured evaluation (NOT impressionistic).
+- Behind assumptions (start-from-zero gaps): intent layer, evidence plan + deterministic
+  sufficiency, conflict precedence, relations ("exception always retrieved with its rule"
+  unguaranteed), document governance axes (effectivity/audience/authority), structured
+  numeric path, per-user permissions (single shared service token only), audit log,
+  partial/clarification answer states, reranker, controlled lexicon, stable unit ids.
+- Decisive architectural fact: **the answer model never touches the query** (no rewriting;
+  policy raises on translation: `pipeline_policy.py:16-17`), so retrieval is
+  model-independent BY CONSTRUCTION — the target's "fix context, swap model" decisive test
+  is implementable today via profile switching + the citation gate as automated judge.
+- Transition-plan rescoping recorded in the doc: Phase 3 "add hybrid search" becomes
+  "enable existing hybrid as default + measure"; permission/version mandatory filters
+  depend on metadata that doesn't exist yet (Phase 4 must partially precede); Phase 6 is
+  half-built already. Recommended next step (Phase 2): extend `VALID_CATEGORIES` in
+  `evaluate.py` with the target's symptom categories (colloquial/synonyms/implicit/
+  compound/ambiguous) — backward-compatibly — plus a `questions_v2.json` with expected
+  evidence per question, then baseline vector vs rrf per category.
+- Implementation constraints the target plan must respect here: endpoint freeze
+  (additive only, §2.7), pinned-pipeline policy (no number attribution to other models),
+  sandbox network (live runs only via CI `real-test.yml`), hard-harness files untouchable,
+  offline gate green before every push.
+- **Phase 2 RE-PLANNED on the docs/ corpus (owner direction, 2026-09-28)** —
+  `RAGLAB_ROADMAP.md` (Arabic) remains the execution contract. The owner directed that
+  the working corpus is `docs/` ONLY; the web-compiled Al Baraka round (and everything
+  built on it) was fully reverted in one forward commit: sheets + chunk maps deleted,
+  `questions_v2.json`/`answer_ab.py`/migration tool deleted, all code files restored to
+  their pre-round state (evaluate 4 categories, harness50 without flags, service back to
+  1.2.5 with the original /evaluate whitelist), q50 trimmed to its 30 docs/-based cases
+  and the legacy set to 4. Three standing decisions recorded: (1) fictional/web corpora
+  stay OUT of the repository; (2) the Phase-2 machinery (5 categories, multi-evidence
+  schema, model-independence tool) is re-introduced ONLY as reviewed steps; (3) q50 is
+  rebuilt to 50 docs/-based cases batch by batch with the owner verifying each batch.
+  WORK PROTOCOL from now on: every step gets its own published schema
+  (objective/inputs/actions/outputs/automatic checks/how the owner tests it/transition
+  criterion/rollback) — no step runs inside another, no number is adopted unreviewed.
+  The step sequence: docs audit (per document) → question-set plan → batches →
+  baselines (BM25 local, then the live CI arm which decides the hybrid default BY
+  DATA). ONE necessary coherence fix shipped with the revert: `main.py inspect` and
+  `ingest` now default to the REAL corpus (../docs + raglab/data via
+  `main.default_data_dirs`, mirroring chat.data_dirs) instead of data/ alone — the
+  old default only exited 0 because the deleted sample sheets lived there, and CI
+  runs bare `python main.py inspect`. Verified: 4 documents, 325 chunks, exit 0. The pre-2026-09-28 round remains in git history for archaeology only.
+
+
+---
+
+## 2. Hard constraints (never violate)
+
+1. The hard harness pins chunking at **640/40 in `raglab/benchmarks/hard_harness_plan.json`**
+   — do not touch that file or its behavior.
+2. `ci.yml` + `raglab/run_tests.sh` reference **flat files in `raglab/`**
+   (`tests_offline.py`, `test_nvidia_pipeline.py`, `test_hard_harness.py`,
+   `main.py inspect`, …) — never move or rename them.
+3. Question-set format follows `raglab/evaluate.py`
+   (`load_question_set`): categories `{verbatim, paraphrase, cross-lingual, out-of-scope}`
+   plus the five target-state categories re-introduced 2026-10-01 (step 2.4-أ,
+   owner «طيب واصل المرحلة الثانية»): `{colloquial, synonyms, implicit, compound,
+   ambiguous}` — `ambiguous` cases must carry a non-empty `ambiguity_note`;
+   out-of-scope questions must have no expected match. Multi-evidence cases
+   (step 2.4-ب) may carry `expected_substrings` (non-empty list of non-empty
+   strings) scored by requirement completion. Plans + execution records:
+   `raglab/audits/PHASE2_MACHINERY.md`.
+4. **Never commit `raglab/.env` or any API key value.** The keys exist as GitHub Actions
+   repo secrets named `NVIDIA_API_KEY`, `XKIRO_API_KEY` (and `GOOGLE_API_KEY` for the
+   LLM fallback) — added by the user 2026-09-07. Reference them by name in workflows;
+   the dev token cannot read or list secrets (403) — that is normal, not an error.
+5. `raglab/results/` is gitignored ("generated data — never commit these"). Benchmark
+   artifacts there are **regenerable**: `python harness50.py` rebuilds the BM25 A/B
+   artifacts offline. If a workspace is rebuilt, re-run it rather than treating missing
+   files as a loss.
+6. Work only on the session branch (current session: `arena/01a10905-raglab`,
+   pushed only there; the older `arena/01a07b8c-raglab` and other `arena/*`
+   branches plus the four older workflows (`free-models.yml`,
+   `hard-harness.yml`, `provider-catalogs.yml`, `retrieval-judge.yml`) belong
+   to earlier sessions — do not touch them).
+7. **Service endpoint freeze (user directive, 2026-09-23): never alter an
+   existing HTTP endpoint** — not its path, method, request schema, response
+   schema or semantics. The application integrating this agent depends on
+   them staying exactly as documented in `raglab/CONTRACT.md`. Changes are
+   **additive only**: new endpoints are welcome when a capability is missing;
+   a new optional response field is acceptable only when a conforming client
+   cannot break — when in doubt, add a new endpoint instead.
+   `raglab/local_front.py` is the integration testbed: every capability must
+   be exercisable through it over HTTP, exactly the way the integrating app
+   will call it. Bump `SERVICE_VERSION` on every service change.
+
+## 3. Network reality (check before promising anything)
+
+From the dev sandbox, **only PyPI and api.github.com are reachable.** TLS-blocked
+(verified by probe, do not re-probe pointlessly): huggingface.co,
+download.pytorch.org, Azure blob hosts, the tiktoken CDN, `integrate.api.nvidia.com`,
+`api.xkiro.com`. Consequences:
+
+- **Live model calls cannot run in the sandbox. Ever.** They run in CI (full network
+  there) via `real-test.yml`. Pasting keys into chat does not unblock anything here.
+- `cl100k_base.tiktoken` cannot be downloaded locally; CI fetches it. CI therefore
+  tokenizes with **real cl100k_base** while local runs use a chars/4 estimator —
+  token-dependent behavior (chunk boundaries, orphan-start checks) can differ, and
+  only CI is the arbiter for that class of tests.
+- Local test gate before pushing: `./raglab/run_tests.sh --offline` (exits 0 when green).
+- The venv at `raglab/.venv` is gitignored and does NOT survive workspace rebuilds:
+  `python3 -m venv raglab/.venv && raglab/.venv/bin/pip install -r raglab/requirements-benchmark.txt`
+  (a few minutes; PyPI works).
+
+## 4. Reading CI from the sandbox (logs are NOT downloadable)
+
+Verified dead — do not retry:
+- `gh api .../jobs/{id}/logs` → 302 to Azure blob → connection EOF.
+- `gh run view --log(-failed)` → results-receiver EOF.
+- `gh run download` (artifacts) → 302 to `*.blob.core.windows.net` → EOF
+  (confirmed dead 2026-09-07 on run 34140795660).
+
+Channels that WORK (use in this order):
+1. **Status**: `gh run list --limit 5` / `gh run view <run_id>` (conclusion, headSha).
+   Note: `--limit 1` can return a stale top entry — always watch the run whose
+   `headSha` == `git rev-parse HEAD`.
+2. **Annotations**: `gh api repos/seif-bkh/RAGLab/actions/runs/<run_id>/check-runs`
+   for ids, then
+   `gh api repos/seif-bkh/RAGLab/check-runs/<check_run_id>/annotations`.
+   Both workflows emit their diagnostics as annotations on purpose:
+   - `ci.yml` failure step re-runs the offline commands and emits the tail as
+     `::error::` (carries the reproduction).
+   - `real-test.yml` emits the full key-number summary as a `::warning::` annotation
+     (readable on success too) and its failure step emits the newest step-log tail as
+     `::error::`.
+3. **For the full 50-question tables**: they are in the run's stdout (visible in the
+   GitHub Actions UI for the user) and in the uploaded artifact
+   `real-test-results` (the user can download it; I cannot).
+4. GitHub HTML log pages render client-side — `fetch_page` on them gets nothing.
+5. The ANNO `::warning::` line is self-sufficient by design (overall/by-category/
+   by-language/separation/OOS/flips/misses + per-miss top-1 detail + answer status) —
+   it has been verified twice end-to-end (runs 34140795660, 34141551444) and is the
+   primary interpretation channel.
+
+## 5. Commit/push discipline (standing user instruction)
+
+- The GitHub token **might expire**: commit + push every finished meaningful step
+  without waiting for the next one.
+- **After every push, monitor the CI run to completion.** On failure: read the
+  annotations (§4), diagnose, fix, re-push — iterate until green.
+- Keep `./raglab/run_tests.sh --offline` green locally before pushing (it is what CI
+  re-runs; a local red guarantees a CI red).
+- Do not run paid/live commands locally — the sandbox can't reach the endpoints anyway.
+
+## 6. Corpus facts (do not re-diagnose)
+
+- `docs/` real corpus is **all Arabic** despite French filenames:
+  `Circulaire_BCT_2019-08.pdf` (logical order, corrupted digits),
+  `Guide_Interne_Operations_Bancaires_Islamiques.docx`,
+  `Loi_2016-48.pdf` (gazette, REVERSED word order, reliable digits — see audit),
+  `Madkhal_Sayrafa_Islamiya.docx` (clean).
+- PDF text comes out in **visual order with corrupted digits** → repaired only by the
+  logical-order bigram scorer in `restructure.py`. **Never "repair" digits** in the
+  pipeline arms; never re-derive facts from the raw digit soup; take authoring
+  substrings from the repaired output. (2026-09-30, FULLY RESOLVED: ALL FOUR documents
+  now run on their language-model-repaired corrected codices, owner-adopted — Loi
+  «لا اعتراض، واصل» then the three others «طيب واصل» after the packages were presented
+  at the adoption gate. Owner directive: «قم بالإصلاح اللغوي لباقي الملفات، واصل
+  على نفس المنوال السابق، بدون استشارة». `restructure.py`'s `_ADOPTED_CODEX` maps
+  all four docs to `audits/*_corrected.md` — Loi 215 entries / 29 batches;
+  Circulaire 35 (all 28 corrupted digit tokens fixed against the JORT-anchored audit
+  table; identity «عدد 80» kept per the standing owner decision); Guide 23 (all
+  reversed hierarchical numbering corrected, context-anchored: stored
+  «2.4-الوكالة»→4.2 vs stored «4.2-السلم»→2.4); Madkhal 21 («(000 59)»→«(59 000)»,
+  «5اهم»→«5-اهم»). Each log is machine-checked by `audits/llm_repair_check.py`
+  (fidelity/conservation/coverage — generalized: free-form location field + bare
+  page-number skip class); 4 regression tests in `AdoptedCodexRepair` pin canaries
+  and heading counts. AUTHORING RULE now: expected_substring for ALL documents
+  matches the ADOPTED (corrected) corpus form; vetoes go through the repair logs.)
+- **Madkhal AUDITED (step 1.4, 2026-09-28 — `raglab/audits/Madkhal_Sayrafa_Islamiya.md`,
+  owner review pending)**: internal TRAINING material (an introduction to Islamic
+  banking for Al Baraka Tunisia staff) — one of the four ORIGINAL docs/ files, it
+  stays. Extraction CLEAN. It carries the corpus's richest RELIABLE numbers
+  (1962 Tabung Haji, 1963/1967 Mit Ghamr, 1971 Nasser, 1975 Jeddah, 1977-1985
+  wave, 15-20% growth, 500->1166 bn USD 2007->2012, 716 = 511 + 205 institutions)
+  — it is the home of history/quantity questions (q13-15, q26-27, q40-41, q44 all
+  live on it, all evidence verified present). ONE numeric defect found: 59,000 is
+  stored as «(000 59)» (reversed digit groups) — quote as stored or avoid.
+  Spelling without hamzas in places («القران الكريم», «تاسيس») — evidence uses the
+  stored spelling. The document itself uses internal «» around proper names —
+  never quote a span containing them (checker ambiguity). Structure: 5 sections;
+  the 5th heading («5اهم منتجات الصيرفة الاسلامية») was not extracted (no
+  separator after the digit) — its deposits/financing content sits in chunks
+  #30-39. Quote check 31/31 verbatim.
+- **Guide AUDITED (step 1.3, 2026-09-28 —
+  `raglab/audits/Guide_Interne_Operations_Bancaires_Islamiques.md`, owner review
+  pending)**: it is Al Baraka Bank Tunisia's INTERNAL sharia-compliance manual (Jan
+  2022, authored by its compliance officer) — one of the four ORIGINAL docs/ files,
+  it stays regardless of the deleted web-compiled sheets. Extraction is CLEAN
+  (logical order). The historically noted "inverted decimals" is now precise:
+  hierarchical section numbers are stored with their components REVERSED (stored
+  «1.2-» = true 2.1) consistently in TOC and body — evidence quotes the STORED form.
+  Digits and percentages are RELIABLE here (30%/5% screening, 3-year car age, SPOT
+  = two business days, sharia-board decisions cited with numbers). Duplication
+  found: share-screening rules appear twice (murabaha controls + participation
+  controls — either hit is a correct answer), and the mudaraba wording is
+  near-duplicated with the Circulaire (q04's evidence) — Guide mudaraba questions
+  must use Guide-distinct evidence. Machinery notes: murabaha spans 9 chunks
+  (#10-18), the cards section has no own heading (content inside chunk #49 under
+  FX), the TOC itself is indexed (#01-03). The 5 existing questions are unaffected
+  (evidence verified present). Quote check 45/45 verbatim.
+- **Loi AUDITED AND OWNER-APPROVED (step 1.2, 2026-09-28 — `raglab/audits/Loi_2016-48.md`;
+  the mandatory authoring rules in its section 13 are binding)**: identity clean (48-2016, 11 July 2016, JORT 58). 198 chapters in 10
+  titles, content complete (no gaps); 6 chapter markers cosmetically garbled
+  (1/39/99/133/144/195 — content present between neighbours). **Digits are
+  RELIABLE in this document** (verified against the official French text — the
+  exact OPPOSITE of the Circulaire). The dominant defect was REVERSED WORD ORDER
+  body-wide — TREATED 2026-09-28 (owner decision, then REFINED after the owner's
+  review of the first diff rejected whole-line flipping as insufficient): the
+  extractor scrambles each PHYSICAL rendered line as ZONES — pure-Arabic runs
+  arrive word-reversed, digit runs keep logical order, zones themselves are in
+  logical order, sentence-terminal punctuation is re-emitted at the raw line's
+  end, and words fuse with their numbers at zone boundaries. restructure now
+  keeps PDF rendered lines un-reflowed in the loader (normalize_text
+  reflow=False) and, when a document passes the dominance gate (>=20 lines
+  scoring clearly better reconstructed, >=4:1), zone-reconstructs each rendered
+  line: letters fused to digits split BEFORE zoning, Arabic runs un-reversed,
+  digit islands kept, chapter-marker prefixes and trailing periods preserved,
+  then paragraphs are re-formed. The law-49 tail after the president's
+  signature stays in stored form (different extraction order; foreign law).
+  Full before/after diff (2334 lines) + 485 residual-fragment proposals for
+  owner decision: `raglab/audits/Loi_2016-48_repair_diff.md` (adoption gated
+  on that review). Known residual: the title and signature blocks are
+  quasi-logical zones that violate the model (listed in the diff). **RESOLVED
+  2026-09-30: the algorithmic reconstruction is comparison material only — the
+  owner adopted the language-model repair instead** (see `_ADOPTED_CODEX` in
+  `restructure.py`; with the codex in place the dominance gate sees logical
+  order and the zone reconstruction no-ops). AUTHORING RULE (post-adoption):
+  expected_substring must match the ADOPTED corpus form —
+  the 4 existing Loi questions were migrated and re-validated (30/30). Gazette
+  page headers polluted 74/218 chunks — TREATED: whole line-initial span
+  stripping removes 31/31 headers, with a corroboration guard so short body
+  lines citing both عدد and الرائد are never dropped; remaining gazette-word
+  hits are legitimate publication clauses (arts. 26/36/144-157). The PDF tail
+  contains the start of ANOTHER law (49-2016, Raiffeisen loan) in chunks
+  #216-217 — not our law, avoid in questions. One confirmed quantity loss: art.
+  11's circular deadline stored as شهر where the official text says شهران (two
+  months) — no quantity questions on that phrase. Islamic-finance cluster fully
+  pinned from the French (arts 4, 11-16, 22, 23, 43, 54 committee+auditor,
+  63-64 supervision, 75 Moucharaka exception, 76 investment-deposit obligations,
+  169-170 sanctions, 198) with a chapter->chunk map and a clean stored-form
+  evidence matrix in audit sections 9/12. Quote check 36/36 verbatim.
+- **Circulaire AUDITED AND OWNER-APPROVED (step 1.1, 2026-09-28 —
+  `raglab/audits/Circulaire_BCT_2019-08.md`)**. Two standing decisions: (1) the
+  in-set identity stays 80/2019 (stored verbatim; official 8/2019 documented in the
+  audit); (2) corruption handling = KEEP THE TEXT VERBATIM, the audit's corrections
+  table becomes governed Phase-4 metadata, and question evidence must avoid corrupted
+  spans (audit section 9 matrix complies). official identity is منشور عدد 8 لسنة 2019 of 14 Oct 2019
+  (JORT 2019-092; BCT's Arabic 2019 list says 08). Our copy's header reads «عدد 80
+  لسنة2019» — unresolved (extraction artifact or BCT Arabic-version numbering); kept as
+  the conventional in-set identity because the stored corpus carries it verbatim.
+  **28 digit tokens are corrupted in the STORED text**, including ALL chapter numbers
+  14-20 (they render as «الفصل 11» four times + «الفصل81» + «الفصل 02») and every
+  law-reference number in the visa. True values pinned from the JORT text: laws 89-1994
+  (26 July), 35-2016, 48-2016 (11 July), chapters 11/42/54, committee opinion 8 of
+  2 Oct 2019, circular chapters 14-20 by position. Body quantities are spelled in words,
+  so chapter CONTENT stays usable. Question evidence MUST avoid corrupted spans — audit
+  §9 lists one clean candidate evidence span per chapter. Convention: in audit reports,
+  every «...» span is verbatim stored-corpus text, machine-checked by
+  `raglab/audits/check_audit_quotes.py <report.md> <doc-name>` (run it after editing
+  any report; it is the reusable verifier for steps 1.2-1.4).
+- The Guide stores some decimals inverted — kept as-is (matches the source).
+- `raglab/data/` is EMPTY by owner decision (2026-09-28): both fictional/web bank
+  sheets (Banque Atlas, then a web-compiled Al Baraka set) were deleted with their
+  chunk maps — the corpus is the four REAL documents in `docs/` and nothing else.
+  `loader.load_all` tolerates the empty/missing dir (warning + continue), so a fresh
+  clone stays green.
+- Pipeline stats (restructure mode, LOCAL chars/4 estimator — CI's real cl100k is the
+  arbiter, expect drift): 339 chunks total: Circulaire 13, Guide 54, Loi 233, Madkhal
+  39 — ALL FOUR documents run on their owner-adopted corrected codices (2026-09-30)
+  via `restructure.py`'s `_ADOPTED_CODEX` hook (Loi: 198/198 article heads + 33
+  chapters; Circulaire: 20/20 article heads + 4 titles; Guide: 24 true-numbering
+  heads; Madkhal: section-5 heading now extracted; every substantive codex line
+  verified present in each markdown, 0 real loss). Adoption addenda: §18 (Loi), §12.1
+  (Circulaire), §13.1 (Guide), §11.1 (Madkhal) in their audits; the master chunk
+  locations live in `raglab/audits/MASTER_INDEX.md`. `RESTRUCTURE_RTL_REPAIR=0`
+  reverts to the raw stored arm. The zone-reconstruction diff at
+  `raglab/audits/Loi_2016-48_repair_diff.md` is comparison material only.
+  `main.py inspect` exits 0 on all four. (Historical: Atlas-era 346, Al
+  Baraka-era 367/369, pre-treatment docs/ 325, first-fix 326.)
+- ACTIVE TRACK (owner decision 2026-09-28, supersedes the v2 adoption gate):
+  `raglab/audits/Loi_2016-48_llm_repair.md` — language-model repair of the Loi,
+  sentence by sentence, with per-entry notes (fix codes ح1-ح9, unresolved ش⚠) and a
+  machine guard `raglab/audits/llm_repair_check.py` (source fidelity of every quoted
+  line + word-inventory conservation vs documented fixes + algorithm-agreement stat).
+  Batch 1 (pages 1-4, 32 entries) done and owner-approved ("عمل ممتاز");
+  the E18 unresolved "اجل" was resolved by the owner (شراء اجل — deferred
+  purchase, the essence of Salam). The strict-algorithm derivation was
+  ABANDONED by owner decision (2026-09-28, "طرح الخوارزمية أي التخلي
+  عنها") — derive_algorithm.py deleted; the track is language-model only.
+  Batches 2-7 continue with the same per-entry format and the same machine
+  guard (source fidelity + conservation). No baselines until this track
+  completes.
+- Loader: PDFs keep their physical rendered lines (normalize_text reflow=False)
+  because the RTL zone reconstruction must un-reverse each rendered line
+  separately; restructure re-forms paragraphs afterwards. DOCX/TXT reflow as
+  before. The audit-quote checker whitespace-normalizes both sides, so quote
+  checks are insensitive to the line-structure change (verified 90/36/45/31).
+- General chunk-map gotcha (mechanism remains in repo): chunk-map offsets live in the
+  NORMALIZED text domain (what `load_all` returns) — writing a map against the raw
+  file text trips the source fingerprint guard in `semantic_chunking.load_map`.
+
+## 7. Key results (update this section when numbers change)
+
+- **CI green**: run 36395791517 on HEAD `d2e3f0c` (offline suite: 227 unittests
+  — 180 core + 47 service — + 96 checks + inspect + pip check, under CI's REAL
+  cl100k tokenizer). That commit is Step 0 of the re-planned Phase 2: full revert
+  to the docs/-only corpus (§1b). Prior green (historical, reverted round):
+  36000876551/35997175104/35997051758 on `d13267e`/`8b2f8c1`/`8a6f94a` (234
+  tests, Al Baraka era); 35989037732/35988879011 on `742feb5`/`fa1c09f` (Phase‑1
+  gap analysis).
+- **Reverse-engineering spec** (961afe9): repo-root `RAGLAB_SPEC.md` —
+  evidence-based spec of the whole system (pipelines, 25 routes, security,
+  gap analysis), every claim cited file/symbol/line, tagged
+  Observed/Inferred/Unknown. Investigation was read-only; no code changed.
+- **Endpoint freeze directive recorded** (896dd5b, §2.7): existing HTTP
+  endpoints never change (path/method/schemas/semantics); additive only;
+  first sanctioned addition: GET /numbers (Phase-4 item 4, 2026-10-01) —
+  read-only structured legal numbers, no existing endpoint touched;
+  local_front is the integration testbed over HTTP; bump SERVICE_VERSION on
+  every service change.
+- **GET /config = console self-description** (392fae2, 1.2.4): chat_model +
+  embedding_model (slot_display), vector_dimension (null until an index
+  exists), editable flags, capabilities map, docs pointers — the one-call
+  probe a generic adapter renders. Fixed a gateway console's "configures
+  itself via CLI / non communiqué" display-only page premise.
+- **Chunk browser** (32904f4, service 1.2.5): GET /chunks (paginated stored-
+  chunk listing + per-document rollup + chunking_now) and GET /chunks/{id}
+  (full chunk + neighbors + character overlap with the previous chunk,
+  min 8 chars). Reads the STORED collection (what retrieval supplies), not
+  the /inspect live preview. Sealed during ingest; 409 empty_index; 404
+  unknown_chunk; bad_limit/bad_offset 400. local_front menu 15 (doc picker →
+  paged rows → one-by-one reader); smoke 25 checks. Demo gotcha: POST /keys
+  resets the injected generator — a dummy key on a fake-provider instance
+  makes /answer attempt a REAL provider call (smoke "spend" check fails in
+  the no-network sandbox; keyless runs pass 25/25).
+- **COOKBOOK.md** (61243b0): exact-request companion for whoever builds the
+  settings UI — readiness probe (GET /profile → switching; old compose pins
+  0 → 403), the read assembly, every mutation with side effects (answer
+  switch NEVER needs a reindex; embedding/chunking does; retrieval
+  out-of-range is silently ignored → validate client-side), which-build
+  table (?reset=true vs not), worked sequences, editing-time failure table.
+  Gotcha documented: ?index=true only starts the job on created/replaced —
+  never on an unchanged push. Feed order for AI agents: CONTRACT.md
+  (behavior) → COOKBOOK.md (exact requests) → FRONTEND.md (screens/UX).
+- **FRONTEND.md + app-control unlock** (224749d): docker-compose now ships
+  RAGLAB_ALLOW_PROFILE_SWITCH=1 WITH RAGLAB_SERVICE_TOKEN required
+  (change-me placeholder) — the app console can drive everything
+  (models/chunking/retrieval/corpus/keys/documents/ingest/evals) like
+  local_front. raglab/FRONTEND.md is the UI/UX blueprint for the fullstack
+  team: capability map, shell + health-driven status bar, screen specs with
+  API mappings, cross-cutting rules (refusals-are-200s, sealed mode during
+  ingest, error-envelope handler, no fake progress, RTL), permission matrix
+  (BFF proxy recommended; viewer/editor/admin roles), research references.
+- **RAGLAB_TOKEN alias** (69fba34, service 1.2.3): RAGLAB_SERVICE_TOKEN takes
+  precedence, RAGLAB_TOKEN is the fallback — a gateway deployment that plumbed
+  the shorter name no longer silently runs open. The gateway team's claim that
+  RAGLAB_TOKEN was "plumbed through .env.example, .env.docker.example and
+  docker-compose.yml but never read" was factually wrong for THIS repo
+  (.env.docker.example does not exist here; no file contained RAGLAB_TOKEN;
+  the backend has read RAGLAB_SERVICE_TOKEN since 48bb30d) — their plumbing
+  lives in their own repo. .env.example gained an optional service section
+  documenting the token + header + alias.
+- **Stale-hint + filename hygiene** (b5c8948, service 1.2.2): ingest job
+  errors translate the store layer's CLI remedy to
+  "POST /ingest?reset=true (this service)"; POST /documents rejects
+  filenames with path separators/control chars (400 bad_filename, both JSON
+  and multipart). Field forensics that shaped it: the user's stale error was
+  an index built with chunk size 440 in an earlier session vs the restarted
+  default 220 (size is NOT part of the collection name, so the same
+  collection is reused and the fingerprint guard fires — correct); the
+  "[tarif.md](http://tarif.md)" in their paste was chat-display
+  linkification only (content hash proved the request was clean) — but
+  copy-from-chat corruption is real on that device: prefer single-line,
+  hand-typed commands or local_front. Also: POST /profile drops the injected
+  test generator (caches reset on switch) — tests that switch profiles and
+  then /answer need a real key or must assert on job outcomes instead.
+- **Index sealed during ingest + never a plain-text 500** (2ce40b4, service
+  1.2.1, from a field report): while the ingest job runs, /search, /answer,
+  /evaluate, POST /profile and DELETE /documents/{id} return
+  409 ingest_in_progress (greetings still work; GET /documents rows say
+  status=indexing without reading the store) — reads used to race the job's
+  sqlite writes and could surface as a bare 500. Plus a safety net:
+  add_exception_handler(Exception) → 500 JSON {reason: internal_error,
+  safe error} — no unhandled exception can ever be FastAPI plain text
+  (Starlette sends the handler response then re-raises; TestClient needs
+  raise_server_exceptions=False to assert the envelope). SERVICE_VERSION is
+  now bumped on every service change (1.2.0 was reused once and the field
+  could not tell builds apart). Concurrency-test gotcha: the embedding cache
+  makes re-ingests instant — force an UNCACHED unique chunk (push a fresh
+  doc) if the test needs the job to stay running.
+- **Network failures never 500** (0d9a2a9, found on a real device): the
+  first /answer on the pinned xKiro profile runs the live free-price check
+  (free_gateway.load_pricing) inside Runtime.generator(), which was OUTSIDE
+  all try/excepts — URLError/DNS/timeout escaped as a bare 500. Now:
+  Runtime.embedder()/generator() wrap construction (OSError → 502
+  provider_unreachable with slot + safe error + hint; ValueError/RuntimeError
+  → 502 provider_error), and the ask/retrieve/evaluate/sanity handlers catch
+  OSError mid-request the same way. Guarded by ProviderFailureTest.
+- **Documents API = the gateway feed target** (698a30b, service 1.2.0): the
+  service OWNS a document store (docstore.py, RAGLAB_DOCUMENTS_DIR, default
+  raglab/documents/). POST /documents (multipart or JSON text/base64,
+  ?index=true), GET /documents + /{id} (status pending/indexed/stale +
+  chunks), DELETE /{id} (file + chunks purged from EVERY collection via
+  store.purge_source — no re-ingest). Content-hash versioning (same bytes
+  no-op, different bytes version bump); ids [A-Za-z0-9][A-Za-z0-9._-]{0,79}
+  (traversal-safe); extensions .txt/.md/.pdf/.docx; size cap
+  RAGLAB_MAX_DOCUMENT_BYTES (413). The documents dir is part of EVERY
+  profile's corpus (appended at boot + after POST /profile; data_dirs=None
+  means defaults — materialize, never drop). Gotchas learned: (1)
+  DocumentStore.save->find under one non-reentrant Lock deadlocks — RLock;
+  (2) async endpoints must keep sqlite/disk work off the event loop
+  (run_in_threadpool); (3) doc status timestamps are second-precision —
+  tests that need a stale transition must sleep past the second boundary.
+  python-multipart==0.0.32 pinned in both requirements files (multipart
+  push). Front: menu 14 + 3 smoke checks (23 total, keyless, self-cleaning).
+  Feed contract documented in CONTRACT.md §3.15/§2.5/§5.7.
+- **Service 1.1.0 output guards** (48bb30d, from the fullstack team's review):
+  (1) `RAGLAB_SERVICE_TOKEN` → every request needs `X-Service-Token`
+  (constant-time; CORS preflights exempt; local_front sends it from env);
+  (2) `scrub.py` — post-gate PII scrub of /answer + /search outputs
+  ([EMAIL]/[PHONE]/[RIB]/[CIN]; diagnostics stay raw on purpose);
+  (3) numeric half of the citation gate in answer.py — every digit-form
+  number in a claim must exist in its evidence quotes (FR/EN/AR decimal +
+  thousands normalization; `unsourced_numbers`/`UnsourcedNumber`); violation
+  refuses as `unsourced_number`, and /answer now forwards `error` +
+  `raw_preview` (scrubbed) on refusal paths. Known test gotcha: the stub
+  embedder is hash-based and Python str hashes are per-process random, so
+  retrieval ORDER varies between runs — never assert on hits/sources[0].
+- **Service profile-switch contract** (eb32c74): an explicit
+  `{provider, model}` in POST /profile is applied VERBATIM — custom model IDs
+  included (the registries are known-good suggestions, not a whitelist). The
+  bug it fixes: consistent_model silently swapped unregistered IDs for the
+  provider's first registered model while answering 200 — the front saved the
+  custom ID but the service never used it. Provider-only switches: same
+  provider = no-op; different provider = first registered model, never a
+  cross-provider carry-over. One token, no spaces → else 400 bad_model.
+- **RETRACTED 2026-09-28**: the Al Baraka-era baselines (q50 49/80/82, questions_v2
+  52/67/67 etc.) were measured on a now-deleted corpus with now-deleted machinery —
+  do not cite them. The Atlas-era block below is likewise historical.
+- **FORMAL 3.1 BM25 baseline (2026-10-01, measured on the adopted 50-case set,
+  presented for adoption — record: `raglab/audits/PHASE2_BASELINES.md`; estimator
+  state pinned: tiktoken BPE unavailable in sandbox → fallback
+  max(words, chars/4), chunk_fp `tokestimator-char4-v1`)**: overall hit@1/3/5
+  size-220/40 `42/60/62` → restructure (adopted corrected codices) `62/82/87`
+  (45 answerable: 30 ar / 9 en / 6 fr; k=20). By language ar `43/57/60 → 67/87/93`,
+  en `44/89/89 → 67/100/100`, fr `33/33/33 → 33/33/33` (lexical ceiling — the
+  live vector arm in 3.2 decides the fr gap). OOS (5): max top-1 score 11.8 (base)
+  vs 11.4 (restructure). ADOPTED 2026-10-01 (owner gate) together with the 3.2
+  live numbers as the official Phase 3-7 reference baselines.
+- **FORMAL 3.2 live run (2026-10-01, tag `real-test-3.2-20261001`, run
+  36818475024, commit `e9694dd`; record: `raglab/audits/PHASE2_BASELINES.md`)**:
+  NVIDIA nemotron embeddings, adopted 50-case set, k=20. Chunking A/B (vector
+  mode): size `51/64/71` -> restructure `71/80/87` (fr `50/67/67` both arms;
+  live restructure misses q01/q02/q03/q32/q38). Retrieval modes on the
+  restructure arm: vector `71/80/87`, rrf `71/80/82`, blend(λ=0.7) `62/80/84`;
+  fr: vector `50/67/67` > rrf `33/33/50` ~= blend `33/33/67` — on this set the
+  pure vector arm leads and BM25 fusion hurts fr. Complementarity noted: the
+  live vector misses (q01-q03) are BM25 hits and vice versa (q18/q28/q29/q33) —
+  input for the Phase-3 deterministic reranker. DECIDED 2026-10-01 (owner gate):
+  vector stays the structural default (the roadmap's data rule — rrf did not
+  beat it without regression); rrf/blend remain explicit options and the
+  decision is reopenable on new data. Answer smoke: nvidia attempt rejected by
+  the citation gate (quote not in cited source), google fallback answered
+  validated (known, documented behavior). ADOPTED 2026-10-01 with the 3.1
+  numbers as the official reference baselines.
+- **3.3 model-independence run (2026-10-01, tag `answer-ab-3.3b-20261001`,
+  run 36823495283; record: `raglab/audits/PHASE2_BASELINES.md`)**: one fixed
+  vector/top5 retrieval per question, two answer arms — pinned
+  xkiro/qwen/qwen3.8-max:free (answered 37 / refused 13 / provider errors 0 /
+  gate 7) vs nvidia/moonshotai/kimi-k3 (27 / 14 / 9 / 7). Status agreement
+  0.720; source Jaccard 1.000 whenever both answered — same context yields
+  identical citations, so divergence is answered/refused status only (14
+  questions; evidence-completeness work, Phase 5). The first attempt
+  (run 36822841842) failed on a wiring bug the live run itself exposed
+  (stale collection handle after self-ingest; fixed, zero answer calls spent).
+  PHASE 2 CLOSED 2026-10-01: adopted set + both-arm baselines + hybrid
+  decision + 3.3, all four gate conditions met.
+- **BM25-only A/B on the FULLY-ADOPTED corpus (2026-09-30, INTERIM — the current
+  30-case set, not the final 50; regenerable via `harness50.py`)**: overall hit@1/3/5
+  size-220/40 `44/76/80` → restructure (all four corrected codices) `60/92/100`;
+  validation OK — every expected_substring present in the restructure arm. (With only
+  the Loi adopted it was 64/96/100; the delta is Circulaire re-chunking 15→13 on a
+  30-case set — chunk-boundary churn, not text quality; formal 3.1 baselines will be
+  measured on the rebuilt 50-case set.)
+- **BM25-only A/B (ATLAS-ERA, historical, set revised 2026-09-24)** (45 evaluable of
+  50; k=20; full table in `raglab/results/harness50/comparison.md`, regenerable via
+  `harness50.py`):
+  - overall hit@1/3/5: size-220/40 `40/69/80` → restructure `47/78/89`
+  - verbatim (12) `42/58/75 → 75/92/100`; paraphrase (13) `46/100/100 → 31/92/100`
+    (paraphrase hit@1 drop is expected — BM25 has no word overlap; hit@5 is 100 both);
+    cross-lingual (20) `35/55/70 → 40/60/75`
+  - by language ar(15) `53/87/87 → 47/93/100`, en(15) `47/73/93 → 53/80/100`,
+    fr(15) `20/47/60 → 40/60/67`
+  - the 5 restructure misses are q26–q30, all fr→ar cross-lingual (documented lexical
+    limit; the embedding arm should cover them)
+  - OOS max top-1 BM25: base 17.5 vs restructure 18.1
+- **Real-model A/B (NVIDIA embeddings + LLM answer smoke)**:
+  - LLM role per owner instruction (2026-09-07, standing): the real-test answer smoke
+    uses **nvidia/nemotron-3.5-lightning-30b-a3b via integrate.api.nvidia.com with
+    NVIDIA_API_KEY**; if that fails, **GOOGLE_API_KEY with the cheapest free-tier
+    Gemini model** (flash-lite preferred). Implemented in `raglab/llm_smoke.py`
+    (retries + fallback + auto model selection); the app's pinned profile
+    (pipeline_policy: xkiro/qwen) is deliberately NOT changed. The old xKiro/Qwen
+    smoke was abandoned after repeated free-tier 502 "temporarily at capacity"
+    (runs 34140795660, 34141551444, 34142147484).
+  - Retrieval A/B completed four times (same code); stable picture at k=20,
+    overall hit@1/3/5 — size `67/89/100` vs restructure `73–76/84–87/89–91`:
+    restructure wins hit@1 (+6–9 pp) driven by paraphrase (+15 pp), cross-lingual
+    (+10–15 pp), fr (+27 pp), en (+7–14 pp); it loses a few recalls at top-20 that
+    size always hits (size = 0 misses in all runs). Green run: **34144251576**.
+  - Persistent restructure misses (all runs): q01, q02, q03 (ar, Circulaire
+    murabaha/salam definitions), q38 (en, same circular) — top-1 lands on
+    chapter-heading chunks ("الفصل4"/"الفصل 7", scores 0.49–0.69) or the Guide's
+    murabaha section instead of the definition sub-chunk; q44 (en, Madkhal 1963,
+    top-1 0.151) is borderline and jitters between runs.
+  - **Run-to-run jitter exists**: hosted NVIDIA embeddings are not bit-reproducible,
+    so borderline questions move ±1 place between runs (q44 hit/miss varies;
+    cross-lingual 90→95→90). Treat differences smaller than ~1 question as noise.
+  - Answer smoke (green run): the NVIDIA phase called
+    nvidia/nemotron-3.5-lightning-30b-a3b successfully (no capacity error this time)
+    but its output failed the verbatim-quote contract
+    ("Evidence quote is not in the cited source") → rejected by design → Google
+    fallback **gemini-3.1-flash-lite** produced a fully validated cited answer
+    (3 claims, 5 sources). So: the fallback chain works end-to-end; the NVIDIA
+    model's known weakness is verbatim quoting, not reachability.
+  - Per-question full tables: CI run stdout / `real-test-results` artifact
+    (run 34144251576); the compact numbers live in the run's check-run annotation
+    and in this section.
+
+## 8. Gotchas (learned the hard way — do not relearn)
+
+- `gh run view --log` / job-log / artifact downloads all dead from the sandbox (§4).
+- **Fuzzy `edit_file` can silently misapply — or report success without applying** (one
+  "successful" edit lost a whole function; another appended duplicates at EOF; a third
+  was reported successful yet the buggy line was still in the file at commit time and
+  shipped to CI as an AttributeError). After every edit: `grep` for both the absence
+  of the old text AND the presence of the new text before moving on, and exercise the
+  changed path (compile/compileall is not enough for semantics).
+- `except Exception` does not catch `SystemExit` — retrieval code raises
+  `SystemExit("collection is empty")`; catch-all diagnostics need `BaseException`.
+- **Nemotron-3.5 Lightning (30b-a3b) via the NVIDIA build endpoint can violate the
+  verbatim-quote contract** (paraphrased evidence quotes) — the strict validation
+  rejects it and the Google fallback takes over. That is the intended behavior of
+  the smoke, not a bug: a "green" real-test run may legitimately be served by the
+  fallback (the ANNO line says which: `phase google-fallback` + `nvidia_attempt=…`).
+- `GOOGLE_API_KEY` is a confirmed-working repo secret (the /models listing succeeded
+  in run 34143586968); `nvidia/nemotron-3.5-lightning-30b-a3b` on
+  integrate.api.nvidia.com has not yet completed a call — watch its first run.
+- `_repair_orphan_starts` in `semantic_chunking.propose` exists because real cl100k can
+  close a packing run exactly after an Arabic article marker ("الفصل 2"), leaving a
+  chunk opening on ":" — a rule the checker (ORPHAN_TAIL) rejects. The fix merges the
+  orphan into its previous chunk (refusing if it would swallow a second subject).
+  Under the local chars/4 estimator the exact boundary never appears, which is why this
+  class of bug is only CI-visible. The checker itself must stay unchanged.
+- `sacrebleu` is a test dependency — it is pinned in `requirements-benchmark.txt`
+  (2.5.1); the plain `requirements.txt` does not carry it.
+- `gh run list --limit 1` once returned a stale top entry; match `headSha` instead.
+- **GitHub wraps workflow `run:` steps in `bash -e -o pipefail`.** A failing command
+  aborts the script before any `status=$?` capture, so capturing exit codes needs the
+  `status=0; cmd ... || status=$?` idiom. (Bite: first real-test run swallowed the
+  answer-smoke failure this way — step "succeeded", no diagnostics posted.)
+- The annotations API also carries GitHub's own annotations: Node-version deprecation
+  notices and `Process completed with exit code N.` for `continue-on-error` steps —
+  filter them when reading a run.
+- A workspace rebuild resets the git checkout to the branch's ORIGINAL base while
+  leaving working-tree files: detect via `git status` (everything "modified" + the
+  session files "untracked"), then `git ls-remote` + fetch the session branch and
+  `git reset --hard` to it. Verify untracked files against the commit with
+  `git show <sha>:<path> | cmp -s - <path>` before resetting.
+
+---
+
+## 9. Response-format rule (standing user instruction, 2026-09-24, session `arena/01a0d2f6-raglab`)
+
+**Every agent reply ends with a commands block — zero exceptions.** Whatever the
+turn produced (code, docs, a diagnosis, even a pure-discussion answer), the last
+thing in the reply is copy-pasteable commands the user can run to use, verify or
+explore what was just done:
+
+- Format: a short `## Commands to run` heading followed by the fenced code
+  block(s) described below, each command preceded by a one-line `# comment`
+  saying what it does.
+- Commands must be concrete, ordered and ready to paste — no `<placeholder>`
+  tokens unless a real secret must be filled in, and then name exactly which
+  one on the comment line (keys never get pasted into chat).
+- **Always BOTH platforms** (user instruction 2026-09-24): the same steps
+  written out for **Windows (PowerShell)** and **Linux/macOS (bash)** as two
+  labeled blocks, using each side's native entry points (Windows:
+  `.\run_server.ps1` and the other `raglab/*.ps1|*.bat` twins; Linux: the
+  `*.sh` scripts and direct `python -m uvicorn …` equivalents). Exceptions:
+  one shared block when the commands are literally identical on both (docker,
+  git, `python …` inside a venv) — label it `Windows + Linux`; and when a
+  step genuinely has no counterpart on one side, write the block that exists
+  and mark the other `(no <platform> equivalent — reason)`.
+- Content covers the user's intent, not the sandbox mechanics the agent already
+  ran: start the server, run the front, run the tests, check status/logs, try
+  the new feature. For a discussion-only reply the block still carries the
+  nearest useful check (e.g. service status or how to try the thing discussed).
+

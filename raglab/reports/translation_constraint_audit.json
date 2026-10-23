@@ -1,0 +1,77 @@
+{
+  "source_run_id": 33970405295,
+  "new_model_calls": 0,
+  "reference_fixture": "translations_v2.json",
+  "reference_fingerprint": "65e7c77e907dc49ffed73aeb90627b49f79ee5d5edc2d6893dbaf60963635244",
+  "reason": "Fix source-invalid BCT literal constraints on t1_ar_en and t1_ar_fr; unchanged source texts, authored reference strings, and model outputs. A central-bank entity check remains mandatory.",
+  "models": {
+    "nvidia/riva-translate-4b-instruct-v2/banking-v2": {
+      "n": 18,
+      "chrf++": 67.21263181657352,
+      "original_constraint_pass_rate": 0.7222222222222222,
+      "corrected_constraint_pass_rate": 0.8333333333333334,
+      "remaining_violations": [
+        {
+          "id": "t2_en_ar",
+          "issues": [
+            "lost_protected_term:TND"
+          ]
+        },
+        {
+          "id": "t1_fr_ar",
+          "issues": [
+            "lost_protected_term:BCT"
+          ]
+        },
+        {
+          "id": "t2_fr_ar",
+          "issues": [
+            "lost_protected_term:Atlas",
+            "lost_protected_term:TND"
+          ]
+        }
+      ]
+    },
+    "deepseek-ai/deepseek-v4-pro-0813/basic-v1": {
+      "n": 18,
+      "chrf++": 74.84601645594805,
+      "original_constraint_pass_rate": 0.6666666666666666,
+      "corrected_constraint_pass_rate": 0.7777777777777778,
+      "remaining_violations": [
+        {
+          "id": "t1_en_ar",
+          "issues": [
+            "lost_protected_term:BCT"
+          ]
+        },
+        {
+          "id": "t2_en_ar",
+          "issues": [
+            "lost_protected_term:Atlas",
+            "lost_protected_term:TND"
+          ]
+        },
+        {
+          "id": "t1_fr_ar",
+          "issues": [
+            "lost_protected_term:BCT"
+          ]
+        },
+        {
+          "id": "t2_fr_ar",
+          "issues": [
+            "lost_protected_term:Atlas",
+            "lost_protected_term:TND"
+          ]
+        }
+      ]
+    },
+    "moonshotai/kimi-k3/banking-v2": {
+      "n": 18,
+      "chrf++": 79.3814925769347,
+      "original_constraint_pass_rate": 0.8888888888888888,
+      "corrected_constraint_pass_rate": 1.0,
+      "remaining_violations": []
+    }
+  }
+}

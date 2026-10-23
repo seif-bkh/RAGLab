@@ -1,0 +1,86 @@
+# RAGLab service — production image (multi-stage, self-contained).
+#
+# Build (build host needs internet ONCE: base image + PyPI + the tiktoken CDN):
+#   docker build -f Dockerfile.prod -t ghcr.io/seif-bkh/raglab-service:1.2.5 .
+#   # or fully scripted:  docker/save-image.sh        (bash)
+#   #                     docker\save-image.ps1       (Windows)
+#
+# Run anywhere — the container starts and serves with NO internet (no pip,
+# no model downloads, no tokenizer fetch; CI proves it with
+# `docker run --network none`). The RAG pipeline's own provider calls
+# (NVIDIA embeddings, xKiro answers) still egress by design — see
+# raglab/PROD_IMAGE.md for what "offline" does and does not mean here.
+#
+#   docker run -d --name raglab -p 8000:8000 --env-file raglab/.env \
+#     -v raglab-index:/app/raglab/chroma_db \
+#     ghcr.io/seif-bkh/raglab-service:1.2.5
+
+# ---------------------------------------------------------------------------
+# Stage 1 — dependencies in an isolated venv + baked tokenizer cache.
+# Nothing build-ish (pip caches, build tools) is carried into stage 2.
+# ---------------------------------------------------------------------------
+FROM python:3.11-slim AS deps
+
+ENV PIP_NO_CACHE_DIR=1
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY raglab/requirements.txt raglab/requirements-service.txt /tmp/
+RUN pip install -r /tmp/requirements-service.txt
+
+# Bake cl100k_base NOW so the runtime never calls the tiktoken CDN. Without
+# it the chunker silently falls back to a chars/4 estimator and chunk
+# boundaries stop matching CI's (AGENTS.md §6). The runtime reads this via
+# TIKTOKEN_CACHE_DIR (re-exported in stage 2).
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache
+RUN python -c "import tiktoken; enc = tiktoken.get_encoding('cl100k_base'); \
+    assert len(enc.encode(' raglab ', disallowed_special=())) > 0; \
+    print('[image] cl100k_base BPE cached for offline runtime')"
+
+# ---------------------------------------------------------------------------
+# Stage 2 — slim runtime: venv + code + corpus, non-root, healthchecked.
+# ---------------------------------------------------------------------------
+FROM python:3.11-slim AS runtime
+
+ARG SERVICE_VERSION=unknown
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="RAGLab service" \
+      org.opencontainers.image.description="Document-grounded QA microservice (ar/fr/en): FastAPI + ChromaDB, NVIDIA embeddings + xKiro answers" \
+      org.opencontainers.image.source="https://github.com/seif-bkh/RAGLab" \
+      org.opencontainers.image.version="${SERVICE_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache \
+    RAGLAB_DATA_DIRS=/app/docs \
+    RAGLAB_CACHE_DIR=/app/raglab/caches \
+    RAGLAB_DOCUMENTS_DIR=/app/raglab/documents
+
+WORKDIR /app/raglab
+COPY --from=deps /opt/venv /opt/venv
+COPY --from=deps /opt/tiktoken-cache /opt/tiktoken-cache
+COPY raglab/ /app/raglab/
+COPY docs/ /app/docs/
+
+# Non-root runtime user; the state dirs (index, caches, pushed documents,
+# diagnostics output) must be writable by it — named volumes initialized
+# from this tree inherit the ownership.
+RUN useradd --system --uid 10001 --home-dir /app/raglab raglab \
+    && mkdir -p /app/raglab/chroma_db /app/raglab/documents /app/raglab/caches \
+                /app/raglab/results /app/raglab/logs \
+    && chown -R raglab:raglab /app/raglab
+USER raglab
+
+EXPOSE 8000
+# Healthy = /health answers 200 (open) or 401 (up, token-gated) — the whole
+# API sits behind X-Service-Token when RAGLAB_SERVICE_TOKEN is set, so a
+# probe without credentials MUST treat 401 as alive. localhost-only probe:
+# works under `docker run --network none`.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["python", "/app/raglab/container_healthcheck.py"]
+
+# Keys and config are NEVER baked in: pass --env-file raglab/.env and/or
+# -e RAGLAB_SERVICE_TOKEN=... at run time (see raglab/PROD_IMAGE.md).
+CMD ["python", "-m", "uvicorn", "service:app", "--host", "0.0.0.0", "--port", "8000"]

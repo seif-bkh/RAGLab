@@ -1,0 +1,6 @@
+# Direct dependencies pinned to the versions tested on Python 3.11 in this session.
+# No LangChain/LlamaIndex. NVIDIA uses stdlib HTTPS; no NVIDIA SDK is required.
+chromadb==1.5.9
+python-dotenv==1.2.3
+pypdf==6.17.0
+tiktoken==0.14.0

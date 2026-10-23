@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1390" width="1500" height="1390">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+<path d="M 0 0 L 10 5 L 0 10 z" fill="#5c6775"/></marker></defs>
+<rect x="0.0" y="0.0" width="1500.0" height="1390.0" rx="0" fill="#ffffff" stroke="#ffffff" stroke-width="1.4"/>
+<text x="40.0" y="50.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="33" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">RAGLab — Architecture Schema</text>
+<text x="40.0" y="80.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="14" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">One project, two generations, one pivot — and one current revision. Reconstructed from 387 commits (04 Sept → 05 Oct 2026), the in-repo audit trail, and the code at HEAD.</text>
+<text x="40.0" y="102.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#5c6775" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">Legend:</text>
+<rect x="100.0" y="91.0" width="18.0" height="15.0" rx="4" fill="#e8f0ff" stroke="#7ba4f0" stroke-width="1.2"/>
+<text x="125.0" y="103.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">Generation 1 — flat lab (superseded)</text>
+<rect x="356.8" y="91.0" width="18.0" height="15.0" rx="4" fill="#fff6e6" stroke="#dfa23c" stroke-width="1.2"/>
+<text x="381.8" y="103.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">Pivot / re-foundation</text>
+<rect x="519.1" y="91.0" width="18.0" height="15.0" rx="4" fill="#e9f8f2" stroke="#4fae8d" stroke-width="1.2"/>
+<text x="544.1" y="103.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">Generation 2 — governed pipeline</text>
+<rect x="750.7" y="91.0" width="18.0" height="15.0" rx="4" fill="#ffe9f2" stroke="#d6336c" stroke-width="1.2"/>
+<text x="775.7" y="103.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">CURRENT — latest revision</text>
+<rect x="40.0" y="130.0" width="1420.0" height="250.0" rx="14" fill="#e8f0ff" stroke="#7ba4f0" stroke-width="1.8"/>
+<path d="M54 130 h1392 a14 14 0 0 1 14 14 v26 h-1420 v-26 a14 14 0 0 1 14 -14 z" fill="#cfe0ff"/>
+<text x="62.0" y="157.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="17" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">GENERATION 1 — 04 → 23 Sept 2026 · the flat retrieval lab (superseded)</text>
+<text x="1438.0" y="157.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#5c6775" font-weight="normal" text-anchor="end" font-style="normal" opacity="1.0">measure chunks, models and fusion strategies</text>
+<rect x="58.0" y="195.0" width="183.0" height="100.0" rx="8" fill="#ffffff" stroke="#7ba4f0" stroke-width="1.2"/>
+<text x="68.0" y="214.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">1 · Corpus</text>
+<text x="68.0" y="230.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">fictional sample sheets</text>
+<text x="68.0" y="244.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">Al Baraka web-compiled round</text>
+<text x="68.0" y="259.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">(both later deleted)</text>
+<line x1="243.0" y1="245.0" x2="254.5" y2="245.0" stroke="#7ba4f0" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="257.5" y="195.0" width="183.0" height="100.0" rx="8" fill="#ffffff" stroke="#7ba4f0" stroke-width="1.2"/>
+<text x="267.5" y="214.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">2 · Chunk</text>
+<text x="267.5" y="230.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">size mode 220/40 default</text>
+<text x="267.5" y="244.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">token-window + overlap</text>
+<text x="267.5" y="259.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">reviewed chunk maps</text>
+<line x1="442.5" y1="245.0" x2="454.0" y2="245.0" stroke="#7ba4f0" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="457.0" y="195.0" width="183.0" height="100.0" rx="8" fill="#ffffff" stroke="#7ba4f0" stroke-width="1.2"/>
+<text x="467.0" y="214.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">3 · Embed</text>
+<text x="467.0" y="230.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">multi-provider embeddings:</text>
+<text x="467.0" y="244.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">Gemini · Jina · HuggingFace</text>
+<text x="467.0" y="259.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">NVIDIA NeMo-Retriever</text>
+<line x1="642.0" y1="245.0" x2="653.5" y2="245.0" stroke="#7ba4f0" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="656.5" y="195.0" width="183.0" height="100.0" rx="8" fill="#ffffff" stroke="#7ba4f0" stroke-width="1.2"/>
+<text x="666.5" y="214.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">4 · Store</text>
+<text x="666.5" y="230.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">local Chroma, cosine</text>
+<text x="666.5" y="244.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">chunk fingerprint v4</text>
+<text x="666.5" y="259.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">stale index ⇒ refuse</text>
+<line x1="841.5" y1="245.0" x2="853.0" y2="245.0" stroke="#7ba4f0" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="856.0" y="195.0" width="183.0" height="100.0" rx="8" fill="#ffffff" stroke="#7ba4f0" stroke-width="1.2"/>
+<text x="866.0" y="214.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">5 · Retrieve</text>
+<text x="866.0" y="230.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">vector / rrf / blend fusion</text>
+<text x="866.0" y="244.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">BM25 k=60 · blend λ=0.7</text>
+<text x="866.0" y="259.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">fusion tie-break policies</text>
+<line x1="1041.0" y1="245.0" x2="1052.5" y2="245.0" stroke="#7ba4f0" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="1055.5" y="195.0" width="183.0" height="100.0" rx="8" fill="#ffffff" stroke="#7ba4f0" stroke-width="1.2"/>
+<text x="1065.5" y="214.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">6 · Query variants</text>
+<text x="1065.5" y="230.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">machine translation ON</text>
+<text x="1065.5" y="244.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">(gemini-3.5-flash-lite)</text>
+<text x="1065.5" y="259.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">best-variant merge</text>
+<line x1="1240.5" y1="245.0" x2="1252.0" y2="245.0" stroke="#7ba4f0" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="1255.0" y="195.0" width="183.0" height="100.0" rx="8" fill="#ffffff" stroke="#7ba4f0" stroke-width="1.2"/>
+<text x="1265.0" y="214.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">7 · Answer</text>
+<text x="1265.0" y="230.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">multi-provider + fallback</text>
+<text x="1265.0" y="244.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">grounded-v1 JSON claims</text>
+<text x="1265.0" y="259.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.7" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">citation gate: quote+numeric</text>
+<text x="1460.0" y="322.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#5c6775" font-weight="normal" text-anchor="end" font-style="italic" opacity="1.0">Model-agnostic by design: providers, translations and retrievers were still being compared — nothing was pinned.</text>
+<rect x="40.0" y="410.0" width="1420.0" height="175.0" rx="14" fill="#fff6e6" stroke="#dfa23c" stroke-width="1.8"/>
+<path d="M54 410 h1392 a14 14 0 0 1 14 14 v26 h-1420 v-26 a14 14 0 0 1 14 -14 z" fill="#ffe9c4"/>
+<text x="62.0" y="437.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="17" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">THE PIVOT — 24 → 28 Sept 2026 · from a lab that measures to a system that decides</text>
+<text x="1438.0" y="437.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#5c6775" font-weight="normal" text-anchor="end" font-style="normal" opacity="1.0">owner direction + external target-state report</text>
+<rect x="58.0" y="470.0" width="321.0" height="96.0" rx="8" fill="#ffffff" stroke="#dfa23c" stroke-width="1.2"/>
+<text x="68.0" y="489.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">Target-state report</text>
+<text x="68.0" y="505.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">external (AR) design for a governed</text>
+<text x="68.0" y="519.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">banking RAG decision system: intent ·</text>
+<text x="68.0" y="534.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">evidence · sufficiency · governance</text>
+<line x1="381.0" y1="518.0" x2="407.0" y2="518.0" stroke="#dfa23c" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="411.0" y="470.0" width="321.0" height="96.0" rx="8" fill="#ffffff" stroke="#dfa23c" stroke-width="1.2"/>
+<text x="421.0" y="489.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">Reverse-engineering</text>
+<text x="421.0" y="505.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">RAGLAB_SPEC.md — every claim cited</text>
+<text x="421.0" y="519.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">RAGLAB_GAP_ANALYSIS.md — current vs</text>
+<text x="421.0" y="534.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">target; “the answer model never touches the query”</text>
+<line x1="734.0" y1="518.0" x2="760.0" y2="518.0" stroke="#dfa23c" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="764.0" y="470.0" width="321.0" height="96.0" rx="8" fill="#ffffff" stroke="#dfa23c" stroke-width="1.2"/>
+<text x="774.0" y="489.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">Re-foundation</text>
+<text x="774.0" y="505.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">corpus = docs/ ONLY; web round reverted</text>
+<text x="774.0" y="519.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">step-and-plan protocol: a published plan</text>
+<text x="774.0" y="534.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">per step, owner gate before any number</text>
+<line x1="1087.0" y1="518.0" x2="1113.0" y2="518.0" stroke="#dfa23c" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="1117.0" y="470.0" width="321.0" height="96.0" rx="8" fill="#ffffff" stroke="#dfa23c" stroke-width="1.2"/>
+<text x="1127.0" y="489.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">Corpus repair</text>
+<text x="1127.0" y="505.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">4 docs, LLM-only linguistic repair:</text>
+<text x="1127.0" y="519.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">215 + 35 + 23 + 21 entries, machine-</text>
+<text x="1127.0" y="534.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">checked; adopted codices → 339 chunks</text>
+<line x1="750" y1="380" x2="750" y2="408" stroke="#5c6775" stroke-width="2.4" marker-end="url(#arrow)"/>
+<line x1="750" y1="585" x2="750" y2="628" stroke="#5c6775" stroke-width="2.4" marker-end="url(#arrow)"/>
+<rect x="40.0" y="630.0" width="1090.0" height="610.0" rx="14" fill="#e9f8f2" stroke="#4fae8d" stroke-width="1.8"/>
+<path d="M54 630 h1062 a14 14 0 0 1 14 14 v26 h-1090 v-26 a14 14 0 0 1 14 -14 z" fill="#cdefe2"/>
+<text x="62.0" y="657.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="17" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">GENERATION 2 — 24 Sept → 05 Oct 2026 · the governed, layered pipeline</text>
+<text x="1108.0" y="657.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#5c6775" font-weight="normal" text-anchor="end" font-style="normal" opacity="1.0">structure → knowledge → understanding → delivery</text>
+<rect x="58.0" y="690.0" width="1054.0" height="120.0" rx="10" fill="#ffffff" stroke="#4fae8d" stroke-width="1.2"/>
+<path d="M58 690 h1054 v26 h-1054 z" fill="#cdefe2" opacity="0.8"/>
+<text x="70.0" y="708.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">LAYER 1 · Corpus &amp; structure</text>
+<text x="1100.0" y="708.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="end" font-style="normal" opacity="1.0">loader → restructure → fingerprint-guarded store</text>
+<rect x="70.0" y="724.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="80.0" y="743.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">loader.py</text>
+<text x="80.0" y="759.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">PDF (visual order) / DOCX / MD</text>
+<text x="80.0" y="773.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">Arabic normalisation built in</text>
+<rect x="330.5" y="724.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="340.5" y="743.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">restructure.py</text>
+<text x="340.5" y="759.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">3-step structural chunking (220/40)</text>
+<text x="340.5" y="773.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">adopted codices · RTL zones</text>
+<rect x="591.0" y="724.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="601.0" y="743.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">docstore.py</text>
+<text x="601.0" y="759.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">content-hash versions; push/delete</text>
+<text x="601.0" y="773.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">stale surfaced, never silent</text>
+<rect x="851.5" y="724.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="861.5" y="743.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">store.py</text>
+<text x="861.5" y="759.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">chunk_fp + embedding_fp guards</text>
+<text x="861.5" y="773.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">mixed or stale ⇒ refuse to serve</text>
+<rect x="58.0" y="820.0" width="1054.0" height="120.0" rx="10" fill="#ffffff" stroke="#4fae8d" stroke-width="1.2"/>
+<path d="M58 820 h1054 v26 h-1054 z" fill="#cdefe2" opacity="0.8"/>
+<text x="70.0" y="838.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">LAYER 2 · Knowledge — Phase 4 (01 Oct)</text>
+<text x="1100.0" y="838.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="end" font-style="normal" opacity="1.0">deterministic, declared data — read-only over loi 2016-48</text>
+<rect x="70.0" y="854.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="80.0" y="873.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">units.py · 198/198</text>
+<text x="80.0" y="889.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">stable ids loi-2016-48:artNNN</text>
+<text x="80.0" y="903.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">governed functional types</text>
+<rect x="330.5" y="854.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="340.5" y="873.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">relations.py</text>
+<text x="340.5" y="889.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">77 internal reference edges</text>
+<text x="340.5" y="903.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">+ grounding: Circulaire → art011</text>
+<rect x="591.0" y="854.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="601.0" y="873.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">legal_numbers.py</text>
+<text x="601.0" y="889.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">53 numeric records + corrections</text>
+<text x="601.0" y="903.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">→ GET /numbers (1st additive route)</text>
+<rect x="851.5" y="854.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="861.5" y="873.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">governance.py</text>
+<text x="861.5" y="889.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">6 axes on chunk metadata</text>
+<text x="861.5" y="903.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">authority · effectivity · audience</text>
+<line x1="585" y1="809" x2="585" y2="818" stroke="#4fae8d" stroke-width="2"/>
+<rect x="58.0" y="950.0" width="1054.0" height="136.0" rx="10" fill="#ffffff" stroke="#4fae8d" stroke-width="1.2"/>
+<path d="M58 950 h1054 v26 h-1054 z" fill="#cdefe2" opacity="0.8"/>
+<text x="70.0" y="968.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">LAYER 3 · Understanding — Phases 5 + 8 + 9</text>
+<text x="1100.0" y="968.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="end" font-style="normal" opacity="1.0">deterministic first; one bounded model call last; fail-closed</text>
+<rect x="70.0" y="984.0" width="196.4" height="90.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="80.0" y="1003.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">intent.py</text>
+<text x="80.0" y="1019.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">declared rules, first match wins</text>
+<text x="80.0" y="1033.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">compound split · ambiguity note</text>
+<rect x="278.4" y="984.0" width="196.4" height="90.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="288.4" y="1003.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">evidence_plan → sufficiency</text>
+<text x="288.4" y="1019.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">requirements from intent</text>
+<text x="288.4" y="1033.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">4 explicit sufficiency states</text>
+<rect x="486.8" y="984.0" width="196.4" height="90.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="496.8" y="1003.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">decompose → guided rounds</text>
+<text x="496.8" y="1019.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">micro-questions per request</text>
+<text x="496.8" y="1033.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">bounded guided retrieval rounds</text>
+<rect x="695.2" y="984.0" width="196.4" height="90.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="705.2" y="1003.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">interrogate.py + topic_map</text>
+<text x="705.2" y="1019.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">ONE bounded model call</text>
+<text x="705.2" y="1033.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">corpus topics → rephrasing</text>
+<rect x="903.6" y="984.0" width="196.4" height="90.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="913.6" y="1003.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">relational_expansion (OFF)</text>
+<text x="913.6" y="1019.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">intent-gated tail slots</text>
+<text x="913.6" y="1033.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">measured NEUTRAL → stays off</text>
+<line x1="585" y1="939" x2="585" y2="948" stroke="#4fae8d" stroke-width="2"/>
+<rect x="58.0" y="1096.0" width="1054.0" height="120.0" rx="10" fill="#ffffff" stroke="#4fae8d" stroke-width="1.2"/>
+<path d="M58 1096 h1054 v26 h-1054 z" fill="#cdefe2" opacity="0.8"/>
+<text x="70.0" y="1114.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">LAYER 4 · Delivery &amp; audit — Phase 6</text>
+<text x="1100.0" y="1114.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.8" fill="#5c6775" font-weight="normal" text-anchor="end" font-style="normal" opacity="1.0">the answer is a contract: cited and checked, or honestly refused</text>
+<rect x="70.0" y="1130.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="80.0" y="1149.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">answer.py — citation gate</text>
+<text x="80.0" y="1165.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">verbatim quotes (normalised)</text>
+<text x="80.0" y="1179.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">every number in its quotes</text>
+<text x="80.0" y="1194.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">unit_id on law chunks</text>
+<rect x="330.5" y="1130.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="340.5" y="1149.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">service.py · 1.5.0</text>
+<text x="340.5" y="1165.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">27 HTTP routes · additive-only freeze</text>
+<text x="340.5" y="1179.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">token · 409 seals · error envelope</text>
+<rect x="591.0" y="1130.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="601.0" y="1149.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">scrub.py + audit.py</text>
+<text x="601.0" y="1165.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">post-gate PII scrub</text>
+<text x="601.0" y="1179.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">JSONL trail → GET /audit</text>
+<rect x="851.5" y="1130.0" width="248.5" height="74.0" rx="8" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.2"/>
+<text x="861.5" y="1149.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">REFUSALS</text>
+<text x="861.5" y="1165.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">reason + referral naming the gap</text>
+<text x="861.5" y="1179.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.4" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">never free text, never a guess</text>
+<line x1="585" y1="1085" x2="585" y2="1094" stroke="#4fae8d" stroke-width="2"/>
+<rect x="1148.0" y="630.0" width="312.0" height="610.0" rx="14" fill="#ffe9f2" stroke="#d6336c" stroke-width="2.6"/>
+<path d="M1162 630 h284 a14 14 0 0 1 14 14 v48 h-312 v-48 a14 14 0 0 1 14 -14 z" fill="#d6336c"/>
+<text x="1168.0" y="655.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="19" fill="#ffffff" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">LAST UPDATE</text>
+<text x="1168.0" y="682.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#ffffff" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">05 Oct 2026 · service 1.5.0 · CI green</text>
+<rect x="1162.0" y="706.0" width="284.0" height="68.0" rx="8" fill="#ffffff" stroke="#d6336c" stroke-width="1.1"/>
+<text x="1172.0" y="723.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" fill="#d6336c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">★ Phase 9 — question ↔ retrieval</text>
+<text x="1172.0" y="739.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">262 source-grounded topic nodes;</text>
+<text x="1172.0" y="754.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">exact-match ids replace loose lists</text>
+<rect x="1162.0" y="781.0" width="284.0" height="68.0" rx="8" fill="#ffffff" stroke="#d6336c" stroke-width="1.1"/>
+<text x="1172.0" y="798.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" fill="#d6336c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">★ Cross-script arm activated</text>
+<text x="1172.0" y="814.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">2/2 answered with the arm,</text>
+<text x="1172.0" y="829.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">2/2 refused without it</text>
+<rect x="1162.0" y="856.0" width="284.0" height="68.0" rx="8" fill="#ffffff" stroke="#d6336c" stroke-width="1.1"/>
+<text x="1172.0" y="873.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" fill="#d6336c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">★ Guided round wired into /answer</text>
+<text x="1172.0" y="889.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">it was dead on the deployed path;</text>
+<text x="1172.0" y="904.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">found by a live run, then fixed</text>
+<rect x="1162.0" y="931.0" width="284.0" height="68.0" rx="8" fill="#ffffff" stroke="#d6336c" stroke-width="1.1"/>
+<text x="1172.0" y="948.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" fill="#d6336c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">★ Root cause TM03 fixed</text>
+<text x="1172.0" y="964.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">“Quelle” matched inside “Quelles”;</text>
+<text x="1172.0" y="979.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">the French question answers one-shot</text>
+<rect x="1162.0" y="1006.0" width="284.0" height="68.0" rx="8" fill="#ffffff" stroke="#d6336c" stroke-width="1.1"/>
+<text x="1172.0" y="1023.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" fill="#d6336c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">★ Duplicate re-push blocked</text>
+<text x="1172.0" y="1039.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">POST /documents → 409 by SHA-256,</text>
+<text x="1172.0" y="1054.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">not filename (859 dup chunks gone)</text>
+<rect x="1162.0" y="1081.0" width="284.0" height="68.0" rx="8" fill="#ffffff" stroke="#d6336c" stroke-width="1.1"/>
+<text x="1172.0" y="1098.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" fill="#d6336c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">★ Re-aimed answers disclosed</text>
+<text x="1172.0" y="1114.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">8 colloquial→corpus rows + scope_note:</text>
+<text x="1172.0" y="1129.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">a re-aimed answer cannot look ordinary</text>
+<rect x="1162.0" y="1156.0" width="284.0" height="68.0" rx="8" fill="#ffffff" stroke="#d6336c" stroke-width="1.1"/>
+<text x="1172.0" y="1173.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" fill="#d6336c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">★ Still open (Phase 9 stages 3–8)</text>
+<text x="1172.0" y="1189.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">path / level / parent_id, topical</text>
+<text x="1172.0" y="1204.5" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">arms, facets — none of it default</text>
+<rect x="40.0" y="1262.0" width="1420.0" height="70.0" rx="12" fill="#f7f9fc" stroke="#c8d0dc" stroke-width="1.4"/>
+<text x="58.0" y="1288.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" fill="#16202c" font-weight="bold" text-anchor="start" font-style="normal" opacity="1.0">PINNED RUNTIME SPINE — unchanged across both generations; the policy raises on any substitution</text>
+<rect x="58.0" y="1298.0" width="440.0" height="24.0" rx="7" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.1"/>
+<text x="68.0" y="1314.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">Embeddings — nvidia/nemotron-3-embed-1b · 2048-d · retry + bisect</text>
+<rect x="514.0" y="1298.0" width="440.0" height="24.0" rx="7" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.1"/>
+<text x="524.0" y="1314.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">Index — local ChromaDB cosine · one collection per space × mode</text>
+<rect x="970.0" y="1298.0" width="440.0" height="24.0" rx="7" fill="#ffffff" stroke="#c8d0dc" stroke-width="1.1"/>
+<text x="980.0" y="1314.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#5c6775" font-weight="normal" text-anchor="start" font-style="normal" opacity="1.0">Answers — xKiro qwen3.8-max:free · grounded-v1 JSON · price check</text>
+<text x="1460.0" y="1362.0" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" fill="#5c6775" font-weight="normal" text-anchor="end" font-style="italic" opacity="1.0">no query translation · no provider fallback · refusal over guessing</text>
+</svg>

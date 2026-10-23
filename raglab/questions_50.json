@@ -1,0 +1,440 @@
+{
+  "_comment": "50-case evaluation set for the restructure chunking harness (harness50.py). Mix of ar/fr/en (17/17/16), 5 out-of-scope. expected_substring values are verbatim spans of the source documents (checked by the validation step of harness50.py). | Revised 2026-09-24: the 20 Banque Atlas cases now target the Al Baraka Bank Tunisie sheets (fiche_produit_banque_albaraka_{ar,fr}.md); ids/categories/languages unchanged, numbers must be re-baselined. | Trimmed 2026-09-28 to the 30 docs/-corpus cases: the 20 fictional-bank cases (Atlas, then a web-compiled Al Baraka set) were removed with their corpora by owner decision — 20 new docs/-based cases will be authored step-by-step to bring the set back to 50. Pre-2026-09-28 numbers no longer match this set. | Rebuilt to 50 cases 2026-09-30 (owner: «أنجز» approving the 2.1 matrix; batches أ-د authored on the ADOPTED corrected codices, each machine-verified: every expected_substring present in its expected document's adopted-arm chunks and distinctive corpus-wide; batch هـ re-verified the 5 out-of-scope cases). Mix: ar 32 / fr 8 / en 10; categories verbatim 10 / paraphrase 20 / cross-lingual 15 / out-of-scope 5; per-doc Loi 12 / Circulaire 10 / Guide 11 / Madkhal 12.",
+  "cases": [
+    {
+      "id": "q01",
+      "question": "ما هي عملية التمويل بالمرابحة على معنى منشور البنك المركزي التونسي عدد 80 لسنة 2019؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "شراء منقولات او عقارات او خدمات لدى طرف ثالث"
+    },
+    {
+      "id": "q02",
+      "question": "كيف يحدد هامش الربح في عملية المرابحة وكيف يتم تسديد القرض وفق منشور البنك المركزي التونسي؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "هامش ربح محدد مسبقا"
+    },
+    {
+      "id": "q03",
+      "question": "ما المقصود بعملية التمويل بالسلم وفق المنشور عدد 80 لسنة 2019؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "شراء اجل بثمن عاجل نقدا"
+    },
+    {
+      "id": "q04",
+      "question": "في عملية المضاربة وفق منشور البنك المركزي التونسي، يوفر البنك كامل رأس المال، فماذا تقتصر عليه مساهمة الحريف؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "وتقتصر مساهمة الحريف فيه على الخبرة والتسيير"
+    },
+    {
+      "id": "q05",
+      "question": "ما هو أجل البنك المركزي للاعتراض على تسويق منتج أو خدمة صيرفة اسلامية جديدة؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "خلال عشرة ايام عمل"
+    },
+    {
+      "id": "q06",
+      "question": "ما هو شرط عمر السيارة الممولة بصيغة المرابحة في دليل بنك البركة تونس؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "لا يتجاوز عمرها 3 سنوات"
+    },
+    {
+      "id": "q07",
+      "question": "ما هو الحد الأقصى لإجمالي المبالغ المقترضة بالربا في معايير مطابقة الشركات؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "اجمالي المبالغ المقترضة بالربا 30 %"
+    },
+    {
+      "id": "q08",
+      "question": "على عاتق من تقع الأصول المؤجرة في عقد الاجارة مع خيار التملك حسب الدليل الداخلي؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "الاصول المؤجرة تكون على ضمان البنك"
+    },
+    {
+      "id": "q09",
+      "question": "لماذا يجب ألا ترتبط عمولات الاعتمادات المستندية بمدة الاعتماد؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "حتى لا تؤول العملية الى قرض بزيادة ربوية"
+    },
+    {
+      "id": "q10",
+      "question": "إلى ماذا يهدف قانون البنوك والمؤسسات المالية عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "يهدف هذا القانون الى تنظيم شروط ممارسة"
+    },
+    {
+      "id": "q11",
+      "question": "على أي بنوك ومؤسسات مالية غير المقيمة تنطبق أحكام قانون عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "والمؤسسات المالية غير المقيمة على معنى التشريع المتعلق بالصرف"
+    },
+    {
+      "id": "q12",
+      "question": "كيف يتم الطعن في حكم حل بنك أو مؤسسة مالية وفق قانون عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "يتم الطعن بالاستئناف في الحكم الصادر"
+    },
+    {
+      "id": "q13",
+      "question": "ما هو صندوق تجميع مدخرات الحج الذي تأسس في ماليزيا سنة 1962؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "طابوج حاجي"
+    },
+    {
+      "id": "q14",
+      "question": "متى وأين تأسس البنك الاسلامي للتنمية؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "البنك الاسلامي للتنمية"
+    },
+    {
+      "id": "q15",
+      "question": "إلى أي مبلغ ارتفعت الأصول المالية الاسلامية سنة 2012؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "1166 مليار دولار امريكي سنة 2012"
+    },
+    {
+      "id": "q16",
+      "question": "ما هي عملية المرابحة على معنى القانون عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "يعلن فيها عن راس المال ونسبة الربح"
+    },
+    {
+      "id": "q17",
+      "question": "من يتولى مهمة الرقابة على البنوك والمؤسسات المالية حسب القانون عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "يتولى البنك المركزي التونسي مهمة الرقابة على البنوك والمؤسسات المالية"
+    },
+    {
+      "id": "q18",
+      "question": "ما العقوبة الجزائية لممارسة العمليات البنكية خلافا لأحكام القانون عدد 48 لسنة 2016؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "يعاقب بالسجن من ثلاثة اشهر الى ثلاثة اعوام"
+    },
+    {
+      "id": "q19",
+      "question": "كيف يعالج القانون عدد 48 لسنة 2016 مسألة تضارب المصالح داخل البنوك والمؤسسات المالية؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "سياسة تهدف الى احكام التصرف في تضارب المصالح"
+    },
+    {
+      "id": "q20",
+      "question": "ما هو الإطار الذي أقامه القانون عدد 48 لسنة 2016 لمراقبة مطابقة معايير الصيرفة الاسلامية داخل البنوك؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "مدقق عمليات الصيرفة الاسلامية"
+    },
+    {
+      "id": "q21",
+      "question": "ما هو الصندوق الذي أحدثه القانون عدد 48 لسنة 2016 لضمان ودائع المودعين لدى البنوك؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "صندوق ضمان الودائع البنكية"
+    },
+    {
+      "id": "q22",
+      "question": "ما هو المبلغ الذي يمكن للبنك أن يطلبه من الحريف لتوثيق وعده قبل إبرام عقود التمويل التجاري وفق المنشور؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "هامش الجدية"
+    },
+    {
+      "id": "q23",
+      "question": "ما هي المعلومات التي يجب على البنك إعلام حرفائه أصحاب الودائع الاستثمارية بها كل ستة أشهر؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "نسبة مساهمتهم المباشرة وغير المباشرة"
+    },
+    {
+      "id": "q24",
+      "question": "ما هو الاعتماد المستندي كما يعرفه الدليل الارشادي الداخلي لبنك البركة تونس؟",
+      "language": "ar",
+      "category": "verbatim",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "تعهد مكتوب صادر من بنك"
+    },
+    {
+      "id": "q25",
+      "question": "ما الشرط المتعلق بالإيراد الناتج عن عنصر محرم في معايير فرز الأسهم وفق الدليل الداخلي؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "الا يتجاوز مقدار الايراد الناتج من عنصر محرم نسبة 5 %"
+    },
+    {
+      "id": "q26",
+      "question": "En quelle année et dans quelle ville la Banque Islamique de Développement a-t-elle été fondée ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "Banque Islamique de Développement"
+    },
+    {
+      "id": "q27",
+      "question": "Quelle est l'institution égyptienne de 1971 mentionnée dans le texte sur la sayrafa islamique ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "Nasser Social Bank"
+    },
+    {
+      "id": "q28",
+      "question": "Quelle structure la loi n° 48-2016 charge-t-elle du traitement des difficultés des banques ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "لجنة الانقاذ"
+    },
+    {
+      "id": "q29",
+      "question": "Que doivent constituer les banques et établissements financiers pour étudier leurs questions communes selon la loi n° 48-2016 ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "جمعية مهنية"
+    },
+    {
+      "id": "q30",
+      "question": "هل يجوز أن يكون رأس مال المضاربة دينًا للبنك على الحريف وفق الدليل الداخلي؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "لا يجوز ان يكون راس مال المضاربة دينا للبنك على الحريف-المضارب او غيره"
+    },
+    {
+      "id": "q31",
+      "question": "هل يجوز أخذ أجرة على خطاب الضمان لقاء مجرد الضمان وفق الدليل الداخلي؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "لا يجوز اخذ الاجرة على خطاب الضمان لقاء مجرد الضمان"
+    },
+    {
+      "id": "q32",
+      "question": "Quels types de cartes bancaires l'établissement émet-il selon le guide interne ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "بطاقات الحسم الفوري وبطاقات الحسم الاجل"
+    },
+    {
+      "id": "q33",
+      "question": "Quel produit du guide interne finance-t-il l'activité du client à court terme ?",
+      "language": "fr",
+      "category": "cross-lingual",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "تيسير البركة"
+    },
+    {
+      "id": "q34",
+      "question": "كم بلغ عدد المودعين في تجربة بنوك الادخار المحلية بمنطقة ميت غمر خلال ثلاث سنوات؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "تسعة وخمسون الف (59 000) مودع"
+    },
+    {
+      "id": "q35",
+      "question": "كيف ينظر الإسلام إلى النقد حسب المادة التدريبية؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "النقد في الاسلام ليس سلعة تباع وتشترى، وانما هو اداة للتبادل"
+    },
+    {
+      "id": "q36",
+      "question": "ما هي مصادر الشريعة الاسلامية التي تستند إليها المالية الاسلامية؟",
+      "language": "ar",
+      "category": "paraphrase",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "مصادر الشريعة الاسلامية هي الادلة التي تستند اليها وتقوم عليها"
+    },
+    {
+      "id": "q37",
+      "question": "Which global stock market indexes track Islamic finance according to the training material?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "Dow Jones Islamic Market Indexes"
+    },
+    {
+      "id": "q38",
+      "question": "According to BCT circular 80/2019, who gives the order to purchase (الامر بالشراء) in a murabaha (المرابحة) financing transaction?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "الامر بالشراء"
+    },
+    {
+      "id": "q39",
+      "question": "What is the maximum execution period allowed for spot FX operations under the internal guide?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+      "expected_lang": "ar",
+      "expected_substring": "الصرف الفوري – SPOT –"
+    },
+    {
+      "id": "q40",
+      "question": "Which international Islamic bank was founded in Jeddah in 1975?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "جدة 1975"
+    },
+    {
+      "id": "q41",
+      "question": "How many institutions offered Islamic financial products in 2012 according to the Madkhal text?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "716 مؤسسة سنة 2012"
+    },
+    {
+      "id": "q42",
+      "question": "Under the BCT circular, the investment-deposit mudaraba (المضاربة) exists in how many forms?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "المضاربة وفق صيغتين"
+    },
+    {
+      "id": "q43",
+      "question": "Which committee must approve the sharia aspects (الجوانب الشرعية) of Islamic banking operations (عمليات الصيرفة) under the circular?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Circulaire_BCT_2019-08.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "هيئة مراقبة مطابقة"
+    },
+    {
+      "id": "q44",
+      "question": "Which Egyptian regional savings experiment appeared in Mit Ghamr in 1963?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Madkhal_Sayrafa_Islamiya.docx",
+      "expected_lang": "ar",
+      "expected_substring": "ميت غمر"
+    },
+    {
+      "id": "q45",
+      "question": "What does law no. 48/2016 consider to be public deposits (ودائع العموم)?",
+      "language": "en",
+      "category": "cross-lingual",
+      "expected_document": "Loi_2016-48.pdf",
+      "expected_lang": "ar",
+      "expected_substring": "تعتبر ودائع من العموم"
+    },
+    {
+      "id": "q46",
+      "question": "ما هو سعر سهم شركة تسلا اليوم في بورصة نيويورك؟",
+      "language": "ar",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q47",
+      "question": "كيف احجز تذكرة طائرة من تونس الى دبي؟",
+      "language": "ar",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q48",
+      "question": "Quelle est la recette originale de la bouillabaisse marseillaise ?",
+      "language": "fr",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q49",
+      "question": "Quand a lieu la prochaine élection présidentielle aux États-Unis ?",
+      "language": "fr",
+      "category": "out-of-scope"
+    },
+    {
+      "id": "q50",
+      "question": "What is the current prime lending rate of the Federal Reserve?",
+      "language": "en",
+      "category": "out-of-scope"
+    }
+  ]
+}

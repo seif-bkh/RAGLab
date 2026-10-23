@@ -1,0 +1,130 @@
+"""One retrieval path shared by query, evaluation, and grounded answers."""
+from store import (best_variant_merge, blend_hybrid, collection_languages,
+                   keyword_search, query_vector, rrf_merge, ensure_fresh_chunks)
+from translate import detect_language
+
+
+def retrieve(cfg, embedder, collection, text, *, language=None, translator=None,
+             mode="vector", top_k=5, candidate_k=None, lang_filter=None,
+             variant_strategy=None, blend_lambda=None, _in_micro=False):
+    if (getattr(cfg, "PER_MICRO_RETRIEVAL_ENABLED", False) and not _in_micro
+            and top_k > 1):
+        # Experiment 3: search per decomposed micro-question, then fuse.
+        # The guard keeps the inner per-micro calls on the plain path.
+        import micro_retrieval
+        return micro_retrieval.retrieve_micro(
+            cfg, embedder, collection, text, top_k=top_k, language=language,
+            translator=translator, mode=mode, candidate_k=candidate_k,
+            lang_filter=lang_filter, variant_strategy=variant_strategy,
+            blend_lambda=blend_lambda)
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+    if mode not in {"vector", "rrf", "blend"}:
+        raise ValueError(f"Unknown retrieval mode {mode!r}")
+    strategy = variant_strategy or getattr(cfg, "QUERY_VARIANT_STRATEGY", "best")
+    if strategy not in {"original", "best", "translated"}:
+        raise ValueError(f"Unknown query variant strategy {strategy!r}")
+    ensure_fresh_chunks(collection, cfg)  # refuse stale spaces before any model call
+    language = language or detect_language(text)
+    corpus_langs = [lang_filter] if lang_filter else collection_languages(collection)
+    if translator is not None and strategy != "original":
+        variants = translator.build_variants(text, language, corpus_langs)
+        if strategy == "translated":
+            variants = [v for v in variants if v["lang"] in corpus_langs] or variants[:1]
+    else:
+        variants = [{"label": f"{language}(original)", "lang": language,
+                     "translated": False, "text": text}]
+        if getattr(cfg, "LEXICON_ENABLED", False):
+            # Phase-3 intervention 2: deterministic governed expansion BEFORE
+            # embedding and BM25 (raglab/lexicon.py). Strictly separate from the
+            # retired translation path above: no model calls, no language
+            # routing — only the governed table. Every expanded form becomes an
+            # additional variant merged by the existing best_variant_merge.
+            import lexicon
+            for label, form in lexicon.expansion_pairs(text):
+                variants.append({"label": label, "lang": language,
+                                 "translated": False, "text": form})
+    count = collection.count()
+    if not count:
+        return [], variants
+    candidates = min(count, max(top_k, candidate_k or getattr(cfg, "RETRIEVAL_CANDIDATE_K", 20)))
+    lambd = getattr(cfg, "HYBRID_BLEND_LAMBDA", 0.7) if blend_lambda is None else blend_lambda
+    lists = []
+    for variant in variants:
+        vector = embedder.embed_query(variant["text"])
+        hits = query_vector(collection, vector, k=candidates, lang=lang_filter, cfg=cfg)
+        if mode != "vector":
+            keywords = keyword_search(
+                collection, variant["text"], k=candidates, cfg=cfg, lang=lang_filter,
+                include_metadata=getattr(cfg, "KEYWORD_SEARCH_INCLUDE_METADATA", True))
+            hits = (rrf_merge(hits, keywords, k=cfg.RRF_RANK_CONSTANT) if mode == "rrf" else
+                    blend_hybrid(hits, keywords, lambd=lambd))[:candidates]
+        lists.append(hits)
+    score_key = {"vector": "similarity", "rrf": "rrf_score", "blend": "blend_score"}[mode]
+    rerank_on = getattr(cfg, "RERANK_ENABLED", False)
+    if len(lists) == 1:
+        # No fusion is needed. Preserve even zero/negative cosine hits and
+        # their original ordering rather than dividing by a nonpositive max.
+        label = variants[0]["label"]
+        if rerank_on:
+            # Phase-3 intervention 3: deterministic reorder of the candidate
+            # pool BEFORE the top-k cut (the whole pool, not just top_k).
+            import rerank
+            lists[0] = rerank.rerank_hits(text, lists[0])
+        out = [dict(h, from_variant=label, variant_ranks={label: h["rank"]})
+               for h in lists[0][:top_k]]
+        if getattr(cfg, "RELATIONAL_EXPANSION_ENABLED", False):
+            # Phase-5 item 3: policy-gated units appended BESIDE the results
+            # (env-gated, default OFF; extras only compete for the tail).
+            import relational_expansion
+            out = relational_expansion.expand(
+                cfg, text, out, top_k,
+                score_key={"vector": "similarity", "rrf": "rrf_score",
+                           "blend": "blend_score"}[mode])
+        return out, variants
+    hits = best_variant_merge(lists, score_key=score_key, labels=[v["label"] for v in variants],
+                              tie_break=getattr(cfg, "FUSION_TIE_BREAK", "same_lang_margin"))
+    if rerank_on:
+        # Phase-3 intervention 3: same deterministic reorder after fusion.
+        import rerank
+        hits = rerank.rerank_hits(text, hits)
+    if getattr(cfg, "RELATIONAL_EXPANSION_ENABLED", False):
+        # Phase-5 item 3: policy-gated units appended BESIDE the results.
+        import relational_expansion
+        hits = relational_expansion.expand(
+            cfg, text, hits[:top_k], top_k, score_key=score_key)
+    return hits, variants
+
+
+def expand_neighbors(collection, hits, radius=0):
+    """Add adjacent chunks from the same source, not ground-truth-selected text.
+
+    Each original hit is followed by its neighbors; de-duplicate by stable ID.
+    The answer builder applies the separate overall context token budget.
+    """
+    if radius < 0 or radius > 2:
+        raise ValueError("Neighbor radius must be 0, 1 or 2")
+    if not radius:
+        return hits
+    output, seen = [], set()
+    for hit in hits:
+        if hit["id"] not in seen:
+            output.append(hit)
+            seen.add(hit["id"])
+        meta = hit.get("metadata") or {}
+        index, source = meta.get("chunk_index"), meta.get("source")
+        if index is None or not source:
+            continue
+        ids = [f"{source}::chunk_{i:04d}" for i in range(max(0, index-radius), index+radius+1)
+               if i != index and f"{source}::chunk_{i:04d}" not in seen]
+        if not ids:
+            continue
+        records = collection.get(ids=ids, include=["documents", "metadatas"])
+        by_id = {i: (t, m) for i, t, m in zip(records["ids"], records["documents"], records["metadatas"])}
+        for identifier in ids:
+            if identifier in by_id:
+                text, metadata = by_id[identifier]
+                output.append({"id": identifier, "text": text, "metadata": metadata,
+                               "context_neighbor_of": hit["id"], "similarity": None})
+                seen.add(identifier)
+    return output

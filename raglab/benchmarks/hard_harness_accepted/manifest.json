@@ -1,0 +1,26 @@
+{
+  "status": "snapshot_written",
+  "shards": {
+    "0": 100,
+    "1": 100,
+    "2": 100,
+    "3": 100,
+    "4": 56,
+    "5": 8,
+    "6": 5,
+    "7": 0,
+    "8": 0
+  },
+  "families": 469,
+  "audit_independence": {
+    "cross_model_audited": 0,
+    "same_model_audited": 469,
+    "unlabelled": 0,
+    "cross_provider_audited": 0,
+    "same_provider_audited": 469,
+    "note": "A same-model audit is a second pass by the author model, not provider-independent validation."
+  },
+  "source_manifest": "a54d18d8d551207836b61edd0f80057bb9a969a306ac3f3af25326951178f390",
+  "timestamp": "2026-09-06T01:15:23.373549+00:00",
+  "note": "Verified accepted families. Model-authored/audited, not expert-certified. The candidate never reads this path; retrieval is limited to docs/ chunks."
+}

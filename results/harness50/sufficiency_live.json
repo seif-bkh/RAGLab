@@ -1,0 +1,42 @@
+{
+ "questions_50.json": {
+  "states": {
+   "كافٍ": 37,
+   "غير كافٍ": 10,
+   "غير محسوم": 3
+  },
+  "false_sufficient": 3,
+  "false_refusal": 4,
+  "escalated": 0,
+  "agreement": 0.86,
+  "per_case_compact": [
+   {
+    "id": "q03",
+    "state": "كافٍ",
+    "expected": "كافٍ",
+    "n_covered": 2,
+    "n_requirements": 2,
+    "guided_rounds": 0,
+    "rescued": false
+   },
+   {
+    "id": "q46",
+    "state": "غير كافٍ",
+    "expected": "غير كافٍ",
+    "n_covered": 0,
+    "n_requirements": 3,
+    "guided_rounds": 0,
+    "rescued": false
+   },
+   {
+    "id": "q50",
+    "state": "غير كافٍ",
+    "expected": "كافٍ",
+    "n_covered": 1,
+    "n_requirements": 2,
+    "guided_rounds": 1,
+    "rescued": false
+   }
+  ]
+ }
+}

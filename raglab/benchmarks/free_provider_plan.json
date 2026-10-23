@@ -1,0 +1,16 @@
+{
+  "iteration": "04-selected-qwen-nemotron-only",
+  "source_run": "33970405295",
+  "source_commit": "be5f4448b09cd8905db6eaaf718d215bf4036e11",
+  "retrieval_profile": "original",
+  "answer_profile": "grounded-v1",
+  "screen_ids": ["rq01", "rq03", "rq05", "rq08", "rq14", "rq15", "rq16"],
+  "max_logical_calls": 40,
+  "models": {"xkiro": ["qwen/qwen3.8-max:free"]},
+  "selection": "Single user-selected model. Fresh development, held-out and source-injection checks; no model search, query translation or fallback.",
+  "free_policy": "Require xKiro free access tier and zero USD input/output/cache prices for the exact Qwen SKU. Fail closed if pricing or availability changes.",
+  "development_mode": "all",
+  "fresh_development": true,
+  "fresh_holdout": true,
+  "fresh_security": true
+}

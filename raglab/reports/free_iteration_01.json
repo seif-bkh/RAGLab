@@ -1,0 +1,108 @@
+{
+  "generated_at": "2026-09-05T15:51:21.537651+00:00",
+  "status": "incomplete",
+  "protocol": "free-gateways-v1-original-retrieval",
+  "plan": {
+    "iteration": "01-free-gateway-grounded-answers",
+    "source_run": "33970405295",
+    "source_commit": "be5f4448b09cd8905db6eaaf718d215bf4036e11",
+    "retrieval_profile": "original",
+    "answer_profile": "grounded-v1",
+    "screen_ids": [
+      "rq01",
+      "rq03",
+      "rq05",
+      "rq08",
+      "rq14",
+      "rq15",
+      "rq16"
+    ],
+    "max_logical_calls": 100,
+    "models": {
+      "xkiro": [
+        "qwen/qwen3.8-max:free",
+        "minimax/minimax-m3:free",
+        "mistralai/mistral-small-2603",
+        "deepseek/deepseek-v4-flash"
+      ],
+      "kiosapi": [
+        "moonshotai/kimi-k3",
+        "Qwen/Qwen3.8-27B",
+        "nvidia/nemotron-3-super-120b-a12b",
+        "deepseek-v4-flash"
+      ]
+    },
+    "selection": "Screen all eligible SKUs on the fixed development subset; evaluate each provider's screen winner on full development; select overall on full development before holdout. Refusal rate, rubric rate, validation, then observed latency. No holdout tuning.",
+    "free_policy": "Recheck live pricing. xKiro: free access tier and zero input/output/cache charges. KiosAPI: SKU exclusively in Free group with zero group multiplier and no billing expression. Never strip :free or fall back to a paid SKU."
+  },
+  "embedding_model": "nvidia/nemotron-3-embed-1b",
+  "embedding_api_calls": 0,
+  "translation_api_calls": 0,
+  "model_identity": "gateway_reported_not_independently_verified",
+  "pricing_checks": [],
+  "excluded_candidates": [],
+  "errors": [
+    {
+      "stage": "pricing",
+      "provider": "xkiro",
+      "error": "HTTP Error 403: Forbidden"
+    },
+    {
+      "stage": "pricing",
+      "provider": "kiosapi",
+      "error": "HTTP Error 403: Forbidden"
+    },
+    {
+      "stage": "selection",
+      "error": "No complete full-development candidate"
+    }
+  ],
+  "gates": {
+    "both_providers_full_development": false
+  },
+  "production_ready": false,
+  "logical_calls": {
+    "used": 0,
+    "limit": 100
+  },
+  "http_requests": {},
+  "frozen_retrieval": {
+    "source_run": "33970405295",
+    "source_commit": "be5f4448b09cd8905db6eaaf718d215bf4036e11",
+    "profile": "original",
+    "corpus": {
+      "documents": [
+        {
+          "name": "Circulaire_BCT_2019-08.pdf",
+          "text_sha256": "30b8211592fbb4daaca7f9b8128ba388282ea3045c9c9ed002da54382fdc67d3"
+        },
+        {
+          "name": "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+          "text_sha256": "5a9ecfe8b3178523a019bb925affa782e8a197a594801207f078110453af0a4d"
+        },
+        {
+          "name": "Loi_2016-48.pdf",
+          "text_sha256": "1e4f59500848aa9c276617f4a6b61ed90288120b1bd414f506bea44a109840bc"
+        },
+        {
+          "name": "Madkhal_Sayrafa_Islamiya.docx",
+          "text_sha256": "8fbf3f97f35be1eaeea4e1c969727d3450a081945fbee8ba0bbcb00f24b6a995"
+        }
+      ],
+      "chunks": 836,
+      "tokenizer": "cl100k_base",
+      "chunk_size": 220,
+      "overlap": 40,
+      "chunks_with_heading": 0,
+      "chunk_manifest_sha256": "807785db25fb798499e67f12f59589f6db33792e88cb00cf104752853046e60e",
+      "uncovered_cases": []
+    },
+    "dev_sha256": "a7f72a54f4979ae2e91ad33c35b444176534c956120be45488b8086b6f5613d1",
+    "holdout_sha256": "e68df5fb6adbe86ba67dfddb7b1c894c491e5121063b6505beb32dd55140f367"
+  },
+  "retrieval": [],
+  "measurement_source": {
+    "run_id": 33976033405,
+    "summary_check_id": 101332847870
+  }
+}

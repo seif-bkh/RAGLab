@@ -1,0 +1,5154 @@
+"""Offline contract, provenance, safety, and regression tests; no API access."""
+import inspect
+
+import chunker
+import chat
+import semantic_chunking as sc
+import io
+import json
+import os
+import re
+import tempfile
+import unittest
+import urllib.error
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from answer import (AnswerGenerator, answer_messages, build_sources,
+                    needs_private_or_live_data, validate_answer)
+from artifacts import write_json
+from embedder import build_embedder, embedding_fingerprint
+from evaluate import is_correct_hit, save_run, run_evaluation
+from retrieval import retrieve
+from nvidia_api import (DEEPSEEK_MODEL, EMBED_MODEL, KIMI_MODEL, RIVA_MODEL,
+                        NvidiaAPIError, NvidiaClient, chat_payload,
+                        final_content, read_event_stream, retry_after_seconds)
+from nvidia_benchmark import make_config, selection_key
+
+DOCS_DIRS = [Path(__file__).resolve().parent.parent / "docs",
+             Path(__file__).resolve().parent / "data"]
+from pipeline_policy import ANSWER_MODEL as QWEN_MODEL
+from store import ensure_fresh_chunks, get_collection, store_chunks, chunk_fp
+from translate import QueryTranslator, translation_issues
+
+
+class Response:
+    def __init__(self, data):
+        self.data = data
+        self.status = 200
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return False
+    def read(self):
+        return json.dumps(self.data).encode()
+
+
+class Contracts(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        self.cfg = make_config(NVIDIA_MIN_INTERVAL=0, NVIDIA_CHAT_STREAM=False,
+                              QUERY_TRANSLATION_PROMPT='basic-v1',
+                              NVIDIA_EMBEDDING_CACHE_PATH=self.path / 'embeddings.json',
+                              EMBEDDING_CACHE_PATH=self.path / 'embeddings.json',
+                              QUERY_TRANSLATION_CACHE_PATH=self.path / 'translations.json',
+                              ANSWER_CACHE_PATH=self.path / 'answers.json',
+                              CHROMA_DIR=self.path / 'chroma')
+        self.env = patch.dict(os.environ, {'NVIDIA_API_KEY': 'test-key'})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def test_explicit_empty_key_does_not_use_environment_credential(self):
+        client = NvidiaClient(api_key='')
+        with patch('urllib.request.urlopen') as request:
+            with self.assertRaises(NvidiaAPIError):
+                client.request('models')
+            request.assert_not_called()
+
+    def test_multiple_translation_cache_instances_merge_only_new_entries(self):
+        from translate import TranslationCache
+        path = self.path / 'shared-translations.json'
+        a, b = TranslationCache(path), TranslationCache(path)
+        a.put('model-a', 'ar', 'one', 'القديم')
+        a.save()
+        b.put('model-b', 'ar', 'two', 'الثاني')
+        b.put('model-a', 'ar', 'one', 'الجديد')
+        b.save()
+        a.put('model-a', 'ar', 'three', 'الثالث')
+        a.save()  # must not restore a stale copy of "one" or drop "two"
+        warm = TranslationCache(path)
+        self.assertEqual(len(warm.entries), 3)
+        self.assertEqual(warm.get('model-a', 'ar', 'one')['translation'], 'الجديد')
+        self.assertEqual(a.get('model-b', 'ar', 'two')['translation'], 'الثاني')
+        self.assertEqual(b.get('model-a', 'ar', 'three')['translation'], 'الثالث')
+        b.save()  # no dirty entries: must not overwrite another instance
+        self.assertEqual(len(TranslationCache(path).entries), 3)
+
+    def test_native_dimensions_only(self):
+        self.cfg.NVIDIA_EMBEDDING_DIM = 512
+        with self.assertRaisesRegex(ValueError, '2048'):
+            build_embedder(self.cfg)
+
+    def test_embedding_dimension_identity(self):
+        self.cfg.NVIDIA_EMBEDDING_DIM = 0
+        a = embedding_fingerprint(self.cfg)
+        self.cfg.NVIDIA_EMBEDDING_DIM = 2048
+        self.assertEqual(a, embedding_fingerprint(self.cfg))
+        self.cfg.NVIDIA_EMBEDDING_MODEL = 'another-2048-dim-model'
+        self.assertNotEqual(a, embedding_fingerprint(self.cfg))
+
+    def test_endpoint_identity(self):
+        a = embedding_fingerprint(self.cfg)
+        self.cfg.NVIDIA_EMBEDDING_BASE_URL = 'https://different.example/v1/embeddings'
+        self.assertNotEqual(a, embedding_fingerprint(self.cfg))
+
+    def test_duplicate_embedding_inputs_and_response_reordering(self):
+        requests = []
+        def request(req, **kwargs):
+            payload = json.loads(req.data)
+            requests.append(payload)
+            return Response({'data': [{'index': i, 'embedding': [float(i+1)] * 2048}
+                                      for i in reversed(range(len(payload['input'])))]})
+        with patch('urllib.request.urlopen', side_effect=request):
+            emb = build_embedder(self.cfg)
+            vectors = emb.embed_texts(['a', 'a', 'b'])
+            self.assertEqual(vectors[0], vectors[1])
+            self.assertEqual(vectors[2][0], 2.0)
+            self.assertEqual(requests[0]['input'], ['a', 'b'])
+            self.assertEqual(requests[0]['truncate'], 'NONE')
+            self.assertEqual(requests[0]['encoding_format'], 'float')
+            emb.embed_query('a')
+            self.assertEqual(len(requests), 2)  # query/passage caches are separate
+            self.assertEqual(requests[1]['input_type'], 'query')
+            warm = build_embedder(self.cfg)
+            warm.embed_texts(['a', 'b'])
+            self.assertEqual(warm._dimension, 2048)
+            self.assertEqual(len(requests), 2)
+
+    def test_embedding_duplicate_indices_rejected(self):
+        data = {'data': [{'index': 0, 'embedding': [1.0] * 2048}] * 2}
+        with patch('urllib.request.urlopen', return_value=Response(data)):
+            with self.assertRaisesRegex(RuntimeError, 'indices'):
+                build_embedder(self.cfg).embed_texts(['a', 'b'])
+
+    def test_embedding_wrong_dimension_rejected(self):
+        with patch('urllib.request.urlopen', return_value=Response({'data': [{'index': 0, 'embedding': [1.0] * 6}]})):
+            with self.assertRaisesRegex(RuntimeError, 'dimension'):
+                build_embedder(self.cfg).embed_texts(['a'])
+
+    def test_embedding_model_mismatch_rejected(self):
+        with patch('urllib.request.urlopen', return_value=Response({'model': 'wrong', 'data': []})):
+            with self.assertRaisesRegex(RuntimeError, 'model mismatch'):
+                build_embedder(self.cfg).embed_texts(['a'])
+
+    def test_model_specific_knobs(self):
+        messages = [{'role': 'user', 'content': 'text'}]
+        kimi = chat_payload(KIMI_MODEL, messages)
+        deepseek = chat_payload(DEEPSEEK_MODEL, messages)
+        riva = chat_payload(RIVA_MODEL, messages)
+        self.assertEqual(kimi['reasoning_effort'], 'low')
+        self.assertNotIn('chat_template_kwargs', kimi)
+        self.assertEqual(deepseek['chat_template_kwargs'], {'thinking': False})
+        self.assertNotIn('chat_template_kwargs', riva)
+        self.assertNotIn('reasoning_effort', riva)
+
+    def test_auth_errors_never_retry(self):
+        error = urllib.error.HTTPError('https://example.com', 401, 'unauthorized', {}, io.BytesIO(b'bad auth'))
+        with patch('urllib.request.urlopen', side_effect=error) as request, patch('time.sleep') as sleep:
+            with self.assertRaises(NvidiaAPIError):
+                NvidiaClient(min_interval=0).request('models')
+            self.assertEqual(request.call_count, 1)
+            sleep.assert_not_called()
+
+    def test_retry_after_honored(self):
+        error = urllib.error.HTTPError('https://example.com', 429, 'quota', {'Retry-After': '2'}, io.BytesIO(b'quota'))
+        with patch('urllib.request.urlopen', side_effect=[error, Response({'data': []})]), patch('time.sleep') as sleep:
+            client = NvidiaClient(min_interval=0)
+            self.assertEqual(client.models(), [])
+            sleep.assert_called_once_with(2.0)
+            self.assertEqual(client.calls, 2)
+
+    def test_long_retry_after_defers(self):
+        error = urllib.error.HTTPError('https://example.com', 429, 'quota', {'Retry-After': '3600'}, io.BytesIO(b'quota'))
+        with patch('urllib.request.urlopen', side_effect=error) as request, patch('time.sleep') as sleep:
+            with self.assertRaises(NvidiaAPIError):
+                NvidiaClient(min_interval=0).request('models')
+            self.assertEqual(request.call_count, 1)
+            sleep.assert_not_called()
+
+    def test_retry_after_parsing(self):
+        self.assertEqual(retry_after_seconds('0'), 0)
+        self.assertIsNone(retry_after_seconds('nonsense'))
+        self.assertEqual(retry_after_seconds('Fri, 01 Jan 2021 00:00:00 GMT'), 0)
+
+    def test_reasoning_not_returned(self):
+        self.assertEqual(final_content('<think>secret</think>Final.'), 'Final.')
+        self.assertEqual(final_content('```reasoning\nsecret\n```\nFinal.'), 'Final.')
+        for value in ['<think>unfinished', '<think>only thought</think>', None]:
+            with self.assertRaises(NvidiaAPIError):
+                final_content(value)
+
+    def test_sse_accumulates_only_final_content(self):
+        stream = [b'data: {"model":"moonshotai/kimi-k3","choices":[{"delta":{"reasoning_content":"secret"}}]}\n',
+                  b'data: {"choices":[{"delta":{"content":"Final "}}]}\n',
+                  b'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}],"usage":{"total_tokens":10}}\n',
+                  b'data: [DONE]\n']
+        result = read_event_stream(stream, float('inf'))
+        self.assertEqual(result['choices'][0]['message']['content'], 'Final answer')
+        self.assertEqual(result['usage']['total_tokens'], 10)
+        with self.assertRaises(NvidiaAPIError):
+            read_event_stream(stream[:-1], float('inf'))
+
+    def test_chat_truncation_is_not_success(self):
+        client = NvidiaClient(min_interval=0)
+        with patch.object(client, 'request', return_value={'choices': [{'finish_reason': 'length', 'message': {'content': '{}'}}]}):
+            with self.assertRaisesRegex(NvidiaAPIError, 'Incomplete'):
+                client.chat(KIMI_MODEL, [])
+
+    def test_chat_model_substitution_rejected(self):
+        client = NvidiaClient(min_interval=0)
+        with patch.object(client, 'request', return_value={'model': RIVA_MODEL}):
+            with self.assertRaisesRegex(NvidiaAPIError, 'substitution'):
+                client.chat(KIMI_MODEL, [])
+
+    def test_number_and_script_checks(self):
+        self.assertEqual(translation_issues('12 TND', '١٢ دينار', 'ar'), [])
+        self.assertIn('numbers_changed', translation_issues('12 TND', '13 دينار', 'ar'))
+        self.assertIn('wrong_script', translation_issues('bank', 'bank', 'ar'))
+
+    def test_numbered_parser_is_strict(self):
+        for text in ['1. A\n1. B', '1. \n2. B', 'Here you go\n1. A', '2. B']:
+            self.assertIsNone(QueryTranslator._parse(text, 1))
+
+    def test_riva_receives_raw_text_and_explicit_language_pair(self):
+        self.cfg.NVIDIA_TRANSLATION_MODEL = RIVA_MODEL
+        self.cfg.QUERY_TRANSLATION_PROMPT = 'basic-v1'
+        translator = QueryTranslator(self.cfg)
+        with patch.object(translator, '_request_chat', return_value='ما هي المرابحة؟') as chat:
+            self.assertEqual(translator.translate_one('What is Murabaha?', 'ar', source='en'), 'ما هي المرابحة؟')
+            messages = chat.call_args.args[1]
+            self.assertEqual(messages[0], {'role': 'system', 'content': 'en-ar'})
+            self.assertEqual(messages[-1]['content'], 'What is Murabaha?')
+            self.assertNotIn('Translate', messages[-1]['content'])
+
+    def test_riva_banking_fewshots_preserve_pair(self):
+        self.cfg.NVIDIA_TRANSLATION_MODEL = RIVA_MODEL
+        self.cfg.QUERY_TRANSLATION_PROMPT = 'banking-v2'
+        translator = QueryTranslator(self.cfg)
+        with patch.object(translator, '_request_chat', side_effect=['What is Murabaha?', 'ما هي المرابحة؟']) as chat:
+            translator.translate_one('Quelle est la Mourabaha ?', 'ar', source='fr')
+            first = chat.call_args_list[0].args[1]
+            second = chat.call_args_list[1].args[1]
+            self.assertEqual(first[0]['content'], 'fr-en')
+            self.assertEqual(second[0]['content'], 'en-ar')
+            self.assertGreater(len(second), 2)
+            self.assertEqual(second[-1]['content'], 'What is Murabaha?')
+            variants = translator.build_variants('Quelle est la Mourabaha ?', 'fr', ['ar'])
+            self.assertEqual(variants[1]['route'], ['fr', 'en', 'ar'])
+            self.assertEqual(variants[1]['intermediate_text'], 'What is Murabaha?')
+            self.assertEqual(chat.call_count, 2)  # final route is cached
+
+    def test_translation_cache_identity_changes_with_prompt_and_source(self):
+        tr = QueryTranslator(self.cfg)
+        initial = tr._identity(tr.model, 'en')
+        self.assertNotEqual(initial, tr._identity(tr.model, 'fr'))
+        tr.prompt_version = 'banking-v2'
+        self.assertNotEqual(initial, tr._identity(tr.model, 'en'))
+
+    def test_fallback_cache_uses_actual_model(self):
+        self.cfg.NVIDIA_TRANSLATION_MODEL = KIMI_MODEL
+        self.cfg.NVIDIA_TRANSLATION_FALLBACK_MODELS = DEEPSEEK_MODEL
+        tr = QueryTranslator(self.cfg)
+        with patch.object(tr, '_translate_batch', side_effect=[ValueError('unavailable'), ['ما هو البنك؟']]):
+            self.assertEqual(tr.translate_one('What is the bank?', 'ar', source='en'), 'ما هو البنك؟')
+        self.assertIsNone(tr.cache.get(tr._identity(KIMI_MODEL, 'en'), 'ar', 'What is the bank?'))
+        item = tr.cache.get(tr._identity(DEEPSEEK_MODEL, 'en'), 'ar', 'What is the bank?')
+        self.assertEqual(item['model'], DEEPSEEK_MODEL)
+        self.cfg.NVIDIA_TRANSLATION_FALLBACK_MODELS = ''
+        clean = QueryTranslator(self.cfg)
+        with patch.object(clean, '_translate_batch', side_effect=ValueError('primary down')):
+            with self.assertRaisesRegex(RuntimeError, 'incomplete'):
+                clean.translate_one('What is the bank?', 'ar', source='en')
+
+    def test_missing_translator_is_incomplete_not_fake_baseline(self):
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': ''}):
+            tr = QueryTranslator(self.cfg)
+            with self.assertRaisesRegex(RuntimeError, 'incomplete'):
+                tr.translate_one('What is a bank?', 'ar', 'en')
+            tr.strict = False
+            self.assertEqual(len(tr.build_variants('What is a bank?', 'en', ['ar'])), 1)
+
+    def test_source_constraint(self):
+        case = {'expected_document': 'right.pdf', 'expected_substring': 'answer', 'expected_lang': 'ar'}
+        self.assertFalse(is_correct_hit(case, {'text': 'answer', 'metadata': {'document': 'wrong.pdf', 'language': 'ar'}}))
+        self.assertTrue(is_correct_hit(case, {'text': 'answer', 'metadata': {'document': 'right.pdf', 'language': 'ar'}}))
+
+    def test_embedding_space_staleness_guard(self):
+        meta = {'chunk_fp': chunk_fp(self.cfg), 'embedding_fp': 'wrong-space', 'embedding_model': EMBED_MODEL}
+        fake = SimpleNamespace(get=lambda **kw: {'metadatas': [meta]})
+        with self.assertRaisesRegex(RuntimeError, 'embedding space'):
+            ensure_fresh_chunks(fake, self.cfg)
+
+    def test_atomic_artifact_rejects_nan_keeps_old(self):
+        path = self.path / 'nested/file.json'
+        write_json(path, {'ok': 1})
+        with self.assertRaises(ValueError):
+            write_json(path, {'bad': float('nan')})
+        self.assertEqual(json.loads(path.read_text()), {'ok': 1})
+
+    def test_evaluation_filenames_do_not_collide(self):
+        self.assertNotEqual(save_run({}, self.path), save_run({}, self.path))
+
+    def test_selection_prioritizes_recall_not_holdout(self):
+        high_top1 = {'model': KIMI_MODEL, 'metrics': {'hit@1': 1, 'hit@3': 1, 'hit@5': .8, 'mrr@10': 1}}
+        high_recall = {'model': 'none', 'metrics': {'hit@1': .8, 'hit@3': 1, 'hit@5': 1, 'mrr@10': .9}}
+        self.assertGreater(selection_key(high_recall), selection_key(high_top1))
+
+    def test_real_chroma_shared_retrieval_and_language_filter(self):
+        def chunk(index, source, language, text):
+            return SimpleNamespace(index=index, source=source, language=language, text=text,
+                                   heading="", origin="test/", section_type="content", token_count=20)
+        chunks = [chunk(0, "ar.md", "ar", "تاسس بنك Atlas في 1983. bank"),
+                  chunk(0, "fr.md", "fr", "La banque Atlas a été fondée en 1983. bank")]
+        vectors = [[1.0] + [0.0] * 2047, [0.0, 1.0] + [0.0] * 2046]
+        collection = get_collection(self.cfg, reset=True)
+        self.assertEqual(store_chunks(collection, list(zip(chunks, vectors)), self.cfg), 2)
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+        for mode in ['vector', 'rrf', 'blend']:
+            hits, _ = retrieve(self.cfg, fake_embedder, collection, 'Atlas bank', language='en',
+                               translator=None, mode=mode, top_k=5, lang_filter='fr')
+            self.assertEqual([h['metadata']['language'] for h in hits], ['fr'])
+        case = {'id': 'q1', 'question': 'When was Atlas founded?', 'language': 'en',
+                'category': 'cross-lingual', 'expected_document': 'ar.md',
+                'expected_lang': 'ar', 'expected_substring': '1983'}
+        run = run_evaluation(self.cfg, fake_embedder, collection, [case], top_k=5)
+        self.assertEqual(run['metrics']['overall']['hit@1'], 1)
+        self.assertEqual(run['questions'][0]['hits'][0]['metadata']['document'], 'ar.md')
+        # Metadata is read before any new provider calls when querying a stale index.
+        self.cfg.NVIDIA_EMBEDDING_MODEL = 'wrong-space'
+        with self.assertRaisesRegex(RuntimeError, 'embedding model mismatch'):
+            retrieve(self.cfg, fake_embedder, collection, 'Atlas', top_k=1)
+
+    def test_strict_ingest_preflights_before_any_write(self):
+        collection = SimpleNamespace(count=lambda: 0, add=lambda **kw: self.fail('must not write'))
+        c = SimpleNamespace(source='test.md', index=0, section_type='content')
+        with self.assertRaisesRegex(ValueError, 'Invalid embedding'):
+            store_chunks(collection, [(c, [0.0]*2048)], self.cfg)
+
+
+
+class Grounding(unittest.TestCase):
+    def setUp(self):
+        self.sources = [{'source_id': 'S1', 'chunk_id': 'd::0', 'document': 'd',
+                         'text': 'The bank was founded on 15 June 1983.'}]
+        self.valid = {'answerable': True, 'claims': [{'text': 'The bank was founded in 1983.',
+                      'evidence': [{'source_id': 'S1', 'quote': 'founded on 15 June 1983'}]}]}
+
+    def test_valid_grounded_claim(self):
+        self.assertEqual(len(validate_answer(self.valid, self.sources)), 1)
+
+    def test_unknown_citation(self):
+        self.valid['claims'][0]['evidence'][0]['source_id'] = 'S99'
+        with self.assertRaisesRegex(ValueError, 'Unknown citation'):
+            validate_answer(self.valid, self.sources)
+
+    def test_invented_quote(self):
+        self.valid['claims'][0]['evidence'][0]['quote'] = 'founded on 15 June 2001'
+        with self.assertRaisesRegex(ValueError, 'not in'):
+            validate_answer(self.valid, self.sources)
+
+    def test_uncited_claim(self):
+        self.valid['claims'].append({'text': 'A fabricated second fact.', 'evidence': []})
+        with self.assertRaisesRegex(ValueError, 'requires evidence'):
+            validate_answer(self.valid, self.sources)
+
+    def test_boolean_and_refusal_schema(self):
+        for output in [{'answerable': 'false', 'claims': []}, {'answerable': True, 'claims': []},
+                       {'answerable': False, 'claims': self.valid['claims']}]:
+            with self.assertRaises(ValueError):
+                validate_answer(output, self.sources)
+        self.assertEqual(validate_answer({'answerable': False, 'claims': []}, self.sources), [])
+
+    def test_prompts_contain_no_gold_labels(self):
+        messages = answer_messages('What year?', 'en', self.sources, 'grounded-v2')
+        prompt = json.loads(messages[1]['content'])
+        self.assertEqual(set(prompt), {'question', 'sources'})
+        self.assertIn('untrusted', messages[0]['content'])
+        self.assertNotIn('expected_substring', json.dumps(messages))
+
+    def test_private_and_live_data_guard_multilingual(self):
+        for question in ['What is my account balance?', 'Quel est le solde de mon compte ?',
+                         'ما هو رصيدي؟', 'What is the live EUR/TND rate?', 'Quel est le cours en temps réel ?',
+                         'ما سعر صرف اليورو الآن؟', 'Give me the administrator password']:
+            self.assertTrue(needs_private_or_live_data(question), question)
+        self.assertFalse(needs_private_or_live_data('What is Murabaha financing?'))
+
+    def test_context_is_deduplicated_and_bounded(self):
+        hits = [{'id': 'a', 'text': 'text' * 1000}, {'id': 'b', 'text': 'small text'}, {'id': 'b', 'text': 'small text'}]
+        self.assertEqual([s['chunk_id'] for s in build_sources(hits, 20)], ['b'])
+
+    def test_generator_fail_closed_and_no_call_on_empty_context(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_CACHE_PATH=Path(temp) / 'answer.json')
+            client = SimpleNamespace(chat=lambda *a, **k: {'text': 'not JSON'})
+            generator = AnswerGenerator(cfg, client)
+            self.assertEqual(generator.answer('Question?', [], 'en')['reason'], 'no_context')
+            result = generator.answer('What year?', [{'id': 'a', 'text': self.sources[0]['text']}], 'en')
+            self.assertEqual(result['reason'], 'invalid_output')
+            self.assertFalse(result['validation_ok'])
+            self.assertNotIn('not JSON', result['answer'])
+
+    def test_answer_cache_is_context_sensitive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_CACHE_PATH=Path(temp) / 'answer.json')
+            calls = []
+            def chat(*args, **kwargs):
+                calls.append(args)
+                return {'text': json.dumps(self.valid), 'seconds': 1}
+            gen = AnswerGenerator(cfg, SimpleNamespace(chat=chat))
+            hits = [{'id': 'a', 'text': self.sources[0]['text']}]
+            self.assertEqual(gen.answer('What year?', hits, 'en')['status'], 'answered')
+            self.assertTrue(gen.answer('What year?', hits, 'en')['cached'])
+            hits[0]['text'] += ' A new sentence.'
+            self.assertFalse(gen.answer('What year?', hits, 'en')['cached'])
+            self.assertEqual(len(calls), 2)
+
+    def test_fresh_answer_trial_neither_reads_nor_replaces_cached_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
+            calls = []
+            def chat(*args, **kwargs):
+                calls.append(1)
+                return {'text': json.dumps(self.valid), 'seconds': len(calls)}
+            generator = AnswerGenerator(cfg, SimpleNamespace(chat=chat))
+            hits = [{'id': 'a', 'text': self.sources[0]['text']}]
+            generator.answer('What year?', hits, 'en')
+            before = cfg.ANSWER_CACHE_PATH.read_bytes()
+            fresh = generator.answer('What year?', hits, 'en', use_cache=False)
+            self.assertFalse(fresh['cached'])
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(cfg.ANSWER_CACHE_PATH.read_bytes(), before)
+            self.assertTrue(generator.answer('What year?', hits, 'en')['cached'])
+
+    def test_invalid_model_output_retains_observed_latency(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
+            generator = AnswerGenerator(cfg, SimpleNamespace(chat=lambda *a, **kw: {'text': 'not JSON', 'seconds': 7.5}))
+            result = generator.answer('What year?', [{'id': 'a', 'text': self.sources[0]['text']}], 'en')
+            self.assertFalse(result['validation_ok'])
+            self.assertEqual(result['seconds'], 7.5)
+
+    def test_distinct_answer_generators_preserve_each_others_cache_entries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
+            client = SimpleNamespace(chat=lambda *a, **kw: {'text': json.dumps(self.valid), 'seconds': 1})
+            a, b = AnswerGenerator(cfg, client), AnswerGenerator(cfg, client)
+            hits = [{'id': 'a', 'text': self.sources[0]['text']}]
+            a.answer('Question one?', hits, 'en')
+            b.answer('Question two?', hits, 'en')
+            a.answer('Question three?', hits, 'en')
+            self.assertEqual(len(json.loads(cfg.ANSWER_CACHE_PATH.read_text())), 3)
+            self.assertTrue(b.answer('Question three?', hits, 'en')['cached'])
+
+    def test_parallel_answer_cache_has_no_lost_entries(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
+            client = SimpleNamespace(chat=lambda *a, **kw: {'text': '{"answerable":false,"claims":[]}', 'seconds': 0.1})
+            gen = AnswerGenerator(cfg, client)
+            hits = [{'id': 'a', 'text': self.sources[0]['text']}]
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(lambda i: gen.answer(f'Question {i}?', hits, 'en'), range(8)))
+            self.assertTrue(all(r['validation_ok'] for r in results))
+            self.assertEqual(len(json.loads(cfg.ANSWER_CACHE_PATH.read_text())), 8)
+
+
+class SelectedPipeline(unittest.TestCase):
+    def test_default_cli_uses_only_selected_pair_and_original_queries(self):
+        import config
+        from main import build_parser
+        args = build_parser().parse_args(['answer', 'What is Murabaha?'])
+        self.assertEqual(args.provider, 'xkiro')
+        self.assertEqual(args.model, QWEN_MODEL)
+        self.assertEqual(config.active_embedding_model(), EMBED_MODEL)
+        self.assertFalse(config.QUERY_TRANSLATION_ENABLED)
+        self.assertEqual(config.QUERY_VARIANT_STRATEGY, 'original')
+
+    def test_retired_cli_choices_are_rejected(self):
+        from main import build_parser
+        for option in (['--provider', 'kiosapi'], ['--provider', 'nvidia'], ['--model', KIMI_MODEL]):
+            with patch('sys.stderr', new_callable=io.StringIO):
+                with self.assertRaises(SystemExit):
+                    build_parser().parse_args(['answer', 'Question?', *option])
+
+    def test_stale_translation_or_embedding_settings_fail_before_io(self):
+        import config
+        from main import main
+        for setting, value in [('QUERY_TRANSLATION_ENABLED', True), ('EMBEDDING_PROVIDER', 'gemini'),
+                               ('NVIDIA_EMBEDDING_MODEL', 'wrong-model')]:
+            with patch.object(config, setting, value), patch('main.get_collection') as collection, \
+                 patch('main.make_embedder') as embedder:
+                with self.assertRaises(ValueError):
+                    main(['query', 'Question?'])
+                collection.assert_not_called()
+                embedder.assert_not_called()
+
+    def test_regression_cannot_reenable_retired_models(self):
+        from pipeline_policy import validate_regression_plan
+        plan = {'models': {'xkiro': [QWEN_MODEL]}, 'retrieval_profile': 'original', 'answer_profile': 'grounded-v1'}
+        validate_regression_plan(plan)
+        for models in ({'kiosapi': [QWEN_MODEL]}, {'xkiro': [QWEN_MODEL, 'minimax/minimax-m3:free']}):
+            with self.assertRaises(ValueError):
+                validate_regression_plan({**plan, 'models': models})
+
+    def test_legacy_benchmark_entrypoint_is_retired(self):
+        import nvidia_benchmark
+        with self.assertRaisesRegex(RuntimeError, 'retired'):
+            nvidia_benchmark.run('all')
+
+
+class FreeGatewayPolicy(unittest.TestCase):
+    def xcatalog(self, model=QWEN_MODEL):
+        return {'data': [{'id': model, 'access_tier': 'free', 'pricing': {
+            'currency': 'USD', 'unit': 'per_1m_tokens', 'input': 0, 'output': 0},
+            'reasoning_efforts': {'levels': ['none', 'high']}}]}
+
+    def test_free_runner_restores_native_output_path_on_failure(self):
+        import free_model_benchmark as free
+        import nvidia_benchmark as native
+        original = native.OUTPUT
+        def fail():
+            native.OUTPUT = Path('/temporary-free-output')
+            raise RuntimeError('test interruption')
+        with patch.object(free, '_run', side_effect=fail):
+            with self.assertRaises(RuntimeError):
+                free.run()
+        self.assertEqual(native.OUTPUT, original)
+
+    def test_explicit_json_mode_does_not_change_default_chat_payload(self):
+        from free_gateway import FreeGatewayClient
+        data = {'model':QWEN_MODEL,'choices':[{'message':{'content':'{"ok":true}'},'finish_reason':'stop'}]}
+        for enabled in (False, True):
+            client = FreeGatewayClient('xkiro', QWEN_MODEL, {'catalog':self.xcatalog()},
+                                       budget={'used':0,'limit':1}, json_mode=enabled)
+            with patch.object(client, 'request', return_value=data) as request:
+                client.chat(QWEN_MODEL, [])
+                payload = request.call_args.args[1]
+                self.assertEqual(payload.get('response_format'), {'type':'json_object'} if enabled else None)
+
+    def test_zero_prices_are_explicit_and_finite(self):
+        from free_gateway import is_zero
+        self.assertTrue(is_zero('0.000'))
+        for value in [None, False, '', 'NaN', 'Infinity', -1, .01]:
+            self.assertFalse(is_zero(value), value)
+
+    def test_xkiro_requires_free_tier_and_all_zero_prices(self):
+        from free_gateway import free_eligibility
+        catalog = self.xcatalog()
+        self.assertTrue(free_eligibility('xkiro', QWEN_MODEL, catalog)[0])
+        catalog['data'][0]['access_tier'] = 'paid'
+        self.assertFalse(free_eligibility('xkiro', QWEN_MODEL, catalog)[0])
+        catalog['data'][0]['access_tier'] = 'free'
+        catalog['data'][0]['pricing']['cache_write'] = .1
+        self.assertFalse(free_eligibility('xkiro', QWEN_MODEL, catalog)[0])
+        self.assertFalse(free_eligibility('xkiro', 'missing:free', catalog)[0])
+
+    def test_removed_provider_and_other_models_are_rejected_before_io(self):
+        from free_gateway import FreeGatewayClient, load_pricing
+        with patch('urllib.request.build_opener') as opener:
+            with self.assertRaises(ValueError):
+                load_pricing('kiosapi')
+            with self.assertRaises(ValueError):
+                FreeGatewayClient('kiosapi', QWEN_MODEL, {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+            with self.assertRaises(ValueError):
+                FreeGatewayClient('xkiro', 'minimax/minimax-m3:free', {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+            opener.assert_not_called()
+
+    def test_cli_gateway_factory_is_explicit_and_price_checked(self):
+        from answer import build_answer_generator
+        cfg = make_config(ANSWER_PROVIDER='xkiro', ANSWER_MODEL=QWEN_MODEL)
+        with patch.dict(os.environ, {'XKIRO_API_KEY': 'x-only', 'NVIDIA_API_KEY': 'nvidia-only'}), \
+             patch('free_gateway.load_pricing', return_value={'catalog': self.xcatalog()}):
+            generator = build_answer_generator(cfg)
+        self.assertEqual(generator.client.base_url, 'https://api.xkiro.com/v1')
+        self.assertEqual(generator.client.api_key, 'x-only')
+        self.assertEqual(generator.model, QWEN_MODEL)
+        self.assertEqual(generator.client.budget['limit'], 1)
+
+    def test_cli_private_guard_needs_no_gateway_or_index(self):
+        from main import main
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'refusal.json'
+            with patch.dict(os.environ, {}, clear=True), \
+                 patch('answer.build_answer_generator', side_effect=AssertionError('provider call')), \
+                 patch('main.get_collection', side_effect=AssertionError('index access')), \
+                 patch('sys.stdout', new_callable=io.StringIO):
+                code = main(['answer', 'What is my account balance?', '--provider', 'xkiro',
+                             '--model', QWEN_MODEL, '--query-lang', 'en', '--output', str(path)])
+            self.assertEqual(code, 0)
+            result = json.loads(path.read_text())
+            self.assertEqual(result['reason'], 'private_or_live_request')
+            self.assertFalse(result['inference_performed'])
+            self.assertEqual(result['provider'], 'xkiro')
+
+    def test_native_benchmark_does_not_inherit_gateway_cli_provider(self):
+        import config
+        with patch.object(config, 'ANSWER_PROVIDER', 'xkiro'):
+            self.assertEqual(make_config().ANSWER_PROVIDER, 'nvidia')
+        self.assertEqual(make_config(ANSWER_PROVIDER='xkiro').ANSWER_PROVIDER, 'xkiro')
+
+    def test_pricing_reads_scope_credentials_and_identify_the_client(self):
+        from free_gateway import load_pricing
+        requests = []
+        class PriceResponse(Response):
+            def read(self, limit=None):
+                return super().read()
+        def read_price(req, timeout):
+            requests.append(req)
+            return PriceResponse({'data': []})
+        with patch.dict(os.environ, {'XKIRO_API_KEY': 'x-only', 'NVIDIA_API_KEY': 'not-this'}):
+            load_pricing('xkiro', opener=SimpleNamespace(open=read_price))
+        self.assertEqual(requests[0].full_url, 'https://api.xkiro.com/v1/models')
+        self.assertEqual(requests[0].get_header('Authorization'), 'Bearer x-only')
+        self.assertEqual(requests[0].get_header('User-agent'), 'RAGLab-readonly-catalog/1.0')
+
+    def test_paid_sku_rejected_before_client_can_send_a_key(self):
+        from free_gateway import FreeGatewayClient
+        catalog = self.xcatalog()
+        catalog['data'][0]['pricing']['input'] = 1
+        with self.assertRaisesRegex(ValueError, 'Free-only policy'):
+            FreeGatewayClient('xkiro', QWEN_MODEL, {'catalog': catalog}, budget={'used': 0, 'limit': 1})
+
+    def test_gateway_key_payload_identity_and_call_budget(self):
+        from free_gateway import FreeGatewayClient
+        model = QWEN_MODEL
+        with patch.dict(os.environ, {'XKIRO_API_KEY': 'x-only', 'NVIDIA_API_KEY': 'never-forward'}):
+            client = FreeGatewayClient('xkiro', model, {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+        self.assertEqual(client.api_key, 'x-only')
+        data = {'model': model, 'choices': [{'message': {'content': 'final response'}, 'finish_reason': 'stop'}]}
+        with patch.object(client, 'request', return_value=data) as request:
+            self.assertEqual(client.chat(model, [], max_tokens=64)['served_model'], model)
+            payload = request.call_args.args[1]
+            self.assertEqual(payload['model'], model)
+            self.assertEqual(payload['reasoning_effort'], 'none')
+            self.assertTrue(payload['stream'])
+            with self.assertRaisesRegex(NvidiaAPIError, 'budget'):
+                client.chat(model, [])
+            self.assertEqual(request.call_count, 1)
+            with self.assertRaisesRegex(ValueError, 'substitution'):
+                client.chat('paid-sibling', [])
+
+    def test_gateway_response_mismatch_is_not_scored_as_requested_model(self):
+        from free_gateway import FreeGatewayClient
+        client = FreeGatewayClient('xkiro', QWEN_MODEL, {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+        with patch.object(client, 'request', return_value={'model': 'different'}):
+            with self.assertRaisesRegex(NvidiaAPIError, 'not attributed'):
+                client.chat(QWEN_MODEL, [])
+
+    def test_price_change_stops_later_stage(self):
+        from free_gateway import FreeGatewayClient
+        client = FreeGatewayClient('xkiro', QWEN_MODEL, {'catalog': self.xcatalog()}, budget={'used': 0, 'limit': 1})
+        changed = self.xcatalog()
+        changed['data'][0]['pricing']['output'] = 1
+        with patch('free_gateway.load_pricing', return_value={'catalog': changed}):
+            with self.assertRaisesRegex(ValueError, 'no longer verified free'):
+                client.recheck()
+
+    def test_alternative_answer_models_require_explicit_client_and_allowlist(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = make_config(ANSWER_MODEL=QWEN_MODEL, ANSWER_PROVIDER='xkiro',
+                              ANSWER_CACHE_PATH=Path(temp) / 'answers.json')
+            with self.assertRaises(ValueError):
+                AnswerGenerator(cfg)
+            with self.assertRaises(ValueError):
+                AnswerGenerator(cfg, approved_models=(cfg.ANSWER_MODEL,))
+            client = SimpleNamespace(chat=lambda *a, **kw: self.fail('no context must not call'))
+            gen = AnswerGenerator(cfg, client, approved_models=(cfg.ANSWER_MODEL,))
+            result = gen.answer('Question?', [], 'en')
+            self.assertEqual(result['reason'], 'no_context')
+            self.assertEqual(result['provider'], 'xkiro')
+
+
+class ProviderCatalogs(unittest.TestCase):
+    def test_catalog_matches_literal_ids_not_families_and_scopes_keys(self):
+        from provider_catalog import inspect_catalog
+        requests = []
+        class CatalogResponse(Response):
+            def read(self, limit=None):
+                return super().read()
+        def open_catalog(req, timeout):
+            requests.append(req)
+            return CatalogResponse({'data': [{'id': QWEN_MODEL}, {'id': 'deepseek/deepseek-v4-pro'},
+                                              {'id': 'kimi-k3-alias'}]})
+        with patch.dict(os.environ, {'XKIRO_API_KEY': 'xkiro-test-only', 'NVIDIA_API_KEY': 'never-send-this'}):
+            row = inspect_catalog('xkiro', opener=SimpleNamespace(open=open_catalog))
+        self.assertEqual(row['listed_exact_ids'], [QWEN_MODEL])
+        self.assertEqual(row['absent_exact_ids'], [])
+        self.assertNotIn(DEEPSEEK_MODEL, row['listed_exact_ids'])
+        self.assertEqual(requests[0].full_url, 'https://api.xkiro.com/v1/models')
+        self.assertEqual(requests[0].get_header('Authorization'), 'Bearer xkiro-test-only')
+        self.assertEqual(row['inference_calls'], 0)
+        self.assertNotIn('xkiro-test-only', json.dumps(row))
+
+    def test_missing_key_does_not_make_a_request(self):
+        from provider_catalog import inspect_catalog
+        with patch.dict(os.environ, {}, clear=True):
+            row = inspect_catalog('xkiro', opener=SimpleNamespace(open=lambda *a, **kw: self.fail('API call')))
+        self.assertEqual(row['status'], 'missing_key')
+        self.assertEqual(row['catalog_requests'], 0)
+
+    def test_gateway_error_body_cannot_export_credentials(self):
+        from provider_catalog import inspect_catalog
+        key = 'nonstandard-secret-without-recognizable-prefix'
+        def fail(*args, **kwargs):
+            raise urllib.error.HTTPError('https://api.xkiro.com/v1/models', 401, key,
+                                         {}, io.BytesIO(('echoed key: ' + key).encode()))
+        with patch.dict(os.environ, {'XKIRO_API_KEY': key}):
+            row = inspect_catalog('xkiro', opener=SimpleNamespace(open=fail))
+        self.assertEqual(row['http_status'], 401)
+        self.assertNotIn(key, json.dumps(row))
+
+    def test_credentialed_redirects_are_refused(self):
+        from provider_catalog import NoCredentialRedirects
+        import urllib.request
+        request = urllib.request.Request('https://api.xkiro.com/v1/models', headers={'Authorization': 'Bearer secret'})
+        with self.assertRaises(urllib.error.HTTPError):
+            NoCredentialRedirects().redirect_request(request, None, 302, 'Found', {}, 'https://untrusted.example/models')
+
+
+class MeasurementReports(unittest.TestCase):
+    def test_source_invalid_literal_constraints_are_rejected(self):
+        from nvidia_benchmark import BENCHMARKS, validate_translation_references
+        old = json.loads((BENCHMARKS / 'translations.json').read_text())['cases']
+        new = json.loads((BENCHMARKS / 'translations_v2.json').read_text())['cases']
+        with self.assertRaisesRegex(ValueError, 'absent from source'):
+            validate_translation_references(old)
+        validate_translation_references(new)
+        self.assertEqual([(c['id'], c['text'], c['reference']) for c in old],
+                         [(c['id'], c['text'], c['reference']) for c in new])
+        self.assertEqual([c['id'] for c, before in zip(new, old) if c != before],
+                         ['t1_ar_en', 't1_ar_fr'])
+
+    def test_central_bank_entity_still_required_without_inventing_an_acronym(self):
+        from nvidia_benchmark import BENCHMARKS, translation_quality
+        case = next(c for c in json.loads((BENCHMARKS / 'translations_v2.json').read_text())['cases']
+                    if c['id'] == 't1_ar_en')
+        fake = SimpleNamespace(translate_many=lambda texts, target, source:
+                               ['According to Central Bank circular 2019-08, what are investment deposits?'])
+        self.assertEqual(translation_quality(fake, [case])['constraint_pass_rate'], 1)
+        fake.translate_many = lambda texts, target, source: ['According to circular 2019-08, what are investment deposits?']
+        failed = translation_quality(fake, [case])
+        self.assertIn('missing_entity:central_bank', failed['rows'][0]['issues'])
+
+    def test_serial_resume_settings_and_explicit_profile_scope(self):
+        from nvidia_benchmark import answer_config
+        from main import build_parser
+        cfg = answer_config(KIMI_MODEL, 'grounded-v1')
+        self.assertEqual((cfg.ANSWER_WORKERS, cfg.NVIDIA_API_ATTEMPTS, cfg.ANSWER_NEIGHBOR_RADIUS), (1, 2, 0))
+        self.assertGreaterEqual(cfg.NVIDIA_MIN_INTERVAL, 30)
+        self.assertEqual(AnswerGenerator(cfg).client.max_retry_delay, cfg.NVIDIA_MAX_RETRY_DELAY)
+        self.assertEqual(answer_config(DEEPSEEK_MODEL, 'grounded-v2').ANSWER_NEIGHBOR_RADIUS, 1)
+        args = build_parser().parse_args(['benchmark'])
+        self.assertEqual(args.command, 'benchmark')
+
+    def test_verbose_retrieval_provenance_is_preserved_outside_summary(self):
+        from publish_nvidia_report import report_parts
+        row = {'split': 'dev', 'label': 'riva', 'metrics': {'hit@1': 1},
+               'translations': {'q1': [{'text': 'البنك المركزي', 'route': ['fr', 'en', 'ar']}]},
+               'translation_events': [{'seconds': 1.0}]}
+        report = {'retrieval': [row], 'production_ready': False}
+        parts = dict(report_parts(report))
+        self.assertNotIn('translations', parts['summary']['retrieval'][0])
+        self.assertEqual(parts['summary']['retrieval'][0]['metrics'], row['metrics'])
+        self.assertEqual(parts['retrieval-dev-riva'], row)
+        self.assertIn('translations', report['retrieval'][0])  # input not mutated
+
+    def test_answers_are_split_by_bytes_and_keep_evidence_not_unused_context(self):
+        from publish_nvidia_report import MAX_CHECK_BYTES, check_text, report_parts
+        quote = 'ع' * 12000
+        rows = [{'id': str(i), 'result': {
+            'claims': [{'text': 'Claim', 'evidence': [{'source_id': 'S1', 'quote': quote}]}],
+            'sources': [{'source_id': 'S1', 'chunk_id': 'chunk', 'text': 'UNUSED_BODY' * 20000}]
+        }} for i in range(8)]
+        parts = report_parts({'generation': [{'label': 'dev_model', 'questions': rows}]})
+        answers = [(name, data) for name, data in parts if name.startswith('dev_model-')]
+        self.assertGreater(len(answers), 1)
+        self.assertTrue(all(len(check_text(data).encode('utf-8')) <= MAX_CHECK_BYTES for _, data in answers))
+        collected = [q for _, data in answers for q in data['questions']]
+        self.assertEqual([q['id'] for q in collected], [str(i) for i in range(8)])
+        for q in collected:
+            self.assertEqual(q['result']['claims'][0]['evidence'][0]['quote'], quote)
+            self.assertEqual(q['result']['source_ids'], [{'source_id': 'S1', 'chunk_id': 'chunk'}])
+            self.assertNotIn('UNUSED_BODY', check_text(q))
+
+    def test_oversized_single_answer_is_not_silently_truncated(self):
+        from publish_nvidia_report import answer_parts
+        with self.assertRaisesRegex(ValueError, 'too large'):
+            list(answer_parts({'label': 'dev_model'}, [{'id': 'q1', 'answer': 'ع' * 40000}]))
+
+
+PROJECT = Path(__file__).resolve().parent
+cfg_CHUNK = int(os.environ.get('CHUNK_SIZE_TOKENS', '220'))
+
+
+class ChatEntry(unittest.TestCase):
+    """The conversational path may change the chat model; it may not change what the benchmark
+    believes, may not reach a provider for a question it must refuse locally, and may not print a key.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        import chat
+        self.chat = chat
+
+    def test_the_chat_answers_with_nemotron_and_leaves_the_benchmark_model_alone(self):
+        import config as cfg
+        self.assertEqual(self.chat.CHAT_MODEL, 'nvidia/nemotron-3.5-lightning-30b-a3b')
+        local = self.chat.chat_config()
+        self.assertEqual((local.ANSWER_PROVIDER, local.ANSWER_MODEL), ('nvidia', self.chat.CHAT_MODEL))
+        self.assertEqual(local.ANSWER_CACHE_PATH.name, 'answers_cache_chat.json')
+        # An accidental commit is the failure mode here, so the name must match an ignore pattern.
+        import subprocess
+        self.assertEqual(subprocess.run(['git', '-C', str(Path.cwd().parent), 'check-ignore', '-q',
+                                         str(local.ANSWER_CACHE_PATH)], capture_output=True).returncode, 0)
+        self.assertEqual(cfg.ANSWER_MODEL, QWEN_MODEL)      # the shared config is untouched
+        self.assertEqual(cfg.ANSWER_PROVIDER, 'xkiro')
+
+    def test_reasoning_is_switched_per_nemotron_call_and_nothing_else(self):
+        for thinking in (False, True):
+            payload = chat_payload(self.chat.CHAT_MODEL, [{'role': 'user', 'content': 'hi'}], 4096,
+                                   thinking=thinking)
+            self.assertEqual(payload['chat_template_kwargs'], {'enable_thinking': thinking})
+            self.assertEqual(payload['temperature'], 1.0 if thinking else 0)
+        for model in (KIMI_MODEL, DEEPSEEK_MODEL):          # each keeps its own documented switch
+            self.assertNotIn('enable_thinking', json.dumps(chat_payload(model, [], 4096, thinking=True)))
+
+    def test_the_generator_wrapper_forwards_the_flag_the_shared_signature_cannot_carry(self):
+        seen = []
+
+        class Fake:
+            base_url = 'https://example.invalid/v1'
+            api_key = 'k'
+
+            def chat(self, model, messages, *, max_tokens=2048, thinking=False):
+                seen.append(thinking)
+                return {'text': '{}'}
+
+        self.chat.ReasoningSwitch(Fake(), True).chat('m', [], max_tokens=9)
+        self.chat.ReasoningSwitch(Fake(), False).chat('m', [], max_tokens=9)
+        self.assertEqual(seen, [True, False])
+        self.assertEqual(self.chat.ReasoningSwitch(Fake(), False).base_url, 'https://example.invalid/v1')
+
+    def test_a_private_or_live_question_needs_neither_retrieval_nor_a_provider_call(self):
+        local = self.chat.chat_config()
+        local.CHAT_DATA_DIRS, local.CHAT_ALLOW_INGEST = [], False
+
+        class Generator:
+            def __init__(self):
+                self.asked = []
+
+            def answer(self, question, hits, language=None, use_cache=True,
+                        allowed_documents=None):
+                self.asked.append(question)
+                return {'answer': 'unreachable'}
+
+        generator = Generator()
+        with patch('retrieval.retrieve', side_effect=AssertionError('must not retrieve')):
+            result = self.chat.ask(local, None, None, generator, "what is my balance today?")
+        self.assertEqual(result['status'], 'refused')
+        self.assertEqual(result['reason'], 'private_or_live_request')
+        self.assertEqual(generator.asked, [])
+        self.assertEqual(result['model'], self.chat.CHAT_MODEL)
+
+    def test_chat_commands_are_commands_and_only_questions_are_questions(self):
+        import contextlib
+        settings = {'top_k': 5, 'show_context': False, 'log': None, 'model': 'm', 'thinking': False,
+                    'chunking': 220, 'overlap': 40}
+        buffer = io.StringIO()
+        lines = [':k 7', '  ', 'quel est le délai', ':show', ':nope', ':quit', 'never asked']
+        with contextlib.redirect_stdout(buffer):
+            asked = list(self.chat.read_questions(lines, settings))
+        self.assertEqual(asked, ['quel est le délai'])
+        self.assertEqual(settings['top_k'], 7)
+        self.assertTrue(settings['show_context'])
+        self.assertIn('unknown command', buffer.getvalue())
+
+    def test_the_default_corpus_covers_the_shipped_documents_not_only_the_samples(self):
+        import chat
+        dirs = [path.name for path in chat.data_dirs()]
+        self.assertIn('docs', dirs)                 # the four real documents
+        files = sum(len(list(path.glob('*'))) for path in chat.data_dirs())
+        self.assertGreaterEqual(files, 4)
+        self.assertEqual([path.name for path in chat.data_dirs([str(Path(chat.__file__).parent)])],
+                         ['raglab'])                # --data-dir replaces the list outright
+
+    def test_readiness_report_masks_the_key_and_names_the_fix_for_an_empty_index(self):
+        import contextlib
+        class Collection:
+            def __init__(self, count):
+                self._count = count
+
+            def count(self):
+                return self._count
+
+            def get(self, include=None, limit=None):
+                return {'metadatas': [{'chunk_fp': 'fp-current'}] if self._count else []}
+
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi_SECRETVALUE99'}), \
+             patch('store.chunk_fp', return_value='fp-current'), \
+             patch('store.collection_languages', return_value=['ar', 'fr']):
+            with patch('store.get_collection', return_value=Collection(256)):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    ready = self.chat.check()
+            with patch('store.get_collection', return_value=Collection(0)):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    empty = self.chat.check()
+            with patch('store.get_collection', side_effect=ValueError('sqlite file is locked')):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    broken = self.chat.check()
+        text = buffer.getvalue()
+        self.assertEqual((ready, empty, broken), (0, 1, 1))   # a chat with no index is not 'ready'
+        self.assertIn('nvapi_SE', text)
+        self.assertNotIn('SECRETVALUE', text)                  # reported presence never echoes the key
+        self.assertIn('nemotron-3.5-lightning', buffer.getvalue())
+        self.assertIn('sqlite file is locked', text)           # reported, not raised out of --check
+
+    def test_the_empty_index_line_points_at_the_ingest_command(self):
+        import contextlib
+        class Collection:
+            def count(self):
+                return 0
+        buffer = io.StringIO()
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi-x'}), \
+             patch('store.get_collection', return_value=Collection()), \
+             contextlib.redirect_stdout(buffer):
+            self.chat.check()
+        self.assertIn('--ingest', buffer.getvalue())
+
+    def test_the_chat_indexes_at_the_pinned_chunking_not_the_app_default(self):
+        import chat
+        size, overlap, source = chat.plan_chunking(PROJECT / 'benchmarks' / 'hard_harness_plan.json')
+        self.assertEqual((size, overlap), (640, 40))          # the measured pin, not 220
+        self.assertIn('hard_harness_plan.json', source)
+        missing = chat.plan_chunking(PROJECT / 'benchmarks' / 'nope.json')
+        self.assertEqual(missing[0], cfg_CHUNK)               # documented fallback
+        self.assertIn('default', missing[2])
+        local = chat.chat_config()
+        self.assertEqual((local.CHUNK_SIZE_TOKENS, local.CHUNK_OVERLAP_TOKENS), (640, 40))
+        # A separate collection, so the app's index and the chat's index cannot argue over one store.
+        self.assertEqual(local.CHROMA_COLLECTION_NAME, 'raglab_chat')
+
+    def test_the_context_ceiling_sizes_from_k_so_a_hit_is_not_quietly_dropped(self):
+        import chat
+        self.assertEqual(chat.context_budget(5, 640, 40), 5 * 680)
+        self.assertEqual(chat.context_budget(1, 220, 40), 3000)   # never below the app floor
+        local = chat.chat_config(top_k=5)
+        self.assertGreaterEqual(local.ANSWER_CONTEXT_TOKENS, 5 * (640 + 40))
+
+    def test_the_chats_config_object_is_a_config_object_not_just_its_constants(self):
+        """The crash that made this test: the chat's settings are a copy of config, and a copy of only
+        the UPPERCASE names satisfies every read except the ones that *call* something on cfg — so
+        store.py's chunk tagging raised AttributeError mid-ingest, while its embedding-space guard
+        (gated on hasattr) had already been skipped silently. Anything passed as `cfg` must carry the
+        module's callables too, for every module the chat hands it to.
+        """
+        import chat
+        local = chat.chat_config()
+        self.assertEqual(local.active_embedding_model(), EMBED_MODEL)
+        for module_name in ('store', 'retrieval', 'chunker', 'answer'):
+            module = __import__(module_name)
+            source = inspect.getsource(module)
+            for attr in sorted(set(re.findall(r'\bcfg\.([A-Za-z_][A-Za-z0-9_]*)', source))):
+                self.assertTrue(hasattr(local, attr),
+                                f'{module_name}.py reads cfg.{attr}, which the chat config lacks')
+
+    def test_a_missing_callable_is_refused_instead_of_skipping_the_space_check(self):
+        import chat
+        from types import SimpleNamespace as NS
+        broken = NS(**{key: value for key, value in vars(chat.cfg).items()
+                       if key.isupper() and not callable(value)})
+        self.assertFalse(hasattr(broken, 'active_embedding_model'))
+        # store.ensure_fresh_chunks gates its embedding-space check on exactly that hasattr, so a
+        # bare-constants namespace must never reach it.
+        with self.assertRaises(ValueError) as raised:
+            chat.checked_config(broken)
+        self.assertIn('active_embedding_model', str(raised.exception))
+
+    def test_a_stale_index_stops_the_chat_with_the_rebuild_command(self):
+        class Collection:
+            def count(self):
+                return 127
+
+            def get(self, include=None, limit=None):
+                return {'metadatas': [{'chunk_fp': 'built-with-220'}]}
+
+        local = self.chat.chat_config(top_k=5)
+        local.CHAT_DATA_DIRS, local.CHAT_ALLOW_INGEST = [], True
+        with patch('store.get_collection', return_value=Collection()), \
+             patch('store.ensure_fresh_chunks',
+                   side_effect=RuntimeError('[store] collection is STALE')):
+            with self.assertRaises(ValueError) as raised:
+                self.chat.open_collection(local, SimpleNamespace(batch_size=16))
+        self.assertIn('--reset --ingest', str(raised.exception))
+
+    def test_retrieval_is_checked_against_the_chats_settings_not_the_modules(self):
+        # retrieve() enforces the chunking fingerprint from the cfg it is handed: passing the module
+        # config here let a 220-token index pass a 640-token chat's own settings silently.
+        seen = {}
+
+        def fake_retrieve(cfg_arg, embedder, collection, text, **kwargs):
+            seen['cfg'] = cfg_arg
+            seen.update(kwargs)
+            return [], [{'label': 'en(original)', 'lang': 'en', 'text': text}]
+
+        class Generator:
+            def answer(self, question, hits, language=None, use_cache=True,
+                        allowed_documents=None):
+                return {'status': 'refused', 'reason': 'no_context', 'answer': 'no', 'sources': [],
+                        'model': language and 'm'}
+
+        local = self.chat.chat_config(top_k=9)
+        with patch('retrieval.retrieve', side_effect=fake_retrieve), \
+             patch('retrieval.expand_neighbors', side_effect=lambda c, h, radius=0: h):
+            self.chat.ask(local, None, None, Generator(), 'what is the minimum capital?',
+                          mode='rrf', language='fr', lang_filter='ar')
+        self.assertIs(seen['cfg'], local)
+        self.assertEqual(seen['top_k'], 9)
+        self.assertEqual((seen['mode'], seen['lang_filter'], seen['language']), ('rrf', 'ar', 'fr'))
+
+    def test_a_refusal_shows_what_was_read_and_which_failure_it_was(self):
+        result = {'status': 'refused', 'reason': 'insufficient_evidence', 'answer': 'cannot answer',
+                  'question': 'can i buy a pc', 'retrieved': 5, 'context_tokens': 3400,
+                  'question_language_mismatch': True,
+                  'sources': [{'source_id': 'S1', 'document': 'Guide.docx', 'chunk_id': 'a',
+                               'heading': 'المرابحة', 'text': 'تمويل شراء سيارة جديدة ' + 'x' * 400}]}
+        text = self.chat.format_turn(result)
+        self.assertIn('abstained, which is the contract', text)
+        self.assertIn('Guide.docx', text)                        # the excerpt the model was handed
+        self.assertIn('cross-lingual', text)                      # the language mismatch, named
+        self.assertIn('-k 12', text)
+        self.assertNotIn('x' * 250, text)                          # previewed, not dumped
+        other = self.chat.format_turn({**result, 'reason': 'no_context', 'retrieved': 0, 'sources': []})
+        self.assertIn('index is empty', other)
+        guard = self.chat.format_turn({**result, 'reason': 'private_or_live_request', 'sources': []})
+        self.assertIn('before any model call', guard)
+
+    def test_an_arrow_key_cannot_become_part_of_a_question(self):
+        """Without readline, input() hands over the raw CSI bytes of a cursor key and they end up
+        embedded, matched against Arabic legal prose and quoted back. So the question that gets answered
+        is not the question that was typed - unless control bytes are stripped at the edge."""
+        self.assertEqual(self.chat.sanitize('\x1b[C what is murabaha\x1b[?2004h'), 'what is murabaha')
+        self.assertEqual(self.chat.sanitize('\x1b]0;window title\x07next'), 'next')
+        self.assertEqual(self.chat.sanitize('\x1b[C\x1b[D'), '')
+        # Stripping control bytes must not touch the text a user actually means:
+        self.assertEqual(self.chat.sanitize('  ما هي المرابحة؟  '), 'ما هي المرابحة؟')
+        self.assertEqual(self.chat.sanitize('keep (parens), commas? and 12.5%'),
+                         'keep (parens), commas? and 12.5%')
+
+    def test_a_pasted_prompt_is_a_question_and_an_escaped_command_is_a_command(self):
+        import contextlib
+        settings = {'top_k': 5, 'show_context': False, 'log': None, 'model': 'm', 'thinking': False,
+                    'chunking': 640, 'overlap': 40, 'mode': 'vector', 'language': None}
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            asked = list(self.chat.read_questions(['> how do I finance a PC?', '\x1b[C:k 9', ':k'],
+                                                 settings))
+        self.assertEqual(asked, ['how do I finance a PC?'])
+        self.assertEqual(settings['top_k'], 9)          # the escape-prefixed command still ran
+        self.assertIn('usage: :k 5', buffer.getvalue())
+
+    def test_an_excerpt_without_a_heading_can_still_be_found_in_the_document(self):
+        result = {'status': 'refused', 'reason': 'insufficient_evidence', 'answer': 'cannot answer',
+                  'question': 'q', 'retrieved': 1, 'context_tokens': 3400,
+                  'sources': [{'source_id': 'S1', 'document': 'Loi_2016-48.pdf', 'heading': '',
+                               'chunk_id': 'Loi_2016-48.pdf::chunk_067', 'text': 'نص القانون' * 20}]}
+        text = self.chat.format_turn(result)
+        self.assertIn('Loi_2016-48.pdf::chunk_067', text)   # an empty heading is not an anonymous chunk
+
+    def test_the_repl_understands_language_and_mode_commands(self):
+        import contextlib
+        settings = {'top_k': 5, 'show_context': False, 'log': None, 'model': 'm', 'thinking': False,
+                    'chunking': 640, 'overlap': 40, 'mode': 'vector', 'language': None}
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            asked = list(self.chat.read_questions([':lang ar', ':mode', ':mode hybrid', ':mode rrf',
+                                                   ':lang xx', 'ما هو'], settings))
+        self.assertEqual(asked, ['ما هو'])
+        self.assertEqual((settings['language'], settings['mode']), ('ar', 'rrf'))
+        printed = buffer.getvalue()
+        self.assertIn('unmeasured', printed)          # an unmeasured arm is allowed but labelled
+        self.assertIn('usage: :mode', printed)
+        self.assertIn(':mode takes vector, rrf or blend', printed)
+        self.assertIn(':lang takes ar, fr, en or auto', printed)
+        self.assertNotIn('xx\n> ', printed)           # a bad value is never asked as a question
+
+    def test_check_reports_and_ingest_builds_and_together_do_both(self):
+        # The reported loop: --check printed "run ./raglab/chat.sh --ingest --check", and that command
+        # reported and exited before building anything. Check-with-ingest now builds, then reports.
+        calls = []
+
+        class FakeCollection:
+            def __init__(self, count):
+                self._count = count
+
+            def count(self):
+                return self._count
+
+        class Embedder:
+            provider_name, model, batch_size, api_calls, cache_hits = 'nvidia', 'emb', 16, 3, 0
+
+            def embed_texts(self, texts):
+                return [[0.0] * 4 for _ in texts]
+
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi-x'}), \
+             patch('embedder.build_embedder', return_value=Embedder()), \
+             patch('chat.open_collection', side_effect=lambda *a, **k: calls.append(k) or FakeCollection(127)), \
+             patch('chat.build_generator', side_effect=AssertionError('must not build a client')), \
+             patch('chat.check', return_value=0) as reported, \
+             patch('store.collection_languages', return_value=['ar', 'fr', 'en']):
+            self.assertEqual(self.chat.main(['--check', '--ingest']), 0)
+        self.assertEqual(len(calls), 1)                    # it built
+        # The report is printed once, after the build: the state a user acts on has to be the state the
+        # index is actually in, and open_collection already printed the cost before embedding.
+        self.assertEqual(reported.call_count, 1)
+
+        calls.clear()
+        with patch('chat.check', return_value=1) as reported:
+            self.assertEqual(self.chat.main(['--check']), 1)
+        self.assertEqual(calls, [])
+        self.assertEqual(reported.call_count, 1)           # report only: no index, no embedding
+
+    def test_the_not_ready_line_offers_a_command_that_really_builds(self):
+        import contextlib
+
+        class Collection:
+            def count(self):
+                return 0
+
+            def get(self, include=None, limit=None):
+                return {'metadatas': []}
+
+        buffer = io.StringIO()
+        with patch.dict(os.environ, {'NVIDIA_API_KEY': 'nvapi-x'}), \
+             patch('store.get_collection', return_value=Collection()), \
+             contextlib.redirect_stdout(buffer):
+            self.chat.check()
+        text = buffer.getvalue()
+        self.assertIn('./raglab/chat.sh --ingest', text)
+        self.assertNotIn('--ingest --check\n', text)        # the command that only re-reported itself
+
+    def test_one_offline_turn_satisfies_the_citation_contract_on_this_model(self):
+        from answer import AnswerGenerator
+        local = self.chat.chat_config(cache_path=self.path / 'answers.json')
+        quote = 'Le capital minimal est fixé à vingt millions de dinars.'
+        reply = json.dumps({'answerable': True, 'claims': [
+            {'text': 'Le minimum est de vingt millions de dinars.',
+             'evidence': [{'source_id': 'S1', 'quote': quote}]}]})
+        body = {'model': local.ANSWER_MODEL, 'usage': {},
+                'choices': [{'message': {'content': reply}, 'finish_reason': 'stop'}]}
+        sent = []
+
+        class Opener:
+            def open(self, request, timeout=None):
+                sent.append(json.loads(request.data.decode()))
+                return Response(body)
+
+        client = self.chat.ReasoningSwitch(
+            NvidiaClient(api_key='nvapi-x', min_interval=0, opener=Opener()), False)
+        generator = AnswerGenerator(local, client=client, approved_models=(local.ANSWER_MODEL,))
+        hits = [{'id': 'c1', 'text': quote, 'metadata': {'document': 'loi-2016-48.pdf'}}]
+        result = generator.answer('Quel est le capital minimal ?', hits, 'fr')
+        self.assertEqual(result['status'], 'answered', result.get('raw_preview') or result.get('error'))
+        self.assertEqual(sent[0]['model'], self.chat.CHAT_MODEL)
+        self.assertEqual(sent[0]['chat_template_kwargs'], {'enable_thinking': False})
+        self.assertIn('[S1]', result['answer'])
+        printed = self.chat.format_turn({**result, 'sources': [{'source_id': 'S1', 'document':
+                                                                'loi-2016-48.pdf', 'chunk_id': 'c1',
+                                                                'text': quote}]})
+        self.assertIn(quote, printed)                # the verbatim quote is shown under the claim
+        self.assertEqual(json.loads((self.path / 'answers.json').read_text()) and 1, 1)  # cached for re-reads
+
+
+class ManualChunkMaps(unittest.TestCase):
+    """Chunk boundaries as a reviewed artifact, and the guards that make that safe to run on.
+
+    These are the argument that the feature is more than a formatter: a map has to reproduce the document
+    exactly (no gap, no silent rewording), stay tied to the text it was written against, and change the
+    corpus identity - because retrieval, the citation contract and any published score all depend on
+    which segmentation produced them.
+    """
+
+    TEXT = ('# نظام التمويل\n\nالفصل 1 : تعريف المرابحة وهي بيع السلعة بثمن الشراء زائدا الربح.\n\n'
+            'الفصل 2 : يحدد البنك نسبة الربح according to the tenor chosen by the client.\n\n'
+            '## الإجراءات\n\nالفصل 3 : يستوجب الملف جواز سفر وأذن بالأجرة.\n\n'
+            'الفصل 4 : يسلم العقد بعد أخذ موافقة اللجنة.\n')
+    DOC = {'text': TEXT, 'source': 'docs/manual_test.md', 'language': 'ar'}
+
+    @staticmethod
+    def _map(*pairs):
+        """A map from (start, end) pairs. No 'tokens' key on purpose: that field is drafted metadata, and
+        claiming a count the text does not hold is exactly what the drift check exists to catch."""
+        return [{'start': a, 'end': b} for a, b in pairs]
+
+    def cfg(self, directory, **extra):
+        values = {'CHUNKING_MODE': 'manual', 'CHUNK_MAP_DIR': Path(directory),
+                  'CHUNK_MAX_TOKENS': 900, 'CHUNK_SIZE_TOKENS': 640, 'CHUNK_OVERLAP_TOKENS': 40,
+                  'SPLIT_ON_HEADINGS_FIRST': True, 'CHUNK_OVERLAP_SENTENCE_AWARE': True}
+        values.update(extra)
+        return SimpleNamespace(**values)
+
+    def test_map_round_trip_reproduces_the_document(self):
+        entries = sc.propose(dict(self.DOC), target_tokens=80, max_tokens=200, min_tokens=20)
+        self.assertGreaterEqual(len(entries), 2)
+        # Structure only, on purpose: which token counter is configured decides sizes, not whether the
+        # map is a partition of the document, and a test must not fail for the second reason because of
+        # the first (that is exactly the trap these maps would fall into between a laptop and CI).
+        # The message carries the boundaries and per-block counts so a machine whose counter differs
+        # (estimator vs cl100k_base) reports the shape it built, not just the rule name.
+        diag = [(e['start'], e['end'], sc.count_tokens(self.TEXT[e['start']:e['end']]))
+                for e in entries]
+        self.assertEqual([], sc.validate(self.TEXT, entries, max_tokens=10 ** 6, min_tokens=1),
+                         f'entries={diag} tokenizer={sc.tokenizer_identity()}')
+        joined = ''.join(self.TEXT[e['start']:e['end']] for e in entries)
+        self.assertEqual(' '.join(self.TEXT.split()), ' '.join(joined.split()),
+                         'the chunks must be the document, not a summary of it')
+        chunks = sc.chunks_from_map(dict(self.DOC), entries, self.cfg('.'))
+        for chunk in chunks:
+            self.assertIn(' '.join(chunk.text.split()), ' '.join(self.TEXT.split()))
+
+    def test_validate_finds_a_gap_and_a_reworded_chunk(self):
+        """Boundaries written by hand, so the assertion is about the rule and not about the proposer's
+        arithmetic: which pieces a token counter would cut is a different question from whether a map may
+        leave a hole."""
+        a = self.TEXT.index('الفصل 2')
+        b = self.TEXT.index('## الإجراءات')
+        whole = len(self.TEXT)
+        pieces = self._map((0, a), (a, b), (b, whole))
+        # hard=False: this fixture's last piece holds a section heading and both of its articles, which
+        # is the other rule's business. Coverage is what is under test here.
+        self.assertEqual([], sc.validate(self.TEXT, pieces, max_tokens=10 ** 6, min_tokens=1, hard=False))
+        holed = [dict(e) for e in pieces]
+        holed[0]['end'] = holed[0]['end'] - 20                  # characters in no chunk at all
+        self.assertTrue(any('gap' in problem or 'no chunk' in problem
+                            for problem in sc.validate(self.TEXT, holed, max_tokens=10 ** 6,
+                                                        min_tokens=1, hard=False)),
+                        sc.validate(self.TEXT, holed, max_tokens=10 ** 6, min_tokens=1))
+        clipped = [dict(e) for e in pieces]
+        clipped[0]['start'] = 20                                # the document's opening line dropped
+        self.assertTrue(any('belong to no chunk' in problem
+                            for problem in sc.validate(self.TEXT, clipped, max_tokens=10 ** 6,
+                                                       min_tokens=1, hard=False)))
+        truncated = [dict(e) for e in pieces]
+        truncated[-1]['end'] = whole - 20                        # and its closing one
+        self.assertTrue(any('after it' in problem
+                           for problem in sc.validate(self.TEXT, truncated, max_tokens=10 ** 6,
+                                                      min_tokens=1, hard=False)))
+        invented = [dict(e) for e in pieces]
+        invented[1]['end'] = invented[1]['end'] + 5              # overlapping, i.e. not a partition
+        self.assertTrue(sc.validate(self.TEXT, invented, max_tokens=10 ** 6, min_tokens=1,
+                                            hard=False))
+
+    def test_a_map_refuses_a_changed_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            entries = sc.propose(dict(self.DOC), target_tokens=80, max_tokens=200, min_tokens=20)
+            path = sc.map_path(self.DOC['source'], tmp)
+            sc.write_map(path, dict(self.DOC), entries)
+            edited = dict(self.DOC, text=self.TEXT.replace('جواز سفر', 'بطاقة تعريف'))
+            with self.assertRaises(ValueError) as caught:
+                sc.load_map(path, edited)
+            self.assertIn('offsets', str(caught.exception))   # says why, not just 'mismatch'
+
+    def test_maps_are_part_of_the_corpus_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plain = chunker.chunk_fingerprint(640, 40, True, True)
+            with_maps = chunker.chunk_fingerprint(640, 40, True, True, maps='abc')
+            self.assertNotEqual(plain, with_maps)
+            entries = sc.propose(dict(self.DOC), target_tokens=80, max_tokens=200, min_tokens=20)
+            sc.write_map(sc.map_path(self.DOC['source'], tmp), dict(self.DOC), entries)
+            cfg = self.cfg(tmp)
+            first = chunk_fp(cfg)
+            (Path(tmp) / sc.map_path(self.DOC['source'], tmp).name).write_text(
+                json.loads(sc.map_path(self.DOC['source'], tmp).read_text()).__class__ and
+                json.dumps({**json.loads(sc.map_path(self.DOC['source'], tmp).read_text()),
+                            'chunks': [{**json.loads(sc.map_path(self.DOC['source'], tmp).read_text())
+                                       ['chunks'][0], 'end': 10}]}), encoding='utf-8')
+            self.assertNotEqual(first, chunk_fp(cfg),
+                                'moving one boundary must look like the new corpus version it is')
+
+    def test_manual_mode_needs_a_map_for_every_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError) as caught:
+                sc.chunk_documents([dict(self.DOC)], self.cfg(tmp))
+            self.assertIn('manual_test.md', str(caught.exception))
+            loose, _problems = sc.chunk_documents([dict(self.DOC)], self.cfg(tmp), strict=False)
+            self.assertEqual([], loose)             # non-strict reports the gap instead of inventing one
+
+    def test_soft_mode_packs_short_articles_and_hard_mode_does_not(self):
+        """One map, two verdicts. Boundaries are given rather than proposed, so no token counter decides
+        whether the test runs, and every piece but the deliberate merge is already article-aligned, so
+        nothing except the mode is at stake."""
+        tail = len(self.TEXT)
+        marks = [m.start() for m in sc.ARTICLE.finditer(self.TEXT)]
+        split = self._map((0, marks[0]), *[(x, y) for x, y in zip(marks, marks[1:])],
+                          (marks[-1], tail))
+        both = self._map((0, marks[2]), *[(x, y) for x, y in zip(marks[2:], marks[3:])],
+                         (marks[-1], tail))          # the first chunk holds الفصل 1 and الفصل 2 together
+        self.assertEqual([], sc.validate(self.TEXT, split, max_tokens=10 ** 6, min_tokens=1, hard=True))
+        hard = sc.validate(self.TEXT, both, max_tokens=10 ** 6, min_tokens=1, hard=True)
+        self.assertTrue(any('numbered articles' in problem for problem in hard), hard)
+        self.assertEqual([], sc.validate(self.TEXT, both, max_tokens=10 ** 6, min_tokens=1, hard=False))
+        entries = sc.propose(dict(self.DOC), target_tokens=200, max_tokens=10 ** 6, min_tokens=1)
+        soft_entries = sc.propose(dict(self.DOC), target_tokens=200, max_tokens=10 ** 6, min_tokens=1,
+                                  hard_subjects=False)
+        self.assertLessEqual(len(soft_entries), len(entries),
+                             'soft mode may only ever pack further, never cut deeper')
+
+    def test_chat_runs_on_maps_in_its_own_collection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local = chat.chat_config(chat.CHAT_MODEL, chunking='manual', map_dir=tmp,
+                                     cache_path=str(Path(tmp) / 'answers.json'))
+            self.assertEqual('manual', local.CHUNKING_MODE)
+            self.assertEqual('raglab_chat_manual', local.CHROMA_COLLECTION_NAME)
+            self.assertIn('manual maps', local.CHUNK_SOURCE)
+            size = chat.chat_config(chat.CHAT_MODEL, cache_path=str(Path(tmp) / 'a2.json'))
+            self.assertEqual('raglab_chat', size.CHROMA_COLLECTION_NAME,
+                             'the two segmentations must not share an index')
+
+
+
+class GazetteAndDominanceRepair(unittest.TestCase):
+    """The 2026-09-28 corpus-defect treatments (owner decision, diff-reviewed).
+
+    Stage-1 fixes grounded in the Loi audit findings and in the owner's
+    review of the first repair diff (whole-line flipping was rejected as
+    insufficient — the extraction scrambles each PHYSICAL rendered line as
+    zones: pure-Arabic runs reversed, digit runs kept in logical order):
+    (1) gazette running headers are stripped as a whole line-initial SPAN;
+    (2) visual-order documents (document-dominance gate) get each rendered
+        line zone-reconstructed: Arabic runs un-reversed, digit islands kept,
+        letters fused to numbers split BEFORE zoning, marker prefixes and
+        sentence-terminal punctuation preserved, the law-49 tail excluded.
+    The full before/after diff for (2) is owner-reviewed in
+    raglab/audits/Loi_2016-48_repair_diff.md before adoption.
+    """
+
+    def test_gazette_span_stripped_whole_from_fused_line(self):
+        import restructure as rst
+        for fused, remainder in (
+            ("صفحة2518 للجم الرسمي الرائد التونسية هورية–– 15 جويلية 2016 عدد58 "
+             "الفصل14 كل القانون هذا", "الفصل14"),
+            ("عدد58 التونسية للجمهورية الرسمي الرائد–– 15 جويلية 2016 صفحة2519 "
+             "لفائدة بالعمليات", "لفائدة"),
+        ):
+            report = rst.RestructureReport(name="t")
+            out = rst._strip_gazette_header(fused, report)
+            self.assertEqual(1, report.gazette_headers_removed)
+            self.assertTrue(out.startswith(remainder), out[:60])
+            self.assertNotIn("الرائد", out)
+            self.assertNotIn("هورية", out)
+        report = rst.RestructureReport(name="t")
+        out = rst._strip_gazette_header(
+            "صفحة2516 للجم الرسمي الرائد التونسية هورية–– 15 جويلية 2016 عدد58",
+            report)
+        self.assertEqual("", out)
+        self.assertEqual(1, report.gazette_headers_removed)
+
+    def test_gazette_citations_in_body_text_are_kept(self):
+        import restructure as rst
+        body = ("الرائد الرسمي للجمهورية التونسية وينفذ كقانون من قوانين الدولة "
+                "ويقرأ في الجلسة العامة")
+        report = rst.RestructureReport(name="t")
+        self.assertEqual(body, rst._strip_gazette_header(body, report))
+        citation = ("عدد 48 لسنة 2016 المتعلق بالبنوك والمؤسسات المالية ينشر "
+                    "بالعديد الرسمي")
+        self.assertEqual(citation, rst._strip_gazette_header(citation, report))
+        self.assertEqual(0, report.gazette_headers_removed)
+
+    def test_zone_reconstruction_unreverses_arabic_keeps_digits(self):
+        import restructure as rst
+        # art. 194 of Loi 2016-48, verbatim stored form (zones model):
+        line = ("الفصول46و 47و 51و 52و 57 و58 اجل في القانون هذا من")
+        out = rst._reconstruct_line_visual_order(line)
+        self.assertEqual(
+            "الفصول 46 و 47 و 51 و 52 و 57 و 58 من هذا القانون في اجل", out)
+        # a word fused with its number splits BEFORE zoning so each part
+        # lands in its own zone (art. 2 area):
+        out = rst._reconstruct_line_visual_order(
+            "عدد بالقانون الصادرة64 لسنة 2009 في المؤرخ 12 أوت")
+        self.assertEqual(
+            "الصادرة بالقانون عدد 64 لسنة 2009 المؤرخ في 12 أوت", out)
+
+    def test_zone_reconstruction_preserves_marker_and_period(self):
+        import restructure as rst
+        out = rst._reconstruct_line_visual_order(
+            "الفصل194 ـ تمارس التي المالية والمؤسسات البنوك على")
+        self.assertTrue(out.startswith("الفصل194"), out)
+        self.assertIn("على البنوك والمؤسسات المالية التي تمارس", out)
+        # sentence-terminal punctuation is re-emitted at the raw line's end
+        # and therefore lands at the TRUE end of the reconstructed line
+        out = rst._reconstruct_line_visual_order("حكومي بأمر.")
+        self.assertEqual("بأمر حكومي .", out)
+
+    def test_dominance_gate_reconstructs_visual_order_document(self):
+        import restructure as rst
+        tails = ["سنويا", "شهريا", "دوريا", "فصليا", "دائما", "كليا", "جزئيا",
+                 "تدريجيا", "نهائيا", "مؤقتا", "فوريا", "لاحقا", "حاليا",
+                 "مستقبلا", "مباشرة", "استثنائيا", "طوارئ", "انتقاليا",
+                 "تجريبيا", "استراتيجيا", "موسميا", "متكررا", "فرديا", "جماعيا"]
+        # 24 reversed rendered lines + digit enumeration lines: a document the
+        # pre-scan must classify as visual-order
+        lines = [" ".join(reversed(
+            f"يتم التمويل على اساس المرابحة بصفة متجددة في الغرض {tail}".split()))
+            for tail in tails]
+        lines.append("الفصول46و 47و 51و 52و 57 و58 اجل في القانون هذا من")
+        text = "\n".join(lines)
+        markdown, report = rst.normalize_structure(
+            {"text": text, "name": "visual"}, repair_rtl=True)
+        self.assertTrue(report.rtl_doc_dominant)
+        self.assertGreaterEqual(report.rtl_lines_reconstructed, 20)
+        self.assertIn("الفصول 46 و 47 و 51 و 52 و 57 و 58 من هذا القانون في اجل",
+                      markdown)
+        self.assertIn("يتم التمويل على اساس المرابحة", markdown)
+
+    def test_logical_document_left_untouched(self):
+        import restructure as rst
+        tails = ["سنويا", "شهريا", "دوريا", "فصليا", "دائما", "كليا", "جزئيا",
+                 "تدريجيا", "نهائيا", "مؤقتا", "فوريا", "لاحقا", "حاليا",
+                 "مستقبلا", "مباشرة", "استثنائيا", "طوارئ", "انتقاليا",
+                 "تجريبيا", "استراتيجيا", "موسميا", "متكررا", "فرديا", "جماعيا"]
+        lines = [f"يتم التمويل على اساس المرابحة بصفة متجددة في الغرض {tail}"
+                 for tail in tails]
+        text = "\n".join(lines)
+        markdown, report = rst.normalize_structure(
+            {"text": text, "name": "logical"}, repair_rtl=True)
+        self.assertFalse(report.rtl_doc_dominant)
+        self.assertEqual(0, report.rtl_lines_reconstructed)
+        self.assertIn("يتم التمويل على اساس المرابحة بصفة متجددة", markdown)
+
+    def test_reconstruct_stops_at_signature_tail(self):
+        import restructure as rst
+        # everything after law 48's signature line stays in stored form
+        text = ("شأنها من بأعمال القيام يمكنه لا الحالات كل وفي\n"
+                "السبسي قايد الباجي محمد\n"
+                "ايتعلق اتفاق على بالموافقة لقرض بتاريخ المبرم30 مارس")
+        report = rst.RestructureReport(name="t")
+        lines, _ = rst._prepare_lines(text, report, reconstruct=True)
+        joined = "\n".join(lines)
+        self.assertIn("وفي كل الحالات لا يمكنه القيام بأعمال من شأنها", joined)
+        self.assertIn("محمد الباجي قايد السبسي", joined)
+        self.assertIn("ايتعلق اتفاق على بالموافقة لقرض بتاريخ المبرم30 مارس", joined)
+
+
+class AdoptedCodexRepair(unittest.TestCase):
+    """The 2026-09-30 owner adoption of the corrected codices (all four docs).
+
+    With RTL repair enabled, `restructure.py` replaces a document's stored
+    text with its language-model-repaired codex in `audits/*_corrected.md`
+    (Loi: 215 entries / 29 batches; Circulaire: 35; Guide: 23; Madkhal: 21 —
+    each machine-checked by `audits/llm_repair_check.py`). This class pins
+    the adoption contract: header stripped, loader-canonical form (PDFs keep
+    rendered lines, DOCX reflow), block boundaries restored around
+    marker-initial lines, each real document adopting its codex with the
+    documented fixes visible in the markdown, and RESTRUCTURE_RTL_REPAIR=0
+    still giving the raw stored arm.
+    """
+
+    def test_unknown_document_has_no_codex(self):
+        import restructure as rst
+        self.assertIsNone(rst._adopted_codex_text("Atlas_fiche.pdf"))
+        self.assertIsNone(rst._adopted_codex_text(""))
+
+    def test_codex_text_is_header_stripped_and_boundary_restored(self):
+        import restructure as rst
+        text = rst._adopted_codex_text("Loi_2016-48.pdf")
+        self.assertIsNotNone(text)
+        lines = text.split("\n")
+        # header gone: the law text starts at the law's own title line
+        self.assertTrue(lines[0].startswith("قانون عدد 48 لسنة 2016"),
+                        lines[0][:60])
+        self.assertNotIn("---", lines)
+        # first line is its own block (title pick needs it as a line)
+        self.assertEqual(lines[1], "")
+        # every marker-initial line starts a block; 231 true structural
+        # headings live in this codex (198 فصل + 33 عنوان/باب/قسم)
+        marker_lines = 0
+        for i, l in enumerate(lines):
+            s = l.strip()
+            if not s:
+                continue
+            if rst._MARKER_RE.match(s):
+                marker_lines += 1
+                self.assertTrue(
+                    i == 0 or not lines[i - 1].strip(),
+                    f"marker line not block-initial at {i}: {s[:40]}")
+        self.assertEqual(marker_lines, 231)
+
+    def test_real_documents_adopt_their_codices(self):
+        import restructure as rst
+        from loader import load_document
+        docs_dir = Path(__file__).resolve().parent.parent / "docs"
+        # (name, canaries that prove the documented fixes landed, n_h2, n_h3)
+        expected = {
+            "Loi_2016-48.pdf": (
+                ["يتم الطعن بالاستئناف في الحكم الصادر"], 33, 198),
+            "Circulaire_BCT_2019-08.pdf": (
+                ["عشرة ايام عمل", "عدد 89 لسنة 1994",
+                 "تعتزم تسويقها"], 4, 20),
+            "Guide_Interne_Operations_Bancaires_Islamiques.docx": (
+                ["4.2- توظيف الودائع على اساس الوكالة بالاستثمار",
+                 "2.1- عملية التمويل بصيغة المرابحة"], 9, 15),
+            "Madkhal_Sayrafa_Islamiya.docx": (
+                ["(59 000)", "5- اهم منتجات الصيرفة الاسلامية"], 5, 12),
+        }
+        for name, (canaries, n_h2, n_h3) in expected.items():
+            pdf = docs_dir / name
+            if not pdf.is_file():
+                self.skipTest(f"docs/{name} not present")
+            doc = load_document(pdf, origin="docs/")
+            md, report = rst.normalize_structure(doc, repair_rtl=True)
+            self.assertTrue(report.codex_adopted, name)
+            self.assertFalse(report.rtl_doc_dominant, name)  # logical order
+            self.assertEqual(len(re.findall(r"^## ", md, re.M)), n_h2, name)
+            self.assertEqual(len(re.findall(r"^### ", md, re.M)), n_h3, name)
+            for probe in canaries:
+                self.assertIn(probe, md, f"{name}: {probe}")
+
+    def test_repair_disabled_keeps_the_stored_arm(self):
+        import restructure as rst
+        doc = {"name": "Loi_2016-48.pdf", "text": "نص مخزون خام"}
+        md, report = rst.normalize_structure(doc, repair_rtl=False)
+        self.assertFalse(report.codex_adopted)
+        self.assertIn("نص مخزون خام", md)
+
+
+class Phase2Machinery(unittest.TestCase):
+    """Step 2.4 machinery re-introductions (owner: «طيب واصل المرحلة الثانية»,
+    2026-10-01) — each sub-step individually reviewed, per the 2026-09-28
+    decision that the Phase-2 machinery comes back one declared step at a time.
+
+    2.4-أ: the five target-state categories join VALID_CATEGORIES (the four
+    core categories unchanged); ambiguous cases must DECLARE their material
+    ambiguity (ambiguity_note) — an undeclared ambiguity cannot be graded.
+    """
+
+    def _write_set(self, tmpdir, cases):
+        import json as _json
+        p = Path(tmpdir) / "q.json"
+        p.write_text(_json.dumps({"cases": cases}, ensure_ascii=False), encoding="utf-8")
+        return p
+
+    def test_five_target_categories_are_valid(self):
+        import evaluate as ev
+        for cat in ("colloquial", "synonyms", "implicit", "compound", "ambiguous"):
+            self.assertIn(cat, ev.VALID_CATEGORIES)
+        for cat in ("verbatim", "paraphrase", "cross-lingual", "out-of-scope"):
+            self.assertIn(cat, ev.VALID_CATEGORIES)
+        self.assertNotIn("target-state", ev.VALID_CATEGORIES)
+
+    def test_ambiguous_case_requires_declared_ambiguity(self):
+        import evaluate as ev
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            ok = self._write_set(tmp, [dict(
+                id="a1", question="كم تكلفة البطاقة؟", language="ar",
+                category="ambiguous", expected_document="Loi_2016-48.pdf",
+                expected_lang="ar", expected_substring="البطاقات",
+                ambiguity_note="الغموض المؤثر: أي بطاقة؛ الإجابة الجيدة تطلب التحديد")])
+            with patch("builtins.print"):  # silence the loader's info line
+                ev.load_question_set(ok)   # no exception, no warning needed
+            bare = self._write_set(tmp, [dict(
+                id="a2", question="كم تكلفة البطاقة؟", language="ar",
+                category="ambiguous", expected_document="Loi_2016-48.pdf",
+                expected_lang="ar", expected_substring="البطاقات")])
+            with patch("builtins.print") as pr:
+                ev.load_question_set(bare)
+            self.assertIn("ambiguity_note", "\n".join(str(a) for a in pr.call_args_list))
+
+    def test_current_50_case_set_still_loads_clean(self):
+        import evaluate as ev
+        with patch("builtins.print"):
+            cases = ev.load_question_set(Path(__file__).parent / "questions_50.json")
+        self.assertEqual(len(cases), 50)
+
+    def _hit(self, rank, text, doc="Loi_2016-48.pdf"):
+        return {"rank": rank, "id": f"c{rank}", "text": text,
+                "metadata": {"document": doc}}
+
+    def test_requirement_completion_rank_semantics(self):
+        import evaluate as ev
+        case = {"expected_document": "Loi_2016-48.pdf",
+                "expected_substrings": ["هامش ربح محدد مسبقا", "على اقساط معلومة"]}
+        hits = [self._hit(1, "نص لا يحمل شيئا من المطالب"),
+                self._hit(2, "الصيغة تتضمن هامش ربح محدد مسبقا فقط"),
+                self._hit(3, "بعض النص"),
+                self._hit(4, "ويتم تسديده على اقساط معلومة")]
+        # ALL requirements are only covered once rank 4 is reached
+        self.assertEqual(ev.requirement_completion_rank(case, hits), 4)
+        cov = ev.requirement_coverage(case, [h["text"] for h in hits])
+        self.assertEqual((cov["found"], cov["total"]), (2, 2))
+        self.assertEqual(cov["missing"], [])
+        # Uncovered set -> None (hit@k false at every k)
+        self.assertIsNone(ev.requirement_completion_rank(
+            case, hits[:3]))
+        # Document scoping: same texts but wrong document -> never completes
+        wrong_doc = [self._hit(1, "هامش ربح محدد مسبقا", doc="other.pdf"),
+                     self._hit(2, "على اقساط معلومة", doc="other.pdf")]
+        self.assertIsNone(ev.requirement_completion_rank(case, wrong_doc))
+        # Cases without expected_substrings are untouched
+        self.assertIsNone(ev.requirement_completion_rank(
+            {"expected_substring": "x"}, hits))
+        self.assertIsNone(ev.requirement_coverage(
+            {"expected_substring": "x"}, [t["text"] for t in hits]))
+
+    def test_expected_substrings_validation(self):
+        import evaluate as ev
+        import json as _json
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "q.json"
+            good = {"cases": [dict(
+                id="i1", question="ما الوثائق والشروط؟", language="ar",
+                category="implicit", expected_document="Loi_2016-48.pdf",
+                expected_lang="ar",
+                expected_substrings=["عقد مضاربة", "عقد وكالة"])]}
+            p.write_text(_json.dumps(good, ensure_ascii=False), encoding="utf-8")
+            with patch("builtins.print"):
+                ev.load_question_set(p)      # clean: no warnings expected
+            bad = {"cases": [dict(
+                id="i2", question="سؤال", language="ar", category="implicit",
+                expected_document="Loi_2016-48.pdf", expected_lang="ar",
+                expected_substrings=[])]}
+            p.write_text(_json.dumps(bad, ensure_ascii=False), encoding="utf-8")
+            with patch("builtins.print") as pr:
+                ev.load_question_set(p)
+            self.assertIn("expected_substrings", "\n".join(str(a) for a in pr.call_args_list))
+
+    def test_answer_context_sources_simulates_budget(self):
+        import evaluate as ev
+        hits = [{"rank": i, "id": f"c{i}", "text": "نص " * 50,
+                 "metadata": {"document": "d"}}
+                for i in range(1, 30)]
+        cfg = SimpleNamespace(ANSWER_CONTEXT_TOKENS=300)
+        sources = ev.answer_context_sources(hits, cfg)
+        self.assertLess(len(sources), len(hits))   # the budget drops sources
+
+    def test_compute_metrics_requirements_and_context_blocks(self):
+        import evaluate as ev
+
+        def row(**extra):
+            base = {"id": "q1", "question": "س", "category": "verbatim",
+                    "language": "ar", "evaluable": True,
+                    "hit_at_1": True, "hit_at_3": True, "hit_at_5": True,
+                    "is_out_of_scope": False,
+                    "hits": [{"id": "c1", "score": 0.5, "text": "نص"}],
+                    "correct_rank": 1, "correct_score": 0.5, "correct_id": "c1"}
+            base.update(extra)
+            return base
+
+        # legacy rows (no multi/context fields): both blocks stay None
+        out = ev.compute_metrics([row()])
+        self.assertIsNone(out["requirements"])
+        self.assertIsNone(out["context"])
+        # multi rows populate the requirements block; context stays None
+        multi = row(category="implicit", correct_rank=2,
+                    requirements_found=2, requirements_total=2,
+                    requirements_missing=[],
+                    requirements_all_in_context=True)
+        out2 = ev.compute_metrics([multi])
+        self.assertEqual(out2["requirements"]["n"], 1)
+        self.assertEqual(out2["requirements"]["all_requirements_top_k"], 1.0)
+        self.assertEqual(out2["requirements"]["all_requirements_in_context"], 1.0)
+        self.assertIsNone(out2["context"])
+        # a single-requirement row with evidence_in_context populates context
+        out3 = ev.compute_metrics([row(evidence_in_context=True)])
+        self.assertEqual(out3["context"]["n"], 1)
+        self.assertEqual(out3["context"]["evidence_in_context"], 1.0)
+
+    def test_print_report_handles_sets_without_out_of_scope(self):
+        """Regression (live run 36838058003): a question set with ZERO
+        out-of-scope cases (the Phase-3 target set) crashed print_report on
+        None max_top1_score. The report must print an explicit absence."""
+        import io
+        import evaluate as ev
+
+        def row(**extra):
+            base = {"id": "t1", "question": "س", "category": "colloquial",
+                    "language": "ar", "evaluable": True,
+                    "hit_at_1": True, "hit_at_3": True, "hit_at_5": True,
+                    "is_out_of_scope": False,
+                    "hits": [{"id": "c1", "score": 0.5, "text": "نص"}],
+                    "correct_rank": 1, "correct_score": 0.5, "correct_id": "c1"}
+            base.update(extra)
+            return base
+
+        rows = [row(), row(id="t2", hit_at_1=False, hit_at_3=True,
+                           correct_rank=2, correct_score=0.4)]
+        run = {
+            "generated_at": "2026-10-01T00:00:00+00:00",
+            "config": {"provider": "fake", "embedding_model": "fake",
+                       "chunk_size_tokens": 640, "chunk_overlap_tokens": 40,
+                       "split_on_headings_first": True, "retrieval_top_k": 20,
+                       "hybrid": False, "retrieval_mode": "vector"},
+            "questions": rows,
+            "metrics": ev.compute_metrics(rows),
+        }
+        self.assertEqual(run["metrics"]["out_of_scope"]["n"], 0)
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            ev.print_report(run)          # must not raise
+        self.assertIn("no out-of-scope questions", buf.getvalue())
+
+
+class ModelIndependenceAB(unittest.TestCase):
+    """answer_ab.run_comparison (step 2.4-ج): fixed retrieval, swapped answer
+    models — one retrieval per question, identical hits to every arm, the
+    citation gate judging each arm."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        self.cfg = make_config(CHROMA_DIR=self.path / 'chroma',
+                               ANSWER_CACHE_PATH=self.path / 'answers.json')
+
+    def _collection(self):
+        def chunk(index, source, language, text):
+            return SimpleNamespace(index=index, source=source, language=language,
+                                   text=text, heading='', origin='test/',
+                                   section_type='content', token_count=20)
+        chunks = [chunk(0, 'ar.md', 'ar', 'تاسس بنك البركة في 1983.'),
+                  chunk(0, 'fr.md', 'fr', 'La banque Baraka a été fondée en 1983.')]
+        vectors = [[1.0] + [0.0] * 2047, [0.0, 1.0] + [0.0] * 2046]
+        collection = get_collection(self.cfg, reset=True)
+        store_chunks(collection, list(zip(chunks, vectors)), self.cfg)
+        return collection, vectors
+
+    def test_jaccard_edge_cases(self):
+        from answer_ab import _jaccard
+        self.assertIsNone(_jaccard([], []))
+        self.assertEqual(_jaccard(['a'], ['a']), 1.0)
+        self.assertEqual(_jaccard(['a'], ['b']), 0.0)
+        self.assertAlmostEqual(_jaccard(['a', 'b'], ['b', 'c']), 1 / 3)
+
+    def test_same_hits_all_arms_and_divergence_detection(self):
+        from answer_ab import run_comparison
+        collection, vectors = self._collection()
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+
+        class FakeGen:
+            def __init__(self, status, reason='insufficient_evidence'):
+                self.status, self.reason = status, reason
+                self.seen = []
+
+            def answer(self, question, hits, language, use_cache=True):
+                self.seen.append([h['id'] for h in hits])
+                if self.status == 'answered':
+                    return {'status': 'answered', 'reason': None, 'model': 'fake',
+                            'claims': [{'text': 'x'}],
+                            'sources': [{'chunk_id': hits[0]['id']}],
+                            'validation_ok': True}
+                return {'status': self.status, 'reason': self.reason, 'model': 'fake',
+                        'claims': [], 'sources': [], 'validation_ok': True}
+
+        a, b = FakeGen('answered'), FakeGen('refused')
+        cases = [{'id': 'q1', 'question': 'بنك البركة', 'language': 'ar',
+                  'category': 'verbatim'}]
+        report = run_comparison(self.cfg, fake_embedder, collection, cases,
+                                [('ref', a), ('alt', b)], top_k=2, mode='vector')
+        # both arms received the IDENTICAL hit ids (model independence)
+        self.assertEqual(a.seen, b.seen)
+        self.assertTrue(a.seen and a.seen[0])
+        # divergence detected: statuses differ -> substance-divergent question
+        pair = report['pairwise']['ref vs alt']
+        self.assertEqual(pair['status_agreement'], 0.0)
+        self.assertIn('q1', pair['substance_divergent_questions'])
+        self.assertEqual(report['per_model']['ref']['answered'], 1)
+        self.assertEqual(report['per_model']['alt']['refused'], 1)
+
+    def test_a_failing_arm_is_data_not_a_dead_run(self):
+        from answer_ab import anno_line, run_comparison
+        collection, vectors = self._collection()
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+
+        class NativeErrorGen:
+            # answer.py returns status="error" (provider_error) as a dict
+            def answer(self, question, hits, language, use_cache=True):
+                return {'status': 'error', 'reason': 'provider_error',
+                        'model': 'nat', 'claims': [], 'sources': [],
+                        'validation_ok': False, 'provider_ok': False}
+
+        class RaisingGen:
+            def answer(self, question, hits, language, use_cache=True):
+                raise RuntimeError('boom: capacity 502')
+
+        cases = [{'id': 'q1', 'question': 'س', 'language': 'ar',
+                  'category': 'verbatim'}]
+        report = run_comparison(self.cfg, fake_embedder, collection, cases,
+                                [('nat', NativeErrorGen()), ('raise', RaisingGen())],
+                                top_k=2, mode='vector')
+        self.assertEqual(report['per_model']['nat']['errors'], 1)
+        self.assertEqual(report['per_model']['raise']['errors'], 1)
+        self.assertEqual(report['per_model']['nat']['answered'], 0)
+        row = report['per_question'][0]['arms']['raise']
+        self.assertEqual(row['status'], 'error')
+        self.assertIn('RuntimeError', row['reason'])
+        anno = anno_line(report)
+        self.assertIn('nat: answered=0 refused=0 errors=1 gate=0', anno)
+        self.assertIn('raise: answered=0 refused=0 errors=1 gate=0', anno)
+
+    def test_anno_line_carries_the_gate_numbers(self):
+        from answer_ab import anno_line, run_comparison
+        collection, vectors = self._collection()
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+
+        class RefGen:
+            def answer(self, question, hits, language, use_cache=True):
+                return {'status': 'answered', 'reason': None, 'model': 'ref',
+                        'claims': [{'text': 'a'}],
+                        'sources': [{'chunk_id': h['id']} for h in hits[:1]],
+                        'validation_ok': True}
+
+        class AltGen:
+            def answer(self, question, hits, language, use_cache=True):
+                return {'status': 'refused', 'reason': 'no_evidence', 'model': 'alt',
+                        'claims': [], 'sources': [],
+                        'validation_ok': True}
+
+        cases = [{'id': 'q1', 'question': 'س', 'language': 'ar',
+                  'category': 'verbatim'}]
+        report = run_comparison(self.cfg, fake_embedder, collection, cases,
+                                [('ref', RefGen()), ('alt', AltGen())],
+                                top_k=2, mode='vector')
+        anno = anno_line(report)
+        self.assertTrue(anno.startswith('ANNO| '))
+        self.assertIn('n=1', anno)
+        self.assertIn('retrieval=vector/top2 fixed (model-independent)', anno)
+        self.assertIn('ref: answered=1 refused=0 errors=0 gate=0', anno)
+        self.assertIn('alt: answered=0 refused=1 errors=0 gate=0', anno)
+        self.assertIn('ref vs alt: agree=0.000', anno)
+        self.assertIn('divergent(1)=[q1]', anno)
+
+    def test_agreement_when_arms_match(self):
+        from answer_ab import run_comparison
+        collection, vectors = self._collection()
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[0])
+
+        class AgreeingGen:
+            def answer(self, question, hits, language, use_cache=True):
+                return {'status': 'answered', 'reason': None, 'model': 'fake',
+                        'claims': [{'text': 'a'}, {'text': 'b'}],
+                        'sources': [{'chunk_id': h['id']} for h in hits[:1]],
+                        'validation_ok': True}
+
+        cases = [{'id': 'q1', 'question': 'بنك البركة', 'language': 'ar',
+                  'category': 'verbatim'},
+                 {'id': 'q2', 'question': 'البركة 1983', 'language': 'ar',
+                  'category': 'verbatim'}]
+        report = run_comparison(self.cfg, fake_embedder, collection, cases,
+                                [('ref', AgreeingGen()), ('alt', AgreeingGen())],
+                                top_k=2, mode='vector')
+        pair = report['pairwise']['ref vs alt']
+        self.assertEqual(pair['status_agreement'], 1.0)
+        self.assertEqual(pair['mean_source_jaccard'], 1.0)
+        self.assertEqual(pair['substance_divergent_questions'], [])
+
+
+class LexiconExpansion(unittest.TestCase):
+    """Phase-3 intervention 2: the governed institutional lexicon — a
+    deterministic, non-generative query expansion before embedding and BM25,
+    strictly separate from the retired translation path."""
+
+    def test_identity_when_nothing_matches(self):
+        import lexicon
+        self.assertEqual(lexicon.expand_query('ما هي شروط فتح الحساب؟'),
+                         ['ما هي شروط فتح الحساب؟'])
+        self.assertEqual(lexicon.expansion_pairs('ordinary words here'), [])
+
+    def test_english_equivalent_and_abbreviation(self):
+        import lexicon
+        q = 'What is murabaha at the BCT?'
+        out = lexicon.expand_query(q)
+        self.assertEqual(out[0], q)
+        self.assertIn('What is المرابحة at the BCT?', out)
+        self.assertIn('What is murabaha at the البنك المركزي التونسي?', out)
+        self.assertIn('What is المرابحة at the البنك المركزي التونسي?', out)
+        labels = [label for label, _ in lexicon.expansion_pairs(q)]
+        self.assertIn('lexicon:murabaha', labels)
+        self.assertIn('lexicon:BCT', labels)
+        self.assertIn('lexicon:combined', labels)
+
+    def test_case_insensitive_and_no_substring_false_positives(self):
+        import lexicon
+        self.assertIn('المرابحة definition', lexicon.expand_query('MURABAHA definition'))
+        self.assertEqual(lexicon.expand_query('murabahax contracts'),
+                         ['murabahax contracts'])
+        self.assertEqual(lexicon.expand_query('تسليفات متعددة'),
+                         ['تسليفات متعددة'])
+
+    def test_french_equivalents(self):
+        import lexicon
+        q = "Qu'est-ce que la mourabaha et les dépôts ?"
+        out = lexicon.expand_query(q)
+        self.assertIn("Qu'est-ce que la المرابحة et les dépôts ?", out)
+        self.assertIn("Qu'est-ce que la mourabaha et les الودائع ?", out)
+        self.assertIn("Qu'est-ce que la المرابحة et les الودائع ?", out)
+
+    def test_arabic_colloquial_definite_and_indefinite(self):
+        import lexicon
+        self.assertIn('كيف نحصل على القرض؟',
+                      lexicon.expand_query('كيف نحصل على تسليف؟'))
+        self.assertIn('شروط القرض السكني',
+                      lexicon.expand_query('شروط التسليف السكني'))
+
+    def test_every_seed_target_exists_in_the_adopted_codex(self):
+        """Governance: the lexicon maps INTO the corpus vocabulary only."""
+        import lexicon
+        import restructure
+        from evaluate import normalize_for_match
+        from loader import load_all
+        docs = load_all(DOCS_DIRS)
+        codices = []
+        for d in docs:
+            t = restructure._adopted_codex_text(d['name'])
+            codices.append(t if t is not None else d['text'])
+        self.assertEqual(len(codices), 4)
+        for entry in lexicon.SEED_ENTRIES:
+            self.assertTrue(
+                any(normalize_for_match(entry['to']) in normalize_for_match(c)
+                    for c in codices),
+                f"seed target not in the adopted codex: {entry['from']} -> {entry['to']}")
+
+    def test_retrieval_wiring_off_by_default_and_on_when_enabled(self):
+        import lexicon
+        from retrieval import retrieve
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        cfg = make_config(CHROMA_DIR=Path(self.temp.name) / 'chroma',
+                          ANSWER_CACHE_PATH=Path(self.temp.name) / 'answers.json')
+        self.assertFalse(cfg.LEXICON_ENABLED)   # OFF by default
+
+        def chunk(index, source, language, text):
+            return SimpleNamespace(index=index, source=source, language=language,
+                                   text=text, heading='', origin='test/',
+                                   section_type='content', token_count=20)
+        chunks = [chunk(0, 'ar.md', 'ar', 'المرابحة صيغة تمويل بصيغة البيع'),
+                  chunk(0, 'en.md', 'en', 'murabaha is a financing form')]
+        vectors = [[1.0] + [0.0] * 2047, [0.0, 1.0] + [0.0] * 2046]
+        collection = get_collection(cfg, reset=True)
+        store_chunks(collection, list(zip(chunks, vectors)), cfg)
+
+        def embed(text):
+            # the governed Arabic anchor routes the expanded variant to the
+            # Arabic chunk; the original English text to the English chunk
+            return vectors[0] if 'المرابحة' in text else vectors[1]
+        fake_embedder = SimpleNamespace(embed_query=embed)
+
+        q = 'What is murabaha?'
+        hits, variants = retrieve(cfg, fake_embedder, collection, q,
+                                  language='en', mode='vector', top_k=2,
+                                  variant_strategy='original')
+        self.assertEqual([v['label'] for v in variants], ['en(original)'])
+        # only the original variant contributed: every hit carries its label
+        self.assertTrue(all(h['from_variant'] == 'en(original)' for h in hits))
+
+        cfg.LEXICON_ENABLED = True
+        hits2, variants2 = retrieve(cfg, fake_embedder, collection, q,
+                                    language='en', mode='vector', top_k=2,
+                                    variant_strategy='original')
+        labels = [v['label'] for v in variants2]
+        self.assertEqual(labels[0], 'en(original)')
+        self.assertIn('lexicon:murabaha', labels)
+        by_id = {h['id']: h for h in hits2}
+        self.assertIn('ar.md::chunk_0000', by_id)
+        self.assertIn('en.md::chunk_0000', by_id)
+        # the Arabic chunk was reached BY the governed variant
+        self.assertEqual(by_id['ar.md::chunk_0000']['from_variant'],
+                         'lexicon:murabaha')
+        self.assertIn('lexicon:murabaha',
+                      by_id['ar.md::chunk_0000']['variant_ranks'])
+
+
+class RerankerDeterministic(unittest.TestCase):
+    """Phase-3 intervention 3: the deterministic feature-based reranker —
+    coverage/heading/phrase signals over a rank prior, ties keeping the
+    retriever's order, no model calls, no network."""
+
+    def test_query_terms_stop_filtered_and_stable(self):
+        import rerank
+        terms = rerank.query_terms('ما هي شروط المرابحة؟ What is the rule?')
+        self.assertNotIn('ما', terms)
+        self.assertNotIn('هي', terms)
+        self.assertNotIn('the', terms)
+        self.assertIn('شروط', terms)
+        self.assertIn('المرابحة', terms)
+        self.assertNotIn('what', terms)   # function word, filtered
+        self.assertEqual(terms, rerank.query_terms('ما هي شروط المرابحة؟ What is the rule?'))
+
+    def test_rerank_lifts_the_term_covering_chunk(self):
+        import rerank
+        q = 'شروط عملية المرابحة المصرفية'
+        hits = [
+            {"id": "a::1", "text": "عملية الإجارة تأجير ثم تملك", "heading": "الإجارة"},
+            {"id": "a::2", "text": "شروط عملية المرابحة المصرفية محددة في هذا الفصل",
+             "heading": "شروط المرابحة"},
+            {"id": "a::3", "text": "نص آخر لا صلة له", "heading": ""},
+        ]
+        out = rerank.rerank_hits(q, hits)
+        self.assertEqual(out[0]["id"], "a::2")
+        self.assertTrue(out[0]["rerank"]["features"]["phrase_bonus"] > 0)
+        self.assertEqual(out[0]["rerank"]["features"]["term_coverage"], 1.0)
+
+    def test_ties_keep_the_retriever_order(self):
+        import rerank
+        hits = [{"id": f"a::{i}", "text": "نص واحد متطابق", "heading": "عنوان"}
+                for i in range(1, 4)]
+        out = rerank.rerank_hits('استعلام لا مصطلحات مشتركة', hits)
+        self.assertEqual([h["id"] for h in out], ["a::1", "a::2", "a::3"])
+
+    def test_deterministic_and_annotated(self):
+        import rerank
+        q = 'قواعد التمويل بالمرابحة'
+        hits = [{"id": "a::1", "text": "قواعد عامة", "heading": "عام"},
+                {"id": "a::2", "text": "التمويل بالمرابحة قواعده واضحة", "heading": "المرابحة"}]
+        first = rerank.rerank_hits(q, hits)
+        second = rerank.rerank_hits(q, hits)
+        self.assertEqual(first, second)
+        for h in first:
+            self.assertIn("rerank", h)
+            self.assertIn("score", h["rerank"])
+            self.assertIn("base_position", h["rerank"]["features"])
+        # inputs are not mutated
+        self.assertNotIn("rerank", hits[0])
+
+    def test_short_penalty_and_missing_fields(self):
+        import rerank
+        out = rerank.rerank_hits('المرابحة', [
+            {"id": "a::1", "text": "قصير جدا", "heading": ""},
+            {"id": "a::2", "text": "المرابحة صيغة تمويل معروفة بشروطها المفصلة هنا", "heading": ""},
+        ])
+        self.assertEqual(out[0]["id"], "a::2")
+
+    def test_retrieval_wiring_off_by_default_and_on(self):
+        from retrieval import retrieve
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        cfg = make_config(CHROMA_DIR=Path(self.temp.name) / 'chroma',
+                          ANSWER_CACHE_PATH=Path(self.temp.name) / 'answers.json')
+        # ON by default since the owner decision of 2026-10-01
+        self.assertTrue(cfg.RERANK_ENABLED)
+        cfg.RERANK_ENABLED = False   # explicit off for the before-leg
+
+        def chunk(index, source, language, text, heading):
+            return SimpleNamespace(index=index, source=source, language=language,
+                                   text=text, heading=heading, origin='test/',
+                                   section_type='content', token_count=20)
+        chunks = [chunk(0, 'ar.md', 'ar', 'شروط المرابحة كما وردت في النص', 'المرابحة'),
+                  chunk(1, 'ar.md', 'ar', 'نص عام عن الصيرفة', 'عام')]
+        # vector space: chunk 1 (general) is the retriever's top-1
+        vectors = [[0.0, 1.0] + [0.0] * 2046, [1.0, 0.0] + [0.0] * 2046]
+        collection = get_collection(cfg, reset=True)
+        store_chunks(collection, list(zip(chunks, vectors)), cfg)
+        # the retriever's top-1 is the GENERAL chunk (cosine 1.0 with it)
+        fake_embedder = SimpleNamespace(embed_query=lambda text: vectors[1])
+
+        q = 'شروط المرابحة'
+        hits, _ = retrieve(cfg, fake_embedder, collection, q,
+                           language='ar', mode='vector', top_k=2,
+                           variant_strategy='original')
+        self.assertEqual(hits[0]['id'], 'ar.md::chunk_0001')  # retriever order
+
+        cfg.RERANK_ENABLED = True
+        hits2, _ = retrieve(cfg, fake_embedder, collection, q,
+                            language='ar', mode='vector', top_k=2,
+                            variant_strategy='original')
+        self.assertEqual(hits2[0]['id'], 'ar.md::chunk_0000')  # lifted by terms
+        self.assertIn('rerank', hits2[0])
+        # the deployed default (no explicit flag) reranks too
+        cfg2 = make_config(CHROMA_DIR=Path(self.temp.name) / 'chroma2',
+                           ANSWER_CACHE_PATH=Path(self.temp.name) / 'a2.json')
+        collection2 = get_collection(cfg2, reset=True)
+        store_chunks(collection2, list(zip(chunks, vectors)), cfg2)
+        hits3, _ = retrieve(cfg2, fake_embedder, collection2, q,
+                            language='ar', mode='vector', top_k=2,
+                            variant_strategy='original')
+        self.assertEqual(hits3[0]['id'], 'ar.md::chunk_0000')
+        self.assertIn('rerank', hits3[0])
+
+
+class GovernanceRegistry(unittest.TestCase):
+    """Phase-4 item 2: the governance-axes registry — declared axes riding on
+    chunk metadata at ingest; law fully registered, the other three corpus
+    documents explicitly DEFERRED (minimal axes are a later reviewed
+    extension); fingerprint checks keep registry and corpus in sync."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        self.cfg = make_config(NVIDIA_MIN_INTERVAL=0, NVIDIA_CHAT_STREAM=False,
+                              QUERY_TRANSLATION_PROMPT='basic-v1',
+                              NVIDIA_EMBEDDING_CACHE_PATH=self.path / 'embeddings.json',
+                              EMBEDDING_CACHE_PATH=self.path / 'embeddings.json',
+                              QUERY_TRANSLATION_CACHE_PATH=self.path / 'translations.json',
+                              ANSWER_CACHE_PATH=self.path / 'answers.json',
+                              CHROMA_DIR=self.path / 'chroma')
+
+    @staticmethod
+    def _corpus_docs():
+        import harness50
+        from loader import load_all
+        return [d["name"] for d in load_all(harness50.DOCS_DIRS)]
+
+    def test_registry_covers_corpus_exactly(self):
+        import governance
+        docs = self._corpus_docs()
+        self.assertEqual(len(docs), 4)             # the corpus contract
+        self.assertTrue(governance.registry_ok(docs), governance.registry_report(docs))
+        report = governance.registry_report(docs)
+        self.assertEqual(report["registered"], ["Loi_2016-48.pdf"])
+        self.assertEqual(len(report["deferred"]), 3)
+
+    def test_axes_for_law_full_others_empty(self):
+        import governance
+        law = governance.axes_for("Loi_2016-48.pdf")
+        self.assertEqual(set(law), set(governance.AXES))
+        self.assertEqual(law["gov_type"], "قانون")
+        self.assertEqual(law["gov_status"], "نافذ")
+        for deferred in governance.DEFERRED_DOCUMENTS:
+            self.assertEqual(governance.axes_for(deferred), {})
+
+    def test_fingerprint_checks_flag_phantom_and_undeclared(self):
+        import governance
+        # a registry entry for a document not in the corpus → phantom
+        report = governance.registry_report(["Only_Doc.pdf"])
+        self.assertEqual(report["phantom_entries"], ["Loi_2016-48.pdf"])
+        self.assertEqual(report["unregistered_undeclared"], ["Only_Doc.pdf"])
+        self.assertFalse(governance.registry_ok(["Only_Doc.pdf"]))
+        # the real corpus passes
+        self.assertTrue(governance.registry_ok(self._corpus_docs()))
+
+    def test_axes_ride_on_chunk_metadata_at_ingest(self):
+        import governance
+        def chunk(index, source, text):
+            return SimpleNamespace(index=index, source=source, language="ar", text=text,
+                                   heading="", origin="test/", section_type="content",
+                                   token_count=20)
+        chunks = [chunk(0, "Loi_2016-48.pdf", "الفصل الاول ..."),
+                  chunk(0, "Guide_Interne_Operations_Bancaires_Islamiques.docx", "دليل")]
+        vectors = [[1.0] + [0.0] * 2047, [0.0, 1.0] + [0.0] * 2046]
+        collection = get_collection(self.cfg, reset=True)
+        self.assertEqual(store_chunks(collection, list(zip(chunks, vectors)), self.cfg), 2)
+        got = collection.get(include=["metadatas"])["metadatas"]
+        law_meta = next(m for m in got if m["document"] == "Loi_2016-48.pdf")
+        guide_meta = next(m for m in got if m["document"].startswith("Guide"))
+        for axis in governance.AXES:
+            self.assertIn(axis, law_meta)          # all six axes on the law
+            self.assertEqual(law_meta[axis], governance.axes_for("Loi_2016-48.pdf")[axis])
+            self.assertNotIn(axis, guide_meta)     # deferred doc stays clean
+
+
+class RelationsExtraction(unittest.TestCase):
+    """Phase-4 item 3: the two minimal relations tables — grounding (declared,
+    evidence-checked) and internal cross-references (deterministic from the
+    item-1 units; only the literal «من هذا القانون» form becomes an edge, so
+    other-law references like «من المجلة الجزائية» never do)."""
+
+    @staticmethod
+    def _units_and_internal():
+        import restructure, units, relations
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        law_units = units.extract_law_units(codex)
+        return law_units, relations.extract_internal_references(law_units)
+
+    def test_validation_clean_and_counts(self):
+        import restructure, units, relations
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        law_units = units.extract_law_units(codex)
+        report = relations.validate_relations(law_units)
+        self.assertEqual(report["violations"], [])
+        self.assertEqual(report["grounding_edges"], 1)
+        self.assertEqual(report["internal_edges"], 77)   # 68 singular + 9 from و-lists
+        self.assertEqual(report["self_references"], 0)
+
+    def test_grounding_edge_is_documented_and_verbatim(self):
+        import restructure, relations
+        edge = relations.GROUNDING_EDGES[0]
+        self.assertEqual(edge["to_unit"], "loi-2016-48:art011")
+        circ = restructure._adopted_codex_text(edge["from_document"])
+        self.assertIn(edge["evidence"], circ)            # verbatim in the codex
+        self.assertIn("MASTER_INDEX", edge["documented_by"])
+
+    def test_internal_extraction_deterministic(self):
+        _, first = self._units_and_internal()
+        _, second = self._units_and_internal()
+        self.assertEqual(first, second)
+        self.assertTrue(all(e["relation"] == "إحالة داخلية" for e in first))
+
+    def test_other_law_references_never_become_edges(self):
+        import relations
+        synthetic = [{"unit_id": "loi-2016-48:art999", "text":
+                      "وخاضعة للعقوبات المنصوص عليها بالفصل254 من المجلة الجزائية ."}]
+        self.assertEqual(relations.extract_internal_references(synthetic), [])
+
+    def test_list_references_yield_one_edge_per_number(self):
+        import relations
+        synthetic = [{"unit_id": "loi-2016-48:art999", "text":
+                      "تطبق احكام الفصول 49 و50 و51 من هذا القانون على الحالة."}]
+        edges = relations.extract_internal_references(synthetic)
+        self.assertEqual([e["to_unit"] for e in edges],
+                         ["loi-2016-48:art049", "loi-2016-48:art050",
+                          "loi-2016-48:art051"])
+        self.assertTrue(all(e["evidence"] == "الفصول 49 و50 و51 من هذا القانون"
+                            for e in edges))
+
+    def test_emitted_file_matches_extraction(self):
+        import json as _json
+        from pathlib import Path as _Path
+        law_units, internal = self._units_and_internal()
+        data = _json.loads((_Path(__file__).resolve().parent
+                            / "relations_loi_2016_48.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["internal"], internal)
+        self.assertEqual(data["grounding"], __import__("relations").GROUNDING_EDGES)
+
+
+class LegalNumbersExtraction(unittest.TestCase):
+    """Phase-4 item 4: the structured legal-numbers path — deterministic
+    extraction from the item-1 units via the governed NUM_WORDS vocabulary
+    (percentages, monetary limits, financial penalties, deadlines), every
+    record anchored to its unit with a verbatim raw span; plus the Circulaire
+    corrections table (option ج) whose official values are anchored verbatim
+    in the adopted Circulaire codex."""
+
+    @staticmethod
+    def _records():
+        import restructure, units, legal_numbers
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        law_units = units.extract_law_units(codex)
+        return law_units, legal_numbers.extract_legal_numbers(law_units)
+
+    def test_parse_number_phrase_governed_vocabulary(self):
+        import legal_numbers as ln
+        self.assertEqual(ln.parse_number_phrase("خمسة وعشرين مليون"), 25_000_000)
+        self.assertEqual(ln.parse_number_phrase("مائة الف"), 100_000)
+        self.assertEqual(ln.parse_number_phrase("عشرة ملايين"), 10_000_000)
+        self.assertEqual(ln.parse_number_phrase("مليوني"), 2_000_000)
+        self.assertEqual(ln.parse_number_phrase("مائتي"), 200)
+        self.assertEqual(ln.parse_number_phrase("خمسة عشرة"), 15)
+        self.assertIsNone(ln.parse_number_phrase("راس مال"))     # never guesses
+        self.assertIsNone(ln.parse_number_phrase("ثلاثة اعوام"))  # duration ≠ number
+
+    def test_validation_clean_with_exact_counts(self):
+        import restructure, units, legal_numbers as ln
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        law_units = units.extract_law_units(codex)
+        report = ln.validate_numbers(law_units)
+        self.assertEqual(report["violations"], [])
+        self.assertEqual(report["records"], 53)
+        self.assertEqual(report["by_kind"],
+                         {"نسبة": 14, "أجل": 28, "حد مالي": 5, "عقوبة مالية": 6})
+
+    def test_deterministic_and_verbatim_anchors(self):
+        law_units, first = self._records()
+        _, second = self._records()
+        self.assertEqual(first, second)
+        by_id = {u["unit_id"]: u for u in law_units}
+        for r in first:
+            self.assertIn(r["raw"], by_id[r["unit_id"]]["text"])   # verbatim anchor
+
+    def test_known_values(self):
+        _, records = self._records()
+        by_key = {(r["unit_id"], r["raw"]): r for r in records}
+        self.assertEqual(by_key[("loi-2016-48:art032", "خمسين مليون دينار")]["value"],
+                         50_000_000)
+        self.assertEqual(by_key[("loi-2016-48:art183", "مائة الف دينار")]["kind"],
+                         "عقوبة مالية")
+        self.assertEqual(by_key[("loi-2016-48:art183", "مائة الف دينار")]["value"],
+                         100_000)
+        self.assertEqual(by_key[("loi-2016-48:art181", "مائتي دينار")]["value"], 200)
+        word_pct = [r for r in records if r["raw"].endswith("في المائة")]
+        self.assertEqual(len(word_pct), 1)
+        self.assertEqual(word_pct[0]["value"], 5)
+
+    def test_corrections_table_anchored_in_adopted_codex(self):
+        import legal_numbers as ln
+        self.assertEqual(len(ln.CIRCULAIRE_CORRECTIONS), 15)
+        self.assertEqual(ln.validate_corrections(), [])
+        sections = {e["section"] for e in ln.CIRCULAIRE_CORRECTIONS}
+        self.assertEqual(sections, {"الترويسة", "الإحالات التشريعية", "ترقيم الفصول 14–20"})
+
+    def test_emitted_file_matches_extraction(self):
+        import json as _json
+        from pathlib import Path as _Path
+        law_units, records = self._records()
+        data = _json.loads((_Path(__file__).resolve().parent
+                            / "legal_numbers_loi_2016_48.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["law_numbers"], records)
+
+
+class UnitIndexMeasure(unittest.TestCase):
+    """Phase-4 item 5: the units index — the 198 description lines on the
+    EXISTING retrieval machinery in an isolated collection; the 12 law cases
+    judged by the shared normalized-containment rule (expected substring
+    inside the unit's verbatim article text)."""
+
+    def test_law_case_filter(self):
+        import json as _json
+        import unit_index
+        cases = _json.loads((Path(__file__).resolve().parent
+                             / "questions_50.json").read_text(encoding="utf-8"))["cases"]
+        loi = unit_index.law_cases(cases)
+        self.assertEqual(len(loi), 12)
+        self.assertTrue(all(c["expected_document"] == "Loi_2016-48.pdf" for c in loi))
+
+    def test_unit_contains_evidence_rule(self):
+        import unit_index
+        art = "يعاقب بالسجن من ثلاثة اشهر وبخطية من مائة الف دينار"
+        case = {"expected_substring": "بخطية من مائة الف دينار"}
+        self.assertTrue(unit_index.unit_contains_evidence(art, case))
+        case_wrong = {"expected_substring": "غير موجود إطلاقًا"}
+        self.assertFalse(unit_index.unit_contains_evidence(art, case_wrong))
+        case_empty = {"expected_substring": ""}
+        self.assertFalse(unit_index.unit_contains_evidence(art, case_empty))
+
+    def test_end_to_end_with_fake_embedder(self):
+        """Machinery check (not quality): a fake embedder that ranks the
+        article containing 'المرابحة' first for its question must produce
+        hit@1 for that case and full hit metrics."""
+        import tempfile
+        import unit_index
+        units_list = [
+            {"unit_id": "loi-2016-48:art012", "heading": "الفصل12", "path": "p",
+             "description": "يعتبر تمويلا بالمرابحة كل عملية شراء",
+             "text": "يعتبر تمويلا بالمرابحة كل عملية يقوم فيها البنك بشراء منقولات",
+             "type": "definition", "numeric": False},
+            {"unit_id": "loi-2016-48:art013", "heading": "الفصل13", "path": "p",
+             "description": "يعتبر تمويلا بالاجارة",
+             "text": "يعتبر تمويلا بالاجارة كل عملية تملك منقولات او عقارات",
+             "type": "definition", "numeric": False},
+        ]
+        cases = [{"id": "qX", "question": "ما المرابحة؟", "language": "ar",
+                  "category": "verbatim", "expected_document": "Loi_2016-48.pdf",
+                  "expected_lang": "ar",
+                  "expected_substring": "شراء منقولات"}]
+        embedder = SimpleNamespace(
+            embed_texts=lambda ts: [[1.0, 0.0] if "المرابحة" in t else [0.0, 1.0]
+                                    for t in ts],
+            embed_query=lambda t: [1.0, 0.0])
+        with tempfile.TemporaryDirectory() as tmp:
+            result = unit_index.evaluate_units_index(
+                units_list, cases, embedder, Path(tmp) / "chroma")
+        self.assertEqual(result["metrics"]["n"], 1)
+        self.assertEqual(result["questions"][0]["correct_unit_rank"], 1)
+        self.assertTrue(result["questions"][0]["hit_at_1"])
+        self.assertEqual(result["questions"][0]["top_unit"], "loi-2016-48:art012")
+
+    def test_baseline_extraction_from_eval_json(self):
+        import tempfile
+        import unit_index
+        run = {"questions": [
+            {"id": "q10", "hit_at_1": True, "hit_at_3": True, "hit_at_5": True,
+             "is_out_of_scope": False},
+            {"id": "q11", "hit_at_1": False, "hit_at_3": True, "hit_at_5": True,
+             "is_out_of_scope": False},
+            {"id": "q99", "hit_at_1": True, "hit_at_3": True, "hit_at_5": True,
+             "is_out_of_scope": False},
+            {"id": "q28", "hit_at_1": False, "hit_at_3": False, "hit_at_5": False,
+             "is_out_of_scope": True},
+        ]}
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "eval.json"
+            p.write_text(json.dumps(run), encoding="utf-8")
+            base = unit_index.baseline_for_law_questions(p, ["q10", "q11", "q28"])
+        self.assertEqual(base["n"], 2)          # the OOS case never counts
+        self.assertEqual(base["hit@1"], 0.5)
+        self.assertEqual(base["hit@5"], 1.0)
+
+
+class IntentClassification(unittest.TestCase):
+    """Phase-5 item 1: deterministic-first intent — declared INTENT_RULES (first
+    match wins, every decision explained), the DECLARED default path for the
+    unclassifiable, personal framing, explicit-document scope only, compound
+    splitting, and influential-ambiguity detection (MASTER_INDEX §6 shared
+    concepts) resolved by scope. The layer is INERT: nothing in the deployed
+    retrieval path imports it."""
+
+    def test_known_types_from_the_adopted_sets(self):
+        import intent
+        cases = {
+            "ما العقوبتان الجزائيتان المقررتان في القانون؟": "عقوبي",
+            "قارن بين صيغتي المضاربة من حيث حرية البنك في استثمار أموال الحريف.": "مقارن",
+            "ما الصيغة التي يشارك فيها العميل بخبرته وإدارته فقط؟": "تعريفي",
+            "ما الحد الأقصى لرأس مال البنك المقيم؟": "رقمي",
+            "على أي أساس يمنح البنك تسليفا للحريف دون فوائد؟": "إجرائي",
+        }
+        for q, expected in cases.items():
+            r = intent.classify(q)
+            self.assertEqual(r["intent_type"], expected, q)
+            self.assertTrue(r["fired_rules"], q)          # explained decisions
+
+    def test_french_plural_interrogative_is_not_a_definition_request(self):
+        """Regression (owner's live run 2026-10-05): the تعريفي rule carried a
+        BARE r"Quelle", and re.search matches it inside «Quelles» — so
+        «Quelles sont les étapes et modalités…» classified as تعريفي
+        (fired_rules: 'Quelle'), the plan demanded definition_or_purpose_unit,
+        and the guide's 5.3 PROCEDURE section could never cover it. No bridge,
+        shape or guided round can fix a misclassified intent. The anchored
+        r"Quel\b" beside it already refused to match; the bare form is now
+        anchored too, and إجرائی gained the French procedural markers it was
+        missing entirely."""
+        import evidence_plan
+        import intent
+        q = ("Quelles sont les étapes et modalités de réalisation d'une "
+             "opération de change (vente et achat de devises) pour un client ?")
+        r = intent.classify(q)
+        self.assertEqual(r["intent_type"], "إجرائي", r["fired_rules"])
+        self.assertEqual([x["req"] for x in
+                          evidence_plan.derive_plan(q)["requirements"]],
+                         ["procedural_evidence"])
+        # the singular must still classify as definitional — anchoring has to
+        # narrow the match, not remove it
+        for singular, expected in (
+                ("Quelle est la définition de la murabaha ?", "تعريفي"),
+                ("Quelle structure supervise les banques ?", "تعريفي"),
+                ("Comment le bank réalise-t-il une opération de change ?",
+                 "إجرائي")):
+            self.assertEqual(intent.classify(singular)["intent_type"], expected,
+                             singular)
+        # Arabic classification is untouched by a French-only pattern change
+        self.assertEqual(intent.classify("ما هو الأساس الشرعي؟")["intent_type"],
+                         "تعريفي")
+        self.assertEqual(intent.classify("هل يمكنني فتح حساب؟")["intent_type"],
+                         "إجرائي")
+
+    def test_unclassifiable_gets_the_declared_default_path(self):
+        import intent
+        r = intent.classify("اشتريت سيارة أمس وذهبت إلى السوق")
+        self.assertEqual(r["intent_type"], "غير مصنف")
+        self.assertTrue(r["default_path"])
+        self.assertFalse(r["fired_rules"])
+
+    def test_personal_framing(self):
+        import intent
+        r = intent.classify("هل يمكنني فتح حساب مرابحة لدى البنك؟")
+        self.assertTrue(r["personal"])
+        self.assertFalse(intent.classify("ما هي المرابحة؟")["personal"])
+
+    def test_scope_only_from_explicit_document_naming(self):
+        import intent
+        self.assertEqual(intent.classify("ماذا يقول الدليل عن المرابحة؟")["scope"],
+                         "Guide_Interne_Operations_Bancaires_Islamiques.docx")
+        self.assertEqual(intent.classify("ماذا يقول قانون عدد 48؟")["scope"],
+                         "Loi_2016-48.pdf")
+        self.assertIsNone(intent.classify("ما هي المرابحة؟")["scope"])  # never assumed
+
+    def test_influential_ambiguity_and_scope_resolution(self):
+        import intent
+        r = intent.classify("ما هي المضاربة؟")
+        self.assertEqual(r["ambiguous_concepts"], ["المضاربة"])
+        r2 = intent.classify("ما هي المضاربة حسب المنشور؟")
+        self.assertEqual(r2["scope"], "Circulaire_BCT_2019-08.pdf")
+        self.assertEqual(r2["ambiguous_concepts"], [])    # scope resolves it
+        self.assertIn(("scope-resolves-ambiguity",
+                       "Circulaire_BCT_2019-08.pdf"), r2["fired_rules"])
+
+    def test_compound_splitting(self):
+        import intent
+        q = ("في المضاربة المقيدة: من يتحمل مخاطر الاستثمار، وعلى ماذا يرتبط "
+             "عائد الودائع الاستثمارية؟")
+        r = intent.classify(q)
+        self.assertIsNotNone(r["sub_questions"])
+        self.assertEqual(len(r["sub_questions"]), 2)
+        self.assertIsNone(intent.classify("ما هي المرابحة؟")["sub_questions"])
+
+    def test_unclassified_ratio_zero_on_both_adopted_sets(self):
+        """The measured contract (plan item 1.7's threshold): 0% unclassified."""
+        import json as _json
+        import intent
+        for name in ("questions_50.json", "questions_targets.json"):
+            cases = _json.loads((Path(__file__).resolve().parent / name)
+                                .read_text(encoding="utf-8"))["cases"]
+            report = intent.unclassified_ratio(cases)
+            self.assertEqual(report["unclassified"], 0, name)
+            self.assertEqual(report["n"], 50 if "50" in name else 10)
+
+    def test_layer_is_inert_in_the_deployed_path(self):
+        """Nothing in the deployed retrieval/answer path imports intent."""
+        import subprocess
+        out = subprocess.run(
+            ["grep", "-l", "import intent", "retrieval.py", "store.py",
+             "evaluate.py", "answer_ab.py", "service.py", "main.py"],
+            capture_output=True, text=True, cwd=Path(__file__).resolve().parent)
+        self.assertEqual(out.stdout.strip(), "")
+
+
+class EvidencePlanDerivation(unittest.TestCase):
+    """Phase-5 item 2: evidence plans derived from intent WITHOUT assuming the
+    answer — declared DERIVATION_RULES (veto requirement by requirement),
+    compound requests get one sub-plan per sub-question, and on both adopted
+    sets every typed-evidence case is consistent with its derived plan (100%)."""
+
+    def test_derivation_deterministic_and_explained(self):
+        import evidence_plan as ep
+        p1 = ep.derive_plan("ما هي المرابحة؟")
+        p2 = ep.derive_plan("ما هي المرابحة؟")
+        self.assertEqual(p1, p2)
+        self.assertEqual(p1["intent_type"], "تعريفي")
+        self.assertEqual([r["req"] for r in p1["requirements"]],
+                         ["definition_or_purpose_unit"])
+        # عقوبي derives TWO requirements: the penalty unit AND its governing rule
+        pen = ep.derive_plan("ما العقوبة على ممارسة النشاط البنكي دون ترخيص؟")
+        self.assertEqual([r["req"] for r in pen["requirements"]],
+                         ["penalty_unit", "with_governing_rule"])
+        # unclassified → the declared wide requirement (no type assumption)
+        wide = ep.derive_plan("اشتريت سيارة أمس وذهبت إلى السوق")
+        self.assertEqual([r["req"] for r in wide["requirements"]], ["wide_evidence"])
+
+    def test_compound_gets_sub_plans(self):
+        import evidence_plan as ep
+        q = ("في المضاربة المقيدة: من يتحمل مخاطر الاستثمار، وعلى ماذا يرتبط "
+             "عائد الودائع الاستثمارية؟")
+        plan = ep.derive_plan(q)
+        self.assertEqual(len(plan["sub_plans"]), 2)
+        self.assertTrue(all(sp["requirements"] for sp in plan["sub_plans"]))
+
+    def test_requirement_satisfaction_kinds(self):
+        import evidence_plan as ep
+        case = {"question": "ما هي المرابحة؟", "expected_substring": "x"}
+        definition = {"type": "definition", "text": "تعتبر تمويلا بالمرابحة",
+                      "unit_id": "u1", "numeric": False}
+        self.assertTrue(ep.requirement_satisfied(
+            {"req": "definition_or_purpose_unit"}, case, [definition], set()))
+        # entity/purpose questions accept institutional provisions
+        entity_case = {"question": "ما هو الصندوق الذي أحدثه القانون؟"}
+        general = {"type": "general", "text": "تتكون لجنة الانقاذ من",
+                   "unit_id": "u2", "numeric": False}
+        self.assertTrue(ep.requirement_satisfied(
+            {"req": "definition_or_purpose_unit"}, entity_case, [general], set()))
+        penalty = {"type": "penalty", "text": "يعاقب طبقا للفصل24",
+                   "unit_id": "u3", "numeric": True}
+        self.assertTrue(ep.requirement_satisfied(
+            {"req": "penalty_unit"}, case, [penalty], set()))
+        self.assertTrue(ep.requirement_satisfied(
+            {"req": "with_governing_rule"}, case, [penalty], set()))
+        self.assertTrue(ep.requirement_satisfied(
+            {"req": "numeric_evidence"}, case, [penalty], set()))
+        self.assertIsNone(ep.requirement_satisfied(   # untyped → never guessed
+            {"req": "penalty_unit"}, case, [], set()))
+
+    def test_coverage_contract_on_both_adopted_sets(self):
+        """The plan's measurable contract: 100% typed-evidence consistency."""
+        import json as _json
+        import evidence_plan as ep
+        import restructure, units, legal_numbers
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        law_units = units.extract_law_units(codex)
+        numeric_ids = {r["unit_id"] for r in
+                       legal_numbers.extract_legal_numbers(law_units)}
+        for name, n_typed in (("questions_50.json", 16), ("questions_targets.json", 2)):
+            cases = _json.loads((Path(__file__).resolve().parent / name)
+                                .read_text(encoding="utf-8"))["cases"]
+            m = ep.measure_coverage(cases, law_units, numeric_ids)
+            self.assertEqual(m["derived_plans"], m["n"], name)
+            self.assertEqual(m["typed_evidence_cases"], n_typed, name)
+            self.assertEqual(m["consistency_ratio"], 1.0, name)
+
+    def test_layer_is_inert_in_the_deployed_path(self):
+        import subprocess
+        out = subprocess.run(
+            ["grep", "-l", "import evidence_plan", "retrieval.py", "store.py",
+             "evaluate.py", "answer_ab.py", "service.py", "main.py", "intent.py"],
+            capture_output=True, text=True, cwd=Path(__file__).resolve().parent)
+        self.assertEqual(out.stdout.strip(), "")
+
+
+class ChangeCycleTest(unittest.TestCase):
+    """Experiment 4: the document change cycle as declared tooling —
+    deterministic preparation, owner gates that STOP, no mutation of docs/
+    or the registries."""
+
+    def test_deferred_document_reports_owner_gates(self):
+        import change_cycle
+        from pathlib import Path
+        docs = Path(__file__).resolve().parent.parent / "docs"
+        report = change_cycle.cycle_report(docs / "Madkhal_Sayrafa_Islamiya.docx")
+        self.assertEqual(report["governance"]["status"], "deferred")
+        self.assertIn("OWNER GATE", report["governance"]["note"])
+        self.assertFalse(report["ready_to_publish"])
+        self.assertIn("governance axes not registered", report["blockers"][1]
+                      if len(report["blockers"]) > 1 else report["blockers"][0])
+        # the deterministic part is still derived. The exact chunk count
+        # depends on the token estimator in use (CI downloads the tiktoken
+        # BPE file; offline sandboxes run the documented fallback), so the
+        # assertion is structural, not an exact count.
+        self.assertGreaterEqual(report["chunk_preview"]["chunks_after_addition"], 300)
+        self.assertEqual(report["chunk_preview"]["documents_loaded"], 4)
+        self.assertIn("ar", report["chunk_preview"]["languages"])
+        self.assertEqual(len(report["impact_plan"]), 5)
+
+    def test_registered_document_ready(self):
+        import change_cycle
+        from pathlib import Path
+        docs = Path(__file__).resolve().parent.parent / "docs"
+        report = change_cycle.cycle_report(docs / "Loi_2016-48.pdf")
+        self.assertEqual(report["governance"]["status"], "registered")
+        self.assertTrue(report["ready_to_publish"])
+        self.assertEqual(report["blockers"], [])
+
+    def test_unknown_document_blocks(self):
+        import change_cycle
+        from pathlib import Path
+        docs = Path(__file__).resolve().parent.parent / "docs"
+        report = change_cycle.cycle_report(docs / "Nonexistent.pdf")
+        self.assertFalse(report["exists"])
+        self.assertFalse(report["ready_to_publish"])
+        self.assertTrue(any("not in the corpus" in b for b in report["blockers"]))
+
+
+class PackagingTest(unittest.TestCase):
+    """The Docker deployment artifact (the owner's documented server):
+    Dockerfile + docker-compose.yml + .dockerignore + the .env template the
+    compose env_file points at. String-level assertions on purpose — no YAML
+    dependency, and drift in these files must fail loudly."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def test_dockerfile_references_real_paths(self):
+        dockerfile = (self.ROOT / "Dockerfile").read_text(encoding="utf-8")
+        for path in ("raglab/requirements.txt",
+                     "raglab/requirements-service.txt", "raglab/", "docs/"):
+            self.assertIn(path, dockerfile)
+        self.assertIn("uvicorn", dockerfile)
+        for path in ("raglab/requirements.txt",
+                     "raglab/requirements-service.txt"):
+            self.assertTrue((self.ROOT / path).exists(), path)
+        self.assertTrue((self.ROOT / "docs").is_dir())
+
+    def test_compose_ships_volumes_and_env_template(self):
+        compose = (self.ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertIn("image: raglab-service", compose)
+        self.assertIn("build: .", compose)
+        self.assertIn("env_file:", compose)
+        self.assertIn("raglab/.env", compose)
+        for volume in ("raglab-index", "raglab-embed-cache", "raglab-documents"):
+            self.assertIn(volume, compose)
+        # the liveness probe is token-aware (/health is behind the token
+        # middleware) and reads the token from the container's own env
+        self.assertIn("healthcheck:", compose)
+        self.assertIn("X-Service-Token", compose)
+        self.assertIn("RAGLAB_SERVICE_TOKEN", compose)
+        # the token VALUE must NOT be hardcoded in environment: (compose
+        # `environment:` overrides env_file, so a hardcoded value would
+        # silently defeat the owner's raglab/.env token — the exact 401 trap
+        # the platform team hit). raglab/.env owns it; the service warns at
+        # boot when switching is on with no token.
+        self.assertNotIn("RAGLAB_SERVICE_TOKEN:", compose)
+        # the template documents the activated gates (compose env_file target)
+        env_example = (self.ROOT / "raglab" / ".env.example").read_text(encoding="utf-8")
+        for gate in ("SUFFICIENCY_FIELDS_ENABLED",
+                     "ANSWER_SUFFICIENCY_COMMITMENT",
+                     "PER_MICRO_RETRIEVAL_ENABLED"):
+            self.assertIn(gate, env_example)
+
+    def test_dockerignore_keeps_secrets_and_caches_out(self):
+        ignore = (self.ROOT / ".dockerignore").read_text(encoding="utf-8")
+        for entry in ("raglab/.env", "raglab/chroma_db", "raglab/results",
+                      "raglab/logs"):
+            self.assertIn(entry, ignore)
+
+
+class LocalFrontClientTest(unittest.TestCase):
+    """local_front (the owner's console-parity client, stdlib-only) — the
+    token plumbing and the honest 401 guidance that replaced the misleading
+    'not a RAGLab service?' message."""
+
+    @classmethod
+    def setUpClass(cls):
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            expected_token = "front-test-secret"
+            seen_headers = {}
+
+            def _json(self, status, payload):
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(payload, ensure_ascii=False).encode())
+
+            def do_GET(self):
+                Handler.seen_headers = dict(self.headers)
+                # like the real service: the token guards EVERY endpoint
+                if self.headers.get("X-Service-Token", "") != Handler.expected_token:
+                    self._json(401, {"detail": {"reason": "unauthorized"}})
+                    return
+                path = self.path.split("?")[0]
+                if path == "/health":
+                    self._json(200, {"status": "ok", "version": "1.3.0"})
+                elif path == "/audit":
+                    self._json(200, {"retention": 500, "entries": [
+                        {"ts": "2026-10-02T09:00:00+00:00", "endpoint": "/answer",
+                         "status": "refused", "reason": "evidence_insufficient",
+                         "evidence_status": "غير كافٍ", "claims": 0,
+                         "question": "كيف احجز تذكرة طائرة؟"},
+                        {"ts": "2026-10-02T08:59:00+00:00", "endpoint": "/answer",
+                         "status": "answered", "reason": "supported",
+                         "evidence_status": "كافٍ", "claims": 2,
+                         "question": "ما هي عملية المرابحة؟"}]})
+                elif path == "/numbers":
+                    self._json(200, {"count": 1, "by_kind": {"حد مالي": 1},
+                                     "records": [{"kind": "حد مالي",
+                                                  "unit_id": "loi-2016-48:art032",
+                                                  "text": "مائة ألف دينار"}],
+                                     "circulaire_corrections": [],
+                                     "note": "deterministic extraction"})
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}"
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def test_token_sent_as_header(self):
+        import local_front
+        api = local_front.Api(self.url, token="front-test-secret")
+        status, body = api.get("/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("status"), "ok")
+
+    def test_no_token_means_no_header_and_401(self):
+        import local_front
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RAGLAB_SERVICE_TOKEN", None)
+            api = local_front.Api(self.url)
+            status, _ = api.get("/health")
+        self.assertEqual(status, 401)
+
+    def test_env_var_token_also_works(self):
+        import local_front
+        with patch.dict(os.environ, {"RAGLAB_SERVICE_TOKEN": "front-test-secret"}):
+            api = local_front.Api(self.url)
+            status, _ = api.get("/health")
+        self.assertEqual(status, 200)
+
+    def test_main_401_prints_token_guidance_not_a_misleading_message(self):
+        import io
+        import local_front
+        import contextlib
+        buf = io.StringIO()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RAGLAB_SERVICE_TOKEN", None)
+            with contextlib.redirect_stdout(buf):
+                rc = local_front.main(["--base-url", self.url])
+        self.assertEqual(rc, 2)
+        out = buf.getvalue()
+        self.assertIn("shared secret", out)
+        self.assertIn("--token", out)
+        self.assertIn("docker compose up -d", out)
+        self.assertNotIn("not a RAGLab service", out)
+
+    def test_audit_command_renders_the_trail(self):
+        import io
+        import contextlib
+        import local_front
+        buf = io.StringIO()
+        with patch.dict(os.environ, {"RAGLAB_SERVICE_TOKEN": "front-test-secret"}):
+            with contextlib.redirect_stdout(buf):
+                rc = local_front.main(["--base-url", self.url, "--audit"])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("مسار التدقيق", out)
+        self.assertIn("retention=500", out)
+        self.assertIn("evidence_insufficient", out)
+        self.assertIn("كافٍ", out)          # the evidence state on the trail
+        self.assertIn("تذكرة", out)         # the (scrubbed) question text
+
+    def test_numbers_command_renders_records(self):
+        import io
+        import contextlib
+        import local_front
+        buf = io.StringIO()
+        with patch.dict(os.environ, {"RAGLAB_SERVICE_TOKEN": "front-test-secret"}):
+            with contextlib.redirect_stdout(buf):
+                rc = local_front.main(["--base-url", self.url, "--numbers"])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("الأرقام القانونية", out)
+        self.assertIn("حد مالي", out)
+        self.assertIn("loi-2016-48:art032", out)
+        self.assertIn("مائة ألف دينار", out)
+
+    def test_show_answer_renders_unit_ids(self):
+        import io
+        import contextlib
+        import local_front
+        body = {"answer": "ok", "status": "answered",
+                "evidence_status": "كافٍ",
+                "requirements_covered": ["definition_or_purpose_unit"],
+                "claims": [{"text": "claim", "evidence": [
+                    {"source_id": "S1", "quote": "quote text",
+                     "unit_id": "loi-2016-48:art004"}]}],
+                "sources": [{"source_id": "S1", "document": "Loi_2016-48.pdf",
+                             "chunk_id": "Loi_2016-48.pdf::chunk_0001",
+                             "unit_id": "loi-2016-48:art004"}]}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            local_front.show_answer(body)
+        out = buf.getvalue()
+        self.assertIn("[كفاية الدليل] كافٍ", out)
+        self.assertIn("loi-2016-48:art004", out)   # the 1.3.0 unit id
+
+    def test_main_with_token_passes_health(self):
+        import local_front
+        with patch.dict(os.environ, {"RAGLAB_SERVICE_TOKEN": "front-test-secret"}):
+            with patch("local_front.Console") as console_cls:
+                rc = local_front.main(["--base-url", self.url, "--status"])
+        self.assertEqual(rc, 0)
+
+
+class SufficiencyBridgeTest(unittest.TestCase):
+    """The declared cross-script bridge table (2026-10-02 owner field case:
+    'what is murabaha?' refused although the corpus defines المرابحة —
+    df('murabaha')=0, the engine is exact-lexical). A bridged DISTINCTIVE
+    term anchors singly (curated equivalence) but stays df-checked; the gate
+    env restores the exact-lexical behavior; non-bridged questions and
+    same-script Arabic are untouched."""
+
+    MUR_TEXT = ("تعتبر عملية المرابحة من عمليات التمويل بصيغة المرابحة "
+                "في التمويل التجاري حسب الدليل الارشادي الداخلي")
+    MUD_TEXT = "توجد صيغة المضاربة في 2 شكلين حسب منشور البنك المركزي"
+
+    def _hit(self, text):
+        return {"text": text, "metadata": {"source": "Guide_Interne.docx",
+                                           "heading": "المرابحة"}}
+
+    def _check(self, question, texts, df=None):
+        import sufficiency
+        return sufficiency.check(
+            question, [self._hit(t) for t in texts],
+            df=df if df is not None else {"مرابحة": 17, "مضاربة": 28})
+
+    def test_murabaha_bridges_to_the_arabic_term(self):
+        s = self._check("what is murabaha?", [self.MUR_TEXT])
+        self.assertEqual(s["state"], "كافٍ", s["reason"])
+        self.assertTrue(any(r["covered"] for r in s["requirements"]))
+
+    def test_gate_off_restores_exact_lexical_behavior(self):
+        import sufficiency
+        with patch.object(sufficiency, "CROSS_BRIDGE_ENABLED", False):
+            s = self._check("what is murabaha?", [self.MUR_TEXT])
+        self.assertEqual(s["state"], "غير كافٍ")
+
+    def test_bridged_term_is_df_checked(self):
+        # a bridge onto boilerplate (df above CROSS_DF_MAX) never anchors
+        s = self._check("what is murabaha?", [self.MUR_TEXT],
+                        df={"مرابحة": 999})
+        self.assertEqual(s["state"], "غير كافٍ")
+
+    def test_non_bridged_english_still_refuses(self):
+        s = self._check("can i get a financement to open a pub?",
+                        [self.MUR_TEXT])
+        self.assertEqual(s["state"], "غير كافٍ")
+
+    def test_embedded_term_question_upgrades_escalation_to_sufficient(self):
+        # the q42 pattern: a Latin question carrying ONE embedded Arabic
+        # term — previously غير محسوم (escalated), the bridge anchors it
+        s = self._check(
+            "Under the BCT circular, the investment-deposit mudaraba "
+            "(المضاربة) exists in how many forms?",
+            [self.MUD_TEXT, self.MUR_TEXT])
+        self.assertEqual(s["state"], "كافٍ")
+
+    def test_scaled_cap_anchors_on_a_larger_corpus(self):
+        # tiktoken envs chunk the same corpus ~2.5x finer, so df counts
+        # scale; the cap scales with the corpus (a SHARE, not a count).
+        # 500 chunks, 40 carrying المرابحة: absolute cap 30 would block;
+        # the scaled cap is ceil(30*500/339)=45 -> anchors.
+        import sufficiency
+        texts = [self.MUR_TEXT] * 40 + ["نص آخر لا يحمل المصطلح"] * 460
+        df = sufficiency.build_df(texts)
+        self.assertEqual(df["__corpus_size__"], 500)
+        self.assertGreater(df["مرابحة"], 30)          # over the OLD cap
+        s = self._check("what is murabaha?", [self.MUR_TEXT], df=df)
+        self.assertEqual(s["state"], "كافٍ")
+
+    def test_calibrated_corpus_keeps_the_absolute_cap(self):
+        # at the calibrated size (<= 339 chunks) the cap is EXACTLY 30 —
+        # no loosening on the measured corpora (byte-identical results).
+        import sufficiency
+        texts = [self.MUR_TEXT] * 31 + ["نص آخر"] * 308
+        df = sufficiency.build_df(texts)
+        self.assertEqual(len(texts), 339)
+        self.assertEqual(sufficiency._df_cap(df), 30)
+        s = self._check("what is murabaha?", [self.MUR_TEXT], df=df)
+        self.assertEqual(s["state"], "غير كافٍ")      # 31 > 30 -> guarded
+
+    def test_boilerplate_stays_blocked_at_any_scale(self):
+        # rarity is a share: a term in ~70% of chunks never anchors, at
+        # any corpus size — the scaled cap (152 at 1713 chunks) stays far
+        # below a boilerplate df (1200).
+        import sufficiency
+        texts = [self.MUR_TEXT] * 1200 + ["نص آخر"] * 513
+        df = sufficiency.build_df(texts)
+        self.assertGreater(df["مرابحة"], sufficiency._df_cap(df))
+        s = self._check("what is murabaha?", [self.MUR_TEXT], df=df)
+        self.assertEqual(s["state"], "غير كافٍ")      # share, not count
+
+    def test_same_script_arabic_unchanged_by_the_gate(self):
+        import sufficiency
+        question = "ما هي المرابحة؟"
+        texts = [self.MUR_TEXT]
+        on = sufficiency.check(question, [self._hit(t) for t in texts],
+                               df={"مرابحة": 17})
+        with patch.object(sufficiency, "CROSS_BRIDGE_ENABLED", False):
+            off = sufficiency.check(question, [self._hit(t) for t in texts],
+                                    df={"مرابحة": 17})
+        self.assertEqual(on["state"], off["state"])
+
+
+class FieldBridgeAndDefinitionShapeTest(unittest.TestCase):
+    """Phase-9 answer probe follow-up (2026-10-05, the owner-approved
+    bridge+shape arm).
+
+    TM03 (fr) / TM04 (en) retrieved the right guide sections and were still
+    refused: the corpus is Arabic-only, so a Latin-script question shares ZERO
+    terms with the chunk that answers it, `_anchors()` is False, no
+    requirement can ever be covered, and the state is «غير كافٍ». The seed
+    bridge table only carries Islamic-finance TRANSLITERATIONS, and the
+    untyped definition shape only recognizes explicit definition verbs — the
+    guide defines documentary credit as «… هو تعهد مكتوب صادر من بنك …».
+
+    Both additions are env-gated and OFF by default; these tests pin the gate
+    in BOTH directions so the shipped default is provably the old behavior.
+    """
+
+    # Guide…docx 5.1 — the corpus's own equative definition (no verb)
+    DOC_CREDIT = ("الاعتماد المستندي (Lettre de Crédit Documentaire) هو تعهد "
+                  "مكتوب صادر من بنك ويسلم للبائع بناء على طلب المشتري "
+                  "ومطابقا لتعليماته")
+    Q_EN = ("In the internal guide, what does a documentary credit promise "
+            "and who receives it?")
+    Q_FR = ("Dans le guide interne, comment une opération de change "
+            "est-elle réalisée pour un client ?")
+
+    def _hit(self, text):
+        return {"id": "Guide_Interne.docx::chunk_0043", "text": text,
+                "metadata": {"source": "Guide_Interne.docx",
+                             "document": "Guide_Interne.docx",
+                             "heading": "5.1- عمليات فتح وقبول الاعتمادات"}}
+
+    def _df(self, **extra):
+        # the measured corpus df (339 chunks) — all under CROSS_DF_MAX=30
+        return {"اعتماد": 12, "مستندي": 4, "صرف": 14, "عمليات": 20, **extra}
+
+    # ---- the shipped default is the OLD behavior ------------------------
+
+    def test_both_gates_default_on_and_zero_restores_the_old_behavior(self):
+        """Activated 2026-10-05 on the owner's live measurement (2/2 answered
+        with the arm vs 2/2 refused without it). A fresh interpreter with no
+        env must read both gates ON, and "0" must reproduce the pre-fix
+        refusal exactly."""
+        import subprocess
+        import sys
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("SUFFICIENCY_FIELD_BRIDGES_ENABLED",
+                            "SUFFICIENCY_DEFINITION_SHAPE_ENABLED",
+                            "SUFFICIENCY_GUIDED_BRIDGED_ENABLED")}
+        probe = ("import sufficiency as s; print(s.FIELD_BRIDGES_ENABLED, "
+                 "s.DEFINITION_SHAPE_ENABLED, s.GUIDED_BRIDGED_ENABLED)")
+        out = subprocess.run([sys.executable, "-c", probe],
+                             cwd=Path(__file__).resolve().parent, env=env,
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(out.stdout.split(), ["True", "True", "True"],
+                         out.stderr)
+        off = dict(env, SUFFICIENCY_FIELD_BRIDGES_ENABLED="0",
+                   SUFFICIENCY_DEFINITION_SHAPE_ENABLED="0",
+                   SUFFICIENCY_GUIDED_BRIDGED_ENABLED="0")
+        out = subprocess.run([sys.executable, "-c", probe],
+                             cwd=Path(__file__).resolve().parent, env=off,
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(out.stdout.split(), ["False", "False", "False"],
+                         out.stderr)
+
+    def test_guided_round_rescues_cross_script_via_declared_bridges(self):
+        """The guided round used to be dead exactly where it was needed: a
+        Latin-script question's own terms all have df=0 in an Arabic corpus,
+        so the term list was empty and the loop broke at once (measured
+        guided_rounds=[] on TM03/TM04). With the gate on it searches the
+        DECLARED Arabic equivalents instead."""
+        import sufficiency
+        seen = []
+
+        def search(query, k):
+            seen.append(query)
+            return [self._hit(self.DOC_CREDIT)]
+
+        df = self._df()
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True), \
+                patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", True), \
+                patch.object(sufficiency, "GUIDED_BRIDGED_ENABLED", False):
+            off = sufficiency.check(self.Q_EN, [], df=df, search_fn=search)
+        self.assertEqual(seen, [])                    # nothing was searched
+        self.assertEqual(off["guided_rounds"], [])
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True), \
+                patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", True), \
+                patch.object(sufficiency, "GUIDED_BRIDGED_ENABLED", True):
+            on = sufficiency.check(self.Q_EN, [], df=df, search_fn=search)
+        self.assertTrue(seen)
+        self.assertTrue(on["guided_rounds"])
+        # the round searched the declared Arabic terms, not the English ones
+        self.assertNotIn("documentary", " ".join(seen))
+        self.assertIn("مستندي", " ".join(seen))
+        self.assertEqual(on["state"], "كافٍ", on["reason"])
+
+    def test_the_guided_round_only_runs_when_a_search_fn_is_passed(self):
+        """The asymmetry that made the live path refuse: sufficiency.check
+        guards its guided loop with `search_fn is not None`, so a caller that
+        omits it gets NO round at all — the same pool scores غير كافٍ as served
+        and كافٍ with one round. Measured on the owner's deployment by
+        raglab/diag_sufficiency.py (2026-10-05)."""
+        import sufficiency
+        # a decoy with a DISTINCT id: the round dedups by id, so reusing
+        # _hit's fixed chunk id for both would filter the rescue away
+        pool = [dict(self._hit("chunk that shares no anchorable term"),
+                     id="Loi_2016-48.pdf::chunk_0007")]
+        served = sufficiency.check(self.Q_EN, pool, df=self._df())
+        self.assertEqual(served["guided_rounds"], [])
+        self.assertEqual(served["state"], "غير كافٍ")
+
+        def search(query, k):
+            return [self._hit(self.DOC_CREDIT)]
+
+        rescued = sufficiency.check(self.Q_EN, pool, df=self._df(),
+                                    search_fn=search)
+        self.assertTrue(rescued["guided_rounds"])
+        self.assertEqual(rescued["state"], "كافٍ", rescued["reason"])
+
+    def test_service_passes_a_search_fn_to_every_sufficiency_check(self):
+        """Source contract for the wiring above: BOTH sufficiency.check call
+        sites in service.py must forward search_fn, or the deployed path
+        silently drops back to the dead-round behavior this test's sibling
+        measures. Asserted on the source because ask()'s commitment gate needs
+        a full runtime (embedder/collection/generator) that no offline test
+        builds."""
+        import re
+        src = (Path(__file__).resolve().parent
+               / "service.py").read_text(encoding="utf-8")
+        calls = re.findall(r"sufficiency\.check\((?:[^()]|\([^()]*\))*\)", src)
+        self.assertEqual(len(calls), 2, calls)
+        for call in calls:
+            self.assertIn("search_fn=", call, call)
+
+    def test_gates_off_reproduce_the_refusal_exactly(self):
+        import sufficiency
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", False), \
+                patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", False):
+            self.assertEqual(sufficiency._bridged_terms(self.Q_EN), set())
+            self.assertFalse(sufficiency._anchors(self.Q_EN, self.DOC_CREDIT,
+                                                  self._df()))
+            state = sufficiency.check(self.Q_EN, [self._hit(self.DOC_CREDIT)],
+                                      df=self._df())
+        self.assertEqual(state["state"], "غير كافٍ")
+        self.assertEqual(state["missing"], ["definition_or_purpose_unit"])
+
+    # ---- field-vocabulary bridges ---------------------------------------
+
+    def test_documentary_credit_phrase_bridges_and_covers(self):
+        import sufficiency
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True), \
+                patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", True):
+            self.assertEqual(sufficiency._bridged_terms(self.Q_EN),
+                             {"اعتماد", "مستندي"})
+            self.assertTrue(sufficiency._anchors(self.Q_EN, self.DOC_CREDIT,
+                                                 self._df()))
+            state = sufficiency.check(self.Q_EN, [self._hit(self.DOC_CREDIT)],
+                                      df=self._df())
+        self.assertEqual(state["state"], "كافٍ", state["reason"])
+
+    def test_accented_french_form_reaches_the_same_bridge(self):
+        import sufficiency
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True):
+            accented = sufficiency._bridged_terms(
+                "Qu'est-ce que le crédit documentaire ?")
+            plain = sufficiency._bridged_terms("what is a credit documentaire")
+        self.assertEqual(accented, {"اعتماد", "مستندي"})
+        self.assertEqual(accented, plain)
+
+    def test_phrase_keys_keep_the_stopwords_question_terms_drops(self):
+        import sufficiency
+        self.assertNotIn("de", sufficiency.question_terms(self.Q_FR))
+        self.assertIn("operation de change",
+                      sufficiency._bridge_phrase_keys(self.Q_FR))
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True):
+            self.assertIn("صرف", sufficiency._bridged_terms(self.Q_FR))
+
+    def test_field_bridges_stay_df_checked(self):
+        import sufficiency
+        with patch.object(sufficiency, "FIELD_BRIDGES_ENABLED", True):
+            self.assertFalse(sufficiency._anchors(
+                self.Q_EN, self.DOC_CREDIT,
+                self._df(اعتماد=999, مستندي=999)))
+
+    def test_declared_tables_are_review_ready(self):
+        import sufficiency
+        for term, arabic in sufficiency.FIELD_BRIDGE_TERMS.items():
+            self.assertTrue(term and arabic)
+            self.assertEqual(term, sufficiency._bridge_key(term),
+                             "bridge key must already be folded: " + term)
+        for key, arabic in sufficiency.FIELD_BRIDGE_PHRASES.items():
+            self.assertTrue(arabic)
+            self.assertGreater(len(key.split()), 1,
+                               "phrase table is for multi-word keys: " + key)
+            self.assertEqual(key, " ".join(sufficiency._bridge_key(t)
+                                           for t in key.split()),
+                             "phrase key must be folded: " + key)
+
+    def test_every_field_bridge_target_exists_in_the_adopted_codex(self):
+        """Governance: the bridges map INTO the corpus vocabulary only."""
+        import restructure
+        import sufficiency
+        from evaluate import normalize_for_match
+        from loader import load_all
+        codices = []
+        for d in load_all(DOCS_DIRS):
+            t = restructure._adopted_codex_text(d["name"])
+            codices.append(t if t is not None else d["text"])
+        targets = set(sufficiency.FIELD_BRIDGE_TERMS.values()) | set(
+            sufficiency.FIELD_BRIDGE_PHRASES.values())
+        self.assertTrue(targets)
+        for target in sorted(targets):
+            self.assertTrue(
+                any(normalize_for_match(target) in normalize_for_match(c)
+                    for c in codices),
+                "bridge target not in the adopted codex: " + target)
+
+    # ---- equative definition/purpose shape ------------------------------
+
+    def test_equative_definition_shape_is_gated(self):
+        import sufficiency
+        hit = self._hit(self.DOC_CREDIT)
+        with patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", False):
+            self.assertFalse(sufficiency.shape_ok(
+                "definition_or_purpose_unit", hit, {}, set(), self.Q_EN))
+        with patch.object(sufficiency, "DEFINITION_SHAPE_ENABLED", True):
+            self.assertTrue(sufficiency.shape_ok(
+                "definition_or_purpose_unit", hit, {}, set(), self.Q_EN))
+
+    # Looseness bound as a SHARE, never an absolute count: the SAME corpus
+    # chunks 339 ways with the char4 fallback estimator (this sandbox cannot
+    # fetch tiktoken's BPE file) and 858 ways with cl100k_base in CI, so a
+    # fixed cap passes in one environment and fails in the other. This is the
+    # lesson sufficiency._df_cap already encodes for df ("rarity is a share").
+    DEFINITION_SHAPE_MAX_SHARE = 100          # 1 chunk in 100
+
+    def test_added_definition_shapes_stay_tight_on_the_real_corpus(self):
+        """Looseness guard: a shape matching most chunks would make the
+        definitional requirement vacuous (false sufficiency).
+
+        Measured shares — copula 1/339 (0.3%) and tight purpose 3/339 (0.9%)
+        on the local char4 build, purpose 6/858 (0.7%) on the CI tiktoken
+        build; the forms rejected as too loose are 14/339 (4.1%), 55/339
+        (16%) and the pre-existing definition pattern 91/339 (27%)."""
+        import sufficiency
+        from loader import load_all
+        cfg = make_config(CHUNKING_MODE="restructure")
+        texts = [c.text for c in chunker.chunk_all(load_all(DOCS_DIRS), cfg)]
+        self.assertGreater(len(texts), 300)
+        budget = max(5, -(-len(texts) // self.DEFINITION_SHAPE_MAX_SHARE))
+        for pattern in sufficiency.DEFINITION_SHAPE_PATTERNS:
+            hits = sum(1 for t in texts if re.search(pattern, t))
+            self.assertLessEqual(
+                hits, budget,
+                "%s matched %d/%d chunks (share budget %d)"
+                % (pattern, hits, len(texts), budget))
+
+
+class RefusalMessageByReasonTest(unittest.TestCase):
+    """2026-10-05, the owner's live case: «هل يمكنني فتح بيت دعارة؟» was
+    correctly refused but explained with the personal-accounts/credentials
+    wording, because ONE REFUSALS string served every reason. The `reason`
+    vocabulary is unchanged; only the human-facing text became truthful."""
+
+    REASONS = ("private_or_live_request", "no_context", "evidence_insufficient",
+               "insufficient_evidence", "unsourced_number", "invalid_output")
+
+    def test_every_reason_has_three_non_empty_languages(self):
+        from answer import REFUSAL_MESSAGES
+        self.assertEqual(set(REFUSAL_MESSAGES), set(self.REASONS))
+        for reason, table in REFUSAL_MESSAGES.items():
+            for lang in ("en", "fr", "ar"):
+                self.assertTrue(table.get(lang, "").strip(),
+                                "%s/%s is empty" % (reason, lang))
+
+    def test_the_reasons_no_longer_share_one_text(self):
+        from answer import refusal_message
+        texts = {r: refusal_message(r, "ar") for r in self.REASONS}
+        self.assertEqual(len(set(texts.values())), len(self.REASONS),
+                         "two reasons still share a message: %s" % texts)
+
+    def test_insufficient_evidence_does_not_blame_personal_accounts(self):
+        """The owner's exact symptom: a corpus-coverage refusal explained as
+        a lack of access to accounts/credentials/live data."""
+        from answer import refusal_message
+        for lang in ("en", "fr", "ar"):
+            msg = refusal_message("insufficient_evidence", lang)
+            private = refusal_message("private_or_live_request", lang)
+            self.assertNotEqual(msg, private)
+            for needle in ("الحسابات", "comptes", "accounts", "كلمات",
+                           "identifiants", "credentials"):
+                self.assertNotIn(needle, msg, lang)
+
+    def test_unknown_reason_and_language_fail_safe(self):
+        from answer import REFUSALS, refusal_message
+        self.assertEqual(refusal_message("some_new_reason", "ar"),
+                         REFUSALS["ar"])
+        self.assertEqual(refusal_message(None, "ar"), REFUSALS["ar"])
+        self.assertEqual(refusal_message("insufficient_evidence", "de"),
+                         refusal_message("insufficient_evidence", "en"))
+
+    def test_the_generator_refusal_path_uses_the_reason_specific_text(self):
+        """End-to-end on the real AnswerGenerator: a reply with no accepted
+        claim must carry the insufficient_evidence wording, not the
+        private-data one."""
+        from answer import AnswerGenerator, refusal_message
+        gen = AnswerGenerator(make_config(
+            ANSWER_CACHE_PATH=Path(tempfile.mkdtemp()) / "a.json"),
+            client=SimpleNamespace(
+                base_url="injected",
+                # a valid abstention: answerable=false with no claims, so
+                # validate_answer returns [] and the path under test is the
+                # generator's own insufficient_evidence refusal
+                chat=lambda *a, **k: {
+                    "text": '{"answerable": false, "claims": []}',
+                    "seconds": 0.1, "served_model": "m", "usage": {}}))
+        out = gen.answer("سؤال", [{"id": "d::chunk_0001", "text": "نص دليل",
+                                   "metadata": {"source": "d"}}], language="ar")
+        self.assertEqual(out["status"], "refused")
+        self.assertEqual(out["reason"], "insufficient_evidence")
+        self.assertEqual(out["answer"],
+                         refusal_message("insufficient_evidence", "ar"))
+
+
+class SoftRefusalWordingTest(unittest.TestCase):
+    """2026-10-23 owner decision: soften the refusal wording when the payload
+    carries a referral or an understood-as concept; keep the legacy sentence
+    otherwise. Reason codes, referral structure and the audit trail are
+    untouched, and SOFT_REFUSAL_ENABLED=0 restores the old text exactly."""
+
+    REASONS = ("private_or_live_request", "no_context", "evidence_insufficient",
+               "insufficient_evidence", "unsourced_number", "invalid_output")
+
+    def test_disabled_returns_legacy_text_for_every_reason_and_language(self):
+        from answer import compose_refusal, refusal_message
+        for reason in self.REASONS:
+            for lang in ("ar", "fr", "en"):
+                self.assertEqual(
+                    compose_refusal(reason, lang, enabled=False),
+                    refusal_message(reason, lang),
+                    f"{reason}/{lang}")
+
+    def test_no_referral_and_no_concept_returns_legacy_text(self):
+        from answer import compose_refusal, refusal_message
+        for reason in self.REASONS:
+            self.assertEqual(
+                compose_refusal(reason, "ar", enabled=True),
+                refusal_message(reason, "ar"))
+            self.assertEqual(
+                compose_refusal(reason, "ar", referral={},
+                                understood_as="  ", enabled=True),
+                refusal_message(reason, "ar"))
+
+    def test_referral_branch_quotes_clarifications_in_three_languages(self):
+        from answer import compose_refusal
+        referral = {"missing_requirements": ["wide_evidence"],
+                    "clarifications": ["أقرب مواضيع المدونة: الفصل 11"]}
+        ar = compose_refusal("evidence_insufficient", "ar",
+                             referral=referral, enabled=True)
+        fr = compose_refusal("evidence_insufficient", "fr",
+                             referral=referral, enabled=True)
+        en = compose_refusal("evidence_insufficient", "en",
+                             referral=referral, enabled=True)
+        self.assertIn("أقرب مواضيع المدونة: الفصل 11", ar)
+        self.assertIn("أقرب ما فيها", ar)
+        self.assertIn("éléments les plus proches", fr)
+        self.assertIn("closest material is", en)
+        # the soft bridge replaces rather than appends the harsh base sentence
+        self.assertNotEqual(
+            ar, __import__("answer").refusal_message(
+                "evidence_insufficient", "ar"))
+
+    def test_missing_requirements_used_when_no_clarifications(self):
+        from answer import compose_refusal
+        out = compose_refusal(
+            "evidence_insufficient", "ar",
+            referral={"missing_requirements": ["procedural_evidence"],
+                      "clarifications": []}, enabled=True)
+        self.assertIn("procedural_evidence", out)
+        self.assertIn("أقرب ما فيها", out)
+
+    def test_concept_only_branch_quotes_understood_as(self):
+        from answer import compose_refusal
+        ar = compose_refusal("evidence_insufficient", "ar",
+                             understood_as="من هو المضارب بالعمل؟", enabled=True)
+        self.assertEqual(
+            ar, "إن كنت تقصد «من هو المضارب بالعمل؟»، فإني لا أملك جوابًا صريحًا.")
+        fr = compose_refusal("evidence_insufficient", "fr",
+                             understood_as="Qui peut être mudarib ?", enabled=True)
+        self.assertIn("Si vous vouliez dire", fr)
+        en = compose_refusal("evidence_insufficient", "en",
+                             understood_as="Who may be the working partner?",
+                             enabled=True)
+        self.assertIn("If you meant", en)
+
+    def test_referral_takes_precedence_over_concept(self):
+        from answer import compose_refusal
+        out = compose_refusal(
+            "evidence_insufficient", "ar",
+            referral={"missing_requirements": [],
+                      "clarifications": ["إحالة واحدة"]},
+            understood_as="مفهوم آخر", enabled=True)
+        self.assertIn("إحالة واحدة", out)
+        self.assertNotIn("مفهوم آخر", out)
+
+    def test_soft_text_never_blames_personal_accounts(self):
+        """The needle guard from RefusalMessageByReasonTest extends to the
+        soft output: a corpus-coverage refusal must never read as an
+        account/credentials refusal."""
+        from answer import compose_refusal
+        needles = ("الحسابات", "comptes", "accounts", "كلمات",
+                   "identifiants", "credentials")
+        for lang in ("ar", "fr", "en"):
+            text = compose_refusal(
+                "insufficient_evidence", lang,
+                referral={"missing_requirements": ["wide_evidence"],
+                          "clarifications": ["x"]}, enabled=True)
+            for needle in needles:
+                self.assertNotIn(needle, text, f"{lang}/{needle}")
+
+    def test_unknown_language_falls_back_to_english_bridge(self):
+        from answer import compose_refusal
+        out = compose_refusal(
+            "evidence_insufficient", "de",
+            referral={"missing_requirements": [],
+                      "clarifications": ["hinweis"]}, enabled=True)
+        self.assertIn("closest material is", out)
+
+    def test_cfg_wrapper_reads_the_flag(self):
+        from answer import soft_refusal_message, refusal_message
+        on = SimpleNamespace(SOFT_REFUSAL_ENABLED=True)
+        off = SimpleNamespace(SOFT_REFUSAL_ENABLED=False)
+        referral = {"missing_requirements": [], "clarifications": ["مرجع"]}
+        self.assertIn("مرجع", soft_refusal_message(
+            on, "evidence_insufficient", "ar", referral=referral))
+        self.assertEqual(
+            soft_refusal_message(off, "evidence_insufficient", "ar",
+                                 referral=referral),
+            refusal_message("evidence_insufficient", "ar"))
+
+
+class DiagBridgeTest(unittest.TestCase):
+    """diag_bridge.verdict — the pure verdict logic of the remote bridge
+    diagnostic (the owner's duplicated-index case: df guard blocks the
+    anchor exactly when duplication pushes the term over CROSS_DF_MAX)."""
+
+    def _verdict(self, df, hits_with_term, rollup=None, total=1713):
+        from collections import Counter
+        import diag_bridge
+        return " ".join(diag_bridge.verdict(
+            Counter(df), 5, hits_with_term, rollup or [], total))
+
+    def test_scaled_cap_lifts_duplication_off_the_guard(self):
+        # the owner's exact numbers: 1713 chunks, df=67. Scaled cap =
+        # ceil(30*1713/339)=152 -> NOT blocked; the question should answer
+        # (the duplicates are still flagged for quality).
+        out = self._verdict({"مرابحة": 67, "تكافل": 24}, hits_with_term=3,
+                            rollup=[{"source": "Guide.docx", "chunks": 339},
+                                    {"source": "pushed-Guide.docx",
+                                     "chunks": 1374}], total=1713)
+        self.assertIn("should-answer", out)
+        self.assertIn("DUPLICATES", out)          # quality flag remains
+        self.assertIn("menu 14", out)
+
+    def test_df_counting_matches_the_anchoring_normalization(self):
+        """The diagnostic must count df the way sufficiency._anchors() reads
+        it, or it reports false DF-BLOCKED. On the owner's 1713-chunk index
+        the substring count said صرف df=335 (blocked) while the term still
+        anchored — measured inflation on the 339-chunk corpus: صرف 95 vs 14,
+        ربا 48 vs 13, تكافل 6 vs 3."""
+        import diag_bridge
+        texts = [
+            "عمليات الصرف الاجل غير جائزة",   # الصرف -> core token «صرف»
+            "انصرف الحريف عن العملية",          # «صرف» as a SUBSTRING only
+        ]
+        df, method = diag_bridge.count_bridge_df(texts)
+        self.assertTrue(method.startswith("tokenized"), method)
+        self.assertEqual(df.get("صرف"), 1, df)
+        # the substring counting this replaced would have said 2
+        self.assertEqual(sum(1 for t in texts if "صرف" in t), 2)
+
+    def test_prefixed_forms_count_as_the_bare_term(self):
+        import diag_bridge
+        df, _ = diag_bridge.count_bridge_df(
+            ["الاعتماد المستندي هو تعهد مكتوب", "اعتماد آخر مستندي"])
+        self.assertEqual(df.get("اعتماد"), 2, df)
+        self.assertEqual(df.get("مستندي"), 2, df)
+
+    def test_boilerplate_blocked_at_scale(self):
+        # a term in a huge SHARE of the index is boilerplate at any size
+        out = self._verdict({"مرابحة": 1200, "تكافل": 24}, hits_with_term=3,
+                            rollup=[], total=1713)
+        self.assertIn("df-blocked", out)
+
+    def test_hand_built_df_defaults_to_the_calibrated_cap(self):
+        import diag_bridge
+        self.assertEqual(diag_bridge.df_cap(339), 30)
+        self.assertEqual(diag_bridge.df_cap(1713), 152)
+        self.assertEqual(diag_bridge.df_cap(100), 30)
+
+    def test_window_too_narrow_when_no_evidence_reaches_topk(self):
+        out = self._verdict({"مرابحة": 17, "تكافل": 6}, 0)
+        self.assertIn("window/retrieval", out)
+        self.assertIn("RAGLAB_TOP_K", out)
+
+    def test_should_answer_with_the_clean_index(self):
+        out = self._verdict({"مرابحة": 17, "تكافل": 6}, 2)
+        self.assertIn("should-answer", out)
+        self.assertIn("CROSS_BRIDGE_ENABLED", out)
+
+
+class ConceptVocabularyTest(unittest.TestCase):
+    """Owner decision 2026-10-06 (both_parts + rows_minimal): a declared
+    Arabic colloquial -> corpus-term table, because the user's words are
+    absent from the corpus while its own equivalents are present (measured:
+    حانة 0, خمارة 0, بار 0, ملهى 0, قمار 0, كازينو 0, مخدرات 0 vs خمر 3,
+    محرمات 6, ميسر 2). The live case was «هل يمكنني فتح حانة؟»."""
+
+    BAR = "هل يمكنني فتح حانة؟"
+
+    def _corpus_df(self):
+        import sufficiency
+        from loader import load_all
+        cfg = make_config(CHUNKING_MODE="restructure")
+        texts = [c.text for c in chunker.chunk_all(load_all(DOCS_DIRS), cfg)]
+        return sufficiency.build_df(texts), sufficiency
+
+    def test_every_declared_target_is_really_present_and_distinctive(self):
+        """The pin that would have caught «كحول»: _hit_terms strips the leading
+        «ك» as a prefix, so it normalizes to «حول» — measured tokenized df 33
+        but SUBSTRING df 0, i.e. the word is not in the corpus at all and the
+        33 was the common word «حول» ("about"). A target must be genuinely
+        present AND under the scaled cap, or it points the anchor at
+        boilerplate (or at nothing)."""
+        df, sufficiency = self._corpus_df()
+        cap = sufficiency._df_cap(df)
+        for word, target in sufficiency.CONCEPT_VOCABULARY.items():
+            for term in sufficiency._hit_terms(target):
+                self.assertGreater(df.get(term, 0), 0,
+                                   "%s -> %s is not in the corpus (it "
+                                   "normalizes to %r)" % (word, target, term))
+                self.assertLessEqual(df.get(term, 0), cap,
+                                     "%s -> %s (df %s) exceeds the cap %s and "
+                                     "could never anchor" % (word, term,
+                                                            df.get(term, 0), cap))
+
+    def test_colloquial_term_anchors_its_declared_equivalent(self):
+        df, sufficiency = self._corpus_df()
+        self.assertEqual(sufficiency._concept_terms(self.BAR),
+                         sufficiency._hit_terms("خمر"))
+        self.assertTrue(sufficiency._anchors(
+            self.BAR, "يشترط الا تنص الشركة على التعامل في الخمر", df))
+        # a chunk that shares nothing still does not anchor
+        self.assertFalse(sufficiency._anchors(
+            self.BAR, "نص لا علاقة له بالموضوع المطروح", df))
+
+    def test_a_mapped_boilerplate_term_cannot_anchor(self):
+        """«حول» is what «كحول» normalizes to, and it is everywhere. The df
+        guard must keep it from manufacturing an anchor.
+
+        The df here is SYNTHETIC on purpose. The first version of this test
+        read the real corpus, and CI failed it: at 339 chunks the cap is 30 and
+        df(حول)=33 is over it, but on CI's 858-chunk corpus the cap is 76 and
+        the same word falls UNDER it, so the guard correctly let it through and
+        the assertion inverted. The invariant is "over the cap cannot anchor",
+        not "this word is over the cap on whatever corpus happens to be here" —
+        so pin the invariant with a declared df, both sides of the cap."""
+        import sufficiency
+        hit = "نص يتحدث حول امور عامة فقط"
+        over = {"حول": sufficiency.CROSS_DF_MAX + 1}
+        under = {"حول": 3}
+        with patch.dict(sufficiency.CONCEPT_VOCABULARY, {"حانة": "كحول"}):
+            self.assertEqual(sufficiency._concept_terms(self.BAR),
+                             sufficiency._hit_terms("حول"))
+            self.assertFalse(sufficiency._anchors(self.BAR, hit, over),
+                             "a mapping onto boilerplate must not anchor")
+            self.assertTrue(sufficiency._anchors(self.BAR, hit, under),
+                            "the same mapping must anchor when distinctive")
+
+    def test_gate_off_restores_the_previous_behavior_exactly(self):
+        import sufficiency
+        with patch.object(sufficiency, "CONCEPT_VOCABULARY_ENABLED", False):
+            self.assertEqual(sufficiency._concept_terms(self.BAR), set())
+            self.assertFalse(sufficiency._anchors(
+                self.BAR, "يشترط الا تنص الشركة على التعامل في الخمر",
+                sufficiency.build_df(["يشترط الا تنص الشركة على التعامل في الخمر"])))
+
+    def test_scope_note_is_per_language_and_falls_back(self):
+        """The disclosure that keeps the re-aimed answer honest. Additive:
+        `scope_note` + `answered_reaimed_question`; no existing field changes."""
+        from answer import scope_note
+        seen = {lang: scope_note(lang) for lang in ("ar", "fr", "en")}
+        self.assertEqual(len(set(seen.values())), 3, seen)
+        for text in seen.values():
+            self.assertGreater(len(text), 30)
+        self.assertEqual(scope_note(None), seen["ar"])
+        self.assertEqual(scope_note("zz"), seen["ar"])
+
+    def test_console_prints_the_scope_note_before_the_answer(self):
+        """Order is the whole point: the live case printed five authoritative
+        claims and only THEN disclosed that the question had been re-aimed."""
+        import io
+        import local_front
+        buf = io.StringIO()
+        body = {"answer": "ادعاء يبدو حاسما.", "scope_note": "تنبيه النطاق.",
+                "answered_reaimed_question": True,
+                "understood_as": "سؤال آخر", "status": "answered"}
+        with patch("sys.stdout", buf):
+            local_front.show_answer(body)
+        out = buf.getvalue()
+        self.assertLess(out.index("تنبيه النطاق."), out.index("ادعاء يبدو حاسما."),
+                        out)
+
+
+class DiagSufficiencyTest(unittest.TestCase):
+    """raglab/diag_sufficiency.py — the probe that exposed why /answer refused
+    TM03/TM04 on the owner's deployment while the offline harness answered them:
+    service.py called sufficiency.check() with no search_fn, and the guided
+    round is guarded by `search_fn is not None`. _verdict is pure; analyse is
+    checked end to end on the real corpus."""
+
+    def _rep(self, served_state, served_rounds, with_state, with_rounds,
+             covered=0, total=1):
+        return {"as_served": {"state": served_state, "missing": ["x"],
+                              "requirements": [{"req": "x",
+                                                "covered": i < covered}
+                                               for i in range(total)],
+                              "guided_rounds": served_rounds},
+                "with_rounds": {"state": with_state, "missing": [],
+                                "guided_rounds": with_rounds}}
+
+    def test_verdict_tracks_whether_the_round_is_actually_wired(self):
+        """The message must state a fact about the INSTALLED service.py, not
+        about the state the text was written in: the owner's 2026-10-05 run
+        printed "service.py passes no search_fn" on a container that had
+        already been rebuilt with the wiring. Both branches are pinned."""
+        import diag_sufficiency as ds
+        rep = self._rep("غير كافٍ", [], "كافٍ",
+                        [{"query": "صرف عمليات", "new_hits": 20}])
+        with patch.object(ds, "deployed_forwards_search_fn", lambda: False):
+            off = "\n".join(ds._verdict(rep))
+        self.assertIn("GUIDED ROUND UNREACHABLE ON /answer", off)
+        self.assertIn("صرف عمليات", off)
+        with patch.object(ds, "deployed_forwards_search_fn", lambda: True):
+            on = "\n".join(ds._verdict(rep))
+        self.assertIn("the round IS wired into /answer", on)
+        self.assertNotIn("UNREACHABLE", on)
+        self.assertIn("كافٍ", on)
+        # unreadable source must degrade to "could not read", never to a claim
+        with patch.object(ds, "deployed_forwards_search_fn", lambda: None):
+            self.assertIn("could not read service.py",
+                          "\n".join(ds._verdict(rep)))
+
+    def test_the_installed_service_forwards_a_search_fn(self):
+        """The probe reads the real file, so pin what it finds here."""
+        import diag_sufficiency as ds
+        self.assertTrue(ds.deployed_forwards_search_fn())
+
+    def test_verdict_says_which_rescue_path_exists(self):
+        """The old line said "the rescue is not what this question needs" —
+        wrong, and the owner's TM04 run proved it: the question WAS rescued, by
+        the interrogation paraphrase (understood_as, 9.636s), not by the round.
+        Which rescue is available depends on the branch service.py takes, so
+        the probe has to name it instead of declaring none exists."""
+        import diag_sufficiency as ds
+        # nothing covered -> the interrogation branch runs, so the PARAPHRASE
+        # is the rescue even though the round does nothing
+        none = "\n".join(ds._verdict(
+            self._rep("غير كافٍ", [], "غير كافٍ", [], covered=0, total=1)))
+        self.assertIn("changes nothing", none)
+        self.assertIn("PARAPHRASE", none)
+        self.assertNotIn("UNREACHABLE", none)
+        self.assertNotIn("not what this question needs", none)
+        # partial coverage -> the interrogation is skipped, so no rescue exists
+        partial = "\n".join(ds._verdict(
+            self._rep("غير كافٍ", [], "غير كافٍ", [], covered=1, total=2)))
+        self.assertIn("changes nothing", partial)
+        self.assertIn("no rescue path exists", partial)
+        self.assertNotIn("PARAPHRASE", partial)
+
+    def test_verdict_redirects_when_the_served_pool_was_fine(self):
+        """A كافٍ pool means the pre-generation gate PASSED. The owner's run
+        printed the old wording ('/answer should NOT have refused') on a
+        question that had in fact been ANSWERED, so the line presumed a failure
+        that had not happened. It must point at the later stages instead —
+        which is exactly where the invalid_output episode actually came from."""
+        import diag_sufficiency as ds
+        notes = "\n".join(ds._verdict(self._rep("كافٍ", [], "كافٍ", [])))
+        self.assertIn("pre-generation gate PASSES", notes)
+        self.assertIn("citation gate", notes)
+        self.assertNotIn("should NOT have refused", notes)
+
+    def test_verdict_distinguishes_the_two_service_branches(self):
+        """`if not covered:` decides whether the interrogation runs at all, so
+        the probe has to report which branch the deployment took."""
+        import diag_sufficiency as ds
+        none = "\n".join(ds._verdict(
+            self._rep("غير كافٍ", [], "غير كافٍ", [], covered=0, total=2)))
+        self.assertIn("interrogation branch", none)
+        partial = "\n".join(ds._verdict(
+            self._rep("غير كافٍ", [], "غير كافٍ", [], covered=1, total=2)))
+        self.assertIn("SKIPPED", partial)
+
+    def test_analyse_reproduces_the_served_asymmetry(self):
+        """The measured asymmetry, on the real corpus: the SAME pool scores
+        غير كافٍ exactly as /answer computes it and كافٍ once a search_fn is
+        passed. This is the finding, not a restatement of it."""
+        import diag_sufficiency as ds
+        import sufficiency
+        from loader import load_all
+        cfg = make_config(CHUNKING_MODE="restructure")
+        texts = [c.text for c in chunker.chunk_all(load_all(DOCS_DIRS), cfg)]
+        question = ds.DEFAULT_QUESTIONS[0]        # the fr cross-script case
+
+        def search(query, k):
+            qt = sufficiency._hit_terms(query)
+            scored = sorted(
+                ((len(qt & sufficiency._hit_terms(t)), i, t)
+                 for i, t in enumerate(texts)
+                 if qt & sufficiency._hit_terms(t)),
+                key=lambda x: (-x[0], x[1]))
+            return [{"id": f"c{i}", "text": t} for _, i, t in scored[:k]]
+
+        decoy = [{"id": "decoy", "text": "نص لا يشترك في شيء"}]
+        rep = ds.analyse(question, texts, decoy, search_fn=search)
+        # exactly what /answer computed: no round, so the refusal stands
+        self.assertEqual(rep["as_served"]["state"], "غير كافٍ")
+        self.assertEqual(rep["as_served"]["guided_rounds"], [])
+        # the same pool with a round reaches the guide's 5.3 change section
+        rounds = rep["with_rounds"]["guided_rounds"]
+        self.assertTrue(rounds)
+        self.assertEqual(rep["with_rounds"]["state"], "كافٍ",
+                         rep["as_served"]["missing"])
+        # the round searched the DECLARED Arabic equivalent, never the French
+        queries = " ".join(r["query"] for r in rounds)
+        self.assertIn("صرف", queries)
+        self.assertNotIn("change", queries)
+        # the probe reports the asymmetry against the INSTALLED service.py,
+        # which does forward a search_fn — so it must not claim unreachable
+        notes = "\n".join(ds._verdict(rep))
+        self.assertIn("the round IS wired into /answer", notes)
+        self.assertNotIn("UNREACHABLE", notes)
+
+
+class InterrogateTest(unittest.TestCase):
+    """The demand-interrogation parser (Phase 8): fail-closed validation of
+    the model's analysis — topics must be verbatim corpus topics, requirements
+    declared kinds, the paraphrase must differ; anything else is None."""
+
+    TOPICS_TEXT = "- (Loi_2016-48.pdf [loi-2016-48:art012]) الفصل 12: مرابحة\n- (Guide.docx) التمويل بصيغة المرابحة"
+
+    def _parse(self, raw, question="can i get a financement to open a pub?"):
+        import interrogate
+        return interrogate.parse_interrogation(raw, question, self.TOPICS_TEXT)
+
+    def test_valid_analysis_parsed(self):
+        out = self._parse('{"classification": "procedural", '
+                          '"nearest_topics": ["التمويل بصيغة المرابحة"], '
+                          '"technical_paraphrase": "ما هي صيغ تمويل المشاريع المتاحة؟", '
+                          '"requirements": ["procedural_evidence"], '
+                          '"confidence": 0.8}')
+        self.assertIsNotNone(out)
+        self.assertEqual(out["topics"], ["التمويل بصيغة المرابحة"])
+        self.assertEqual(out["requirements"], ["procedural_evidence"])
+
+    def test_malformed_json_is_none(self):
+        self.assertIsNone(self._parse("not json at all"))
+        self.assertIsNone(self._parse(""))
+        self.assertIsNone(self._parse("[1,2,3]"))
+
+    def test_invented_topics_and_requirements_filtered(self):
+        out = self._parse('{"nearest_topics": ["Quantum Banking"], '
+                          '"technical_paraphrase": "ما هي صيغ التمويل؟", '
+                          '"requirements": ["lasers", "numeric_evidence"], '
+                          '"confidence": 2}')
+        self.assertIsNotNone(out)
+        self.assertEqual(out["topics"], [])          # invented -> dropped
+        self.assertEqual(out["requirements"], ["numeric_evidence"])
+        self.assertEqual(out["confidence"], 1.0)     # clamped
+
+    def test_topic_validation_is_exact_not_substring(self):
+        out = self._parse('{"nearest_topics": ["Loi_2016-48.pdf"], '
+                          '"technical_paraphrase": "ما هي صيغ التمويل؟"}')
+        self.assertIsNotNone(out)
+        self.assertEqual(out["topics"], [])
+
+    def test_prompt_ids_resolve_to_source_grounded_display_labels(self):
+        import interrogate
+        entries = [{"prompt_id": "t007", "topic_id": "loi-2016-48:art012",
+                    "display": "الفصل 12 — مرابحة",
+                    "document": "Loi_2016-48.pdf"}]
+        raw = ('{"nearest_topic_ids": ["t007", "t00"], '
+               '"technical_paraphrase": "ما هي صيغ التمويل؟"}')
+        out = interrogate.parse_interrogation(raw, "can i get financing?", entries)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["topics"], ["الفصل 12 — مرابحة"])
+        self.assertEqual(out["topic_ids"], ["loi-2016-48:art012"])
+
+    def test_ambiguous_display_requires_an_exact_prompt_id(self):
+        import interrogate
+        entries = [
+            {"prompt_id": "t001", "topic_id": "law:art001",
+             "display": "الفصل 1 — تعريف"},
+            {"prompt_id": "t002", "topic_id": "circular:art001",
+             "display": "الفصل 1 — تعريف"},
+        ]
+        raw = ('{"nearest_topics": ["الفصل 1 — تعريف"], '
+               '"technical_paraphrase": "ما هو التعريف المقصود؟"}')
+        out = interrogate.parse_interrogation(raw, "define it", entries)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["topics"], [])
+
+    def test_identical_paraphrase_is_none(self):
+        self.assertIsNone(self._parse(
+            '{"technical_paraphrase": "can i get a financement to open a pub?"}'))
+
+    def test_paraphrase_bounds(self):
+        self.assertIsNone(self._parse('{"technical_paraphrase": "ok"}'))
+        self.assertIsNone(self._parse(
+            '{"technical_paraphrase": "' + "x" * 301 + '"}'))
+
+    def test_declared_requirements_mirror_the_sufficiency_engine(self):
+        import interrogate
+        import sufficiency
+        self.assertEqual(interrogate.DECLARED_REQUIREMENTS,
+                         tuple(sufficiency.SHAPE_PATTERNS.keys()))
+
+
+class TopicMapTest(unittest.TestCase):
+    """The deterministic, source-grounded corpus topic map (Phase 9)."""
+
+    def test_builds_complete_source_grounded_entries(self):
+        import topic_map
+        from pathlib import Path
+        docs = Path(__file__).resolve().parent.parent / "docs"
+        entries = topic_map.build_topic_map([docs])
+        self.assertGreater(len(entries), 250)
+        law = [e for e in entries if e["kind"] == "law_article"]
+        sections = [e for e in entries if e["kind"] == "section"]
+        circular = [e for e in sections
+                    if e["document"] == "Circulaire_BCT_2019-08.pdf"]
+        guide = [e for e in sections if e["document"].startswith("Guide")]
+        self.assertEqual(len(law), 198)               # every adopted law article
+        self.assertEqual(sum(e["heading"].startswith("الفصل")
+                             for e in circular), 20) # every circular chapter
+        self.assertTrue(all(e.get("unit_id") for e in law))
+        self.assertTrue(all(e.get("path") and e.get("description")
+                            for e in entries))
+        self.assertTrue(all(e.get("topic_id") and e.get("prompt_id")
+                            for e in entries))
+        self.assertEqual(len({e["topic_id"] for e in entries}), len(entries))
+        self.assertFalse(any(e["heading"] == "الفهرس" for e in entries))
+        self.assertTrue(any("المرابحة" in e["heading"] for e in guide))
+        # Bare structural labels are disclosed together with source excerpts.
+        law_article = next(e for e in law if e["unit_id"] == "loi-2016-48:art012")
+        self.assertIn("مرابحة", law_article["description"])
+        self.assertIn("—", law_article["display"])
+        self.assertIn("path", law_article)
+
+    def test_prompt_is_bounded_and_contains_ids_paths_and_source_cues(self):
+        import topic_map
+        from pathlib import Path
+        docs = Path(__file__).resolve().parent.parent / "docs"
+        entries = topic_map.prompt_entries([docs])
+        text = topic_map.render_topic_map(entries)
+        self.assertLessEqual(len(text.splitlines()), topic_map.TOPIC_PROMPT_MAX)
+        self.assertLessEqual(len(text), topic_map.TOPIC_PROMPT_CHAR_MAX)
+        self.assertIn("[t001]", text)
+        self.assertIn("LAW | العنوان الاول > الفصل الاول |", text)
+        self.assertIn("يهدف هذا القانون", text)
+
+    def test_only_documents_in_selected_data_dirs_are_topics(self):
+        import topic_map
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "small.md").write_text(
+                "# Demo\n\n## Fees\n\nOne fee applies.\n", encoding="utf-8")
+            entries = topic_map.build_topic_map([root])
+        self.assertTrue(entries)
+        self.assertTrue(all(e["document"] == "small.md" for e in entries))
+        self.assertFalse(any(e["document"] == "Loi_2016-48.pdf" for e in entries))
+
+    def test_cache_refreshes_when_a_source_document_is_added(self):
+        import topic_map
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "first.md").write_text(
+                "# First\n\n## Fees\n\nFee details.\n", encoding="utf-8")
+            before = topic_map.build_topic_map([root])
+            self.assertEqual({e["document"] for e in before}, {"first.md"})
+            (root / "second.md").write_text(
+                "# Second\n\n## Limits\n\nLimit details.\n", encoding="utf-8")
+            after = topic_map.build_topic_map([root])
+        self.assertEqual({e["document"] for e in after},
+                         {"first.md", "second.md"})
+
+
+class TopicMapLiveProbePlanTest(unittest.TestCase):
+    """The separately maintained low-N map probe uses live catalog IDs only."""
+
+    def test_probe_plan_is_independent_and_all_expected_ids_are_visible(self):
+        import json
+        import topic_map
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent
+        plan = json.loads((root / "audits" / "PHASE9_STRUCTURE"
+                           / "topic_map_live_probes.json").read_text(encoding="utf-8"))
+        self.assertEqual(plan["schema_version"], "phase9-topic-map-live-probes-1.0")
+        self.assertEqual(plan["baseline_commit"],
+                         "965634f966fbcce3c6987d693d38d3d0e8780f06")
+        cases = plan["cases"]
+        self.assertEqual(len(cases), 6)
+        self.assertEqual(len({case["id"] for case in cases}), len(cases))
+        self.assertEqual({case["language"] for case in cases}, {"ar", "fr", "en"})
+        self.assertFalse(any(case["id"].startswith("OWNER-") or
+                             case["id"].startswith("S1-") for case in cases))
+
+        docs = root.parent / "docs"
+        visible_ids = {entry["topic_id"]
+                       for entry in topic_map.prompt_entries([docs])}
+        for case in cases:
+            self.assertTrue(set(case["accepted_topic_ids"]) <= visible_ids,
+                            case["id"])
+        out_of_scope = next(case for case in cases
+                            if case.get("expected_classification") == "non_banking")
+        self.assertEqual(out_of_scope["accepted_topic_ids"], [])
+
+    def test_legacy_topic_mapping_requires_an_exact_unambiguous_source_label(self):
+        import importlib.util
+        from pathlib import Path
+        root = Path(__file__).resolve().parent
+        probe_path = (root / "audits" / "PHASE9_STRUCTURE"
+                      / "run_topic_map_live_probe.py")
+        spec = importlib.util.spec_from_file_location("phase9_live_probe_test", probe_path)
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        legacy = [
+            {"document": "A.pdf", "heading": "Shared heading", "unit_id": None},
+            {"document": "B.pdf", "heading": "Shared heading", "unit_id": None},
+            {"document": "C.pdf", "heading": "Unique heading", "unit_id": None},
+        ]
+        active = [
+            {"document": "A.pdf", "heading": "Shared heading", "topic_id": "a:1"},
+            {"document": "B.pdf", "heading": "Shared heading", "topic_id": "b:1"},
+            {"document": "C.pdf", "heading": "Unique heading", "topic_id": "c:1"},
+        ]
+        result = probe.legacy_selected_ids(
+            ["Unique heading", "heading", "(A.pdf) Shared heading"], legacy, active)
+        self.assertEqual(result["topic_ids"], ["c:1", "a:1"])
+        self.assertEqual(result["unmapped_topics"], ["heading"])
+        self.assertEqual(result["ambiguous_topics"], [])
+        ambiguous = probe.legacy_selected_ids(["Shared heading"], legacy, active)
+        self.assertEqual(ambiguous["topic_ids"], [])
+        self.assertEqual(ambiguous["ambiguous_topics"], ["Shared heading"])
+
+
+class Phase9AnswerProbeDiagnosticsTest(unittest.TestCase):
+    """The six-case end-to-end answer probe is bounded and reportable offline."""
+
+    @staticmethod
+    def _probe():
+        import importlib.util
+        from pathlib import Path
+        root = Path(__file__).resolve().parent
+        path = root / "audits" / "PHASE9_STRUCTURE" / "run_phase9_answer_probe.py"
+        spec = importlib.util.spec_from_file_location("phase9_answer_probe_test", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_live_run_is_blocked_outside_github_actions(self):
+        import os
+        from pathlib import Path
+        import tempfile
+        from unittest.mock import patch
+        probe = self._probe()
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "should-not-be-created.json"
+            with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+                self.assertEqual(probe.run(output=output), 2)
+            self.assertFalse(output.exists())
+
+    def test_top_k_diagnostic_arms_are_bounded_and_explicit(self):
+        probe = self._probe()
+        self.assertEqual(probe.resolve_top_k(5), 5)
+        for value in (5, 12, 20):
+            self.assertEqual(probe.resolve_top_k(5, value), value)
+        for value in (0, 6, 21, "not-a-number"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                probe.resolve_top_k(5, value)
+
+    def test_terminal_stage_distinguishes_gate_refusal_from_empty_generation(self):
+        probe = self._probe()
+        passes = [{"pass": "after_interrogation"}]
+        self.assertEqual(probe._terminal_stage(
+            {"status": "refused", "reason": "evidence_insufficient"}, passes),
+            "sufficiency_after_interrogation")
+        self.assertEqual(probe._terminal_stage(
+            {"status": "refused", "reason": "insufficient_evidence"}, passes),
+            "answer_generation_no_supported_claims")
+
+    def test_existing_report_annotations_can_be_replayed_offline(self):
+        import io
+        import json
+        import tempfile
+        from contextlib import redirect_stdout
+        from pathlib import Path
+        probe = self._probe()
+        report = {"schema_version": "phase9-answer-live-results-1.0",
+                  "model": "test-model", "cases": [{"id": "TM-offline",
+                                                        "answer": "saved answer"}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(probe.emit_existing_report(path), 0)
+        self.assertIn("ANNO| phase9-answer-case |", output.getvalue())
+        self.assertIn("ANNO| phase9-answer-answer |", output.getvalue())
+
+    def test_plan_reuses_the_six_existing_topic_probe_cases(self):
+        from pathlib import Path
+        import json
+        probe = self._probe()
+        plan_path = (Path(__file__).resolve().parent / "audits" / "PHASE9_STRUCTURE"
+                     / "topic_map_live_probes.json")
+        existing = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan = probe.load_plan()
+        self.assertEqual([c["id"] for c in plan["cases"]],
+                         [c["id"] for c in existing["cases"]])
+        self.assertEqual([c["question"] for c in plan["cases"]],
+                         [c["question"] for c in existing["cases"]])
+
+    def test_annotations_split_long_answers_without_truncating_the_text(self):
+        import json
+        probe = self._probe()
+        answer_text = "مرحبا" * 100
+        events = probe.annotations({"cases": [{"id": "TM-long", "answer": answer_text}]})
+        parts = [value for kind, value in events if kind == "answer"]
+        self.assertGreater(len(parts), 1)
+        self.assertEqual("".join(part["text"] for part in parts), answer_text)
+        sizes = [len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+                 for _kind, value in events]
+        self.assertLessEqual(max(sizes), probe.MAX_GITHUB_ANNOTATION_BYTES)
+
+    def test_sufficiency_trace_separates_passes_and_never_keeps_chunk_text(self):
+        from unittest.mock import patch
+        import sufficiency
+        probe = self._probe()
+        original_hit = {
+            "id": "Guide.docx::chunk_0001", "text": "PRIVATE SOURCE TEXT",
+            "metadata": {"source": "Guide.docx", "heading": "Original heading"},
+            "rank": 1, "similarity": 0.82,
+        }
+        paraphrase_hit = {
+            "id": "Guide.docx::chunk_0042", "text": "ANOTHER PRIVATE SOURCE TEXT",
+            "metadata": {"source": "Guide.docx", "heading": "Paraphrase heading"},
+            "rank": 2, "similarity": 0.76,
+        }
+        def fake_check(question, hits, *args, **kwargs):
+            insufficient = question == "original query"
+            return {
+                "state": "غير كافٍ" if insufficient else "كافٍ",
+                "reason": "missing one requirement" if insufficient
+                         else "all requirements covered",
+                "missing": (["wide_evidence", "wide_evidence"] if insufficient else []),
+                "requirements": [{"req": "wide_evidence", "sub_question": None,
+                                  "covered": not insufficient,
+                                  "by": [hits[0]["id"]]}],
+                "guided_rounds": [], "final_pool": hits,
+            }
+        with patch.object(sufficiency, "check", side_effect=fake_check):
+            patched_check = sufficiency.check
+            with probe.SufficiencyPassTrace() as trace:
+                trace.begin_case("TM-test", requested_top_k=5)
+                sufficiency.check("original query", [original_hit])
+                sufficiency.check("paraphrased query", [paraphrase_hit])
+                passes = trace.end_case()
+            self.assertIs(sufficiency.check, patched_check)
+        self.assertEqual([row["pass"] for row in passes],
+                         ["original", "after_interrogation"])
+        self.assertEqual(passes[0]["hits"][0]["document"], "Guide.docx")
+        self.assertEqual(passes[0]["hits"][0]["input_position"], 1)
+        self.assertEqual(passes[0]["hits"][0]["retrieval_rank"], 1)
+        self.assertEqual(passes[1]["sufficiency"]["state"], "كافٍ")
+        self.assertEqual(passes[0]["sufficiency"]["requirements_missing"],
+                         ["wide_evidence"])
+        self.assertNotIn("PRIVATE SOURCE TEXT", str(passes))
+        self.assertNotIn("ANOTHER PRIVATE SOURCE TEXT", str(passes))
+
+    def test_expected_document_hit_is_separate_for_each_retrieval_pass(self):
+        probe = self._probe()
+        passes = probe._enrich_pass_diagnostics([
+            {"pass": "original", "hits": [
+                {"input_position": 1, "retrieval_rank": 1, "document": "Other.pdf"},
+                {"input_position": 2, "retrieval_rank": 14, "document": "Guide.docx"}],
+             "sufficiency": {"state": "غير كافٍ"}},
+            {"pass": "after_interrogation", "hits": [
+                {"rank": 1, "document": "Other.pdf"}],
+             "sufficiency": {"state": "غير كافٍ"}},
+        ], ["Guide.docx"])
+        self.assertTrue(passes[0]["retrieved_target_document_hit"])
+        self.assertEqual(passes[0]["retrieved_target_document_positions"],
+                         {"Guide.docx": 2})
+        self.assertEqual(passes[0]["retrieved_target_document_ranks"],
+                         {"Guide.docx": 14})
+        self.assertFalse(passes[1]["retrieved_target_document_hit"])
+
+    def test_pass_annotations_show_ranked_documents_without_exceeding_limit(self):
+        import json
+        probe = self._probe()
+        document = "Guide_Interne_Operations_Bancaires_Islamiques.docx"
+        hits = [{"rank": index, "document": document,
+                 "heading": "عمليات الصرف والمتاجرة في العملات " * 4,
+                 "chunk_id": f"{document}::chunk_{index:04d}"}
+                for index in range(1, 6)]
+        requirements = [{"requirement": f"requirement_{index}_evidence", "covered": index < 3,
+                         "covering_chunk_ids": [hits[index]["chunk_id"]],
+                         "sub_question": "large question omitted from annotation"}
+                        for index in range(3)]
+        sufficiency = {
+            "state": "غير كافٍ", "reason": "الدليل غير كافٍ لإثبات جميع المتطلبات المطلوبة",
+            "requirements_missing": [f"requirement_{index}" for index in range(8)],
+            "requirements": requirements,
+            "guided_rounds": [{"round": index, "new_hits": [hit["chunk_id"] for hit in hits]}
+                               for index in range(1, 5)],
+        }
+        report = {"model": "test-model", "cases": [{
+            "id": "TM-pass", "question": "fixed probe question",
+            "terminal_stage": "sufficiency_after_interrogation",
+            "retrieved": 5, "retrieval_sufficiency_passes": [
+                {"pass": "original", "requested_top_k": 5,
+                 "input_hit_count": 5, "retrieved_target_document_hit": True,
+                 "retrieved_target_document_ranks": {document: 1},
+                 "sufficiency": sufficiency, "hits": hits},
+                {"pass": "after_interrogation", "requested_top_k": 5,
+                 "input_hit_count": 5, "retrieved_target_document_hit": False,
+                 "retrieved_target_document_ranks": {},
+                 "sufficiency": sufficiency, "hits": hits},
+            ],
+        }]}
+        events = probe.annotations(report)
+        case_event = next(value for kind, value in events if kind == "case")
+        pass_events = [value for kind, value in events if kind == "pass"]
+        sizes = [len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+                 for _kind, value in events]
+        self.assertLessEqual(max(sizes), probe.MAX_GITHUB_ANNOTATION_BYTES)
+        self.assertEqual(len(case_event["retrieval_sufficiency_passes"]), 2)
+        self.assertNotIn("hits", case_event["retrieval_sufficiency_passes"][0])
+        self.assertEqual(case_event["retrieval_sufficiency_passes"][0]
+                         ["retrieved_target_document_ranks"], {document: 1})
+        self.assertEqual(case_event["retrieval_sufficiency_passes"][0]
+                         ["retrieved_target_document_positions"], {document: 1})
+        self.assertEqual(len(pass_events), 2)
+        self.assertEqual(pass_events[0]["hits"][3]["input_position"], 4)
+        self.assertEqual(pass_events[0]["hits"][3]["retrieval_rank"], 4)
+        self.assertEqual(pass_events[0]["requirements"][0]["covering_chunk_ids"],
+                         [hits[0]["chunk_id"]])
+        self.assertEqual(pass_events[0]["guided_rounds"][0]["new_hit_count"], 5)
+
+    def test_summary_distinguishes_cited_documents_from_retrieval_hits(self):
+        probe = self._probe()
+        report = {"cases": [
+            {"http_status": 200, "status": "answered", "validation_ok": True,
+             "expected_documents": ["Guide.docx"],
+             "citation_target_document_hit": False,
+             "retrieval_sufficiency_passes": [{
+                 "pass": "original", "retrieved_target_document_hit": True}],
+             "expected_out_of_scope_refusal": False,
+             "out_of_scope_refusal_match": None,
+             "chat_calls": [{"kind": "answer_generation"}]},
+            {"http_status": 200, "status": "refused", "validation_ok": True,
+             "expected_documents": [], "citation_target_document_hit": None,
+             "retrieval_sufficiency_passes": [{
+                 "pass": "original", "retrieved_target_document_hit": None}],
+             "expected_out_of_scope_refusal": True,
+             "out_of_scope_refusal_match": True,
+             "chat_calls": [{"kind": "interrogation"}]},
+        ]}
+        summary = probe.summarize(report)
+        self.assertEqual(summary["validated_answers"], 1)
+        self.assertEqual(summary["citation_target_document_hits"], 0)
+        self.assertEqual(summary["retrieved_expected_document_hits_by_pass"]["original"], {
+            "observed_cases": 2, "eligible_cases": 1,
+            "retrieved_expected_document_hits": 1, "hit_rate": 1.0})
+        self.assertEqual(summary["out_of_scope_refusal_matches"], 1)
+        self.assertEqual(summary["chat_calls_by_kind"],
+                         {"answer_generation": 1, "interrogation": 1})
+        self.assertEqual(summary["provider_or_http_errors"], 0)
+
+    def test_annotation_exposes_final_answer_and_citation_quote(self):
+        import json
+        probe = self._probe()
+        report = {
+            "model": "qwen/qwen3.8-max:free",
+            "max_logical_chat_calls": 18,
+            "free_price_verification": {"verified": True},
+            "profile": {"chunking": {"mode": "restructure"}},
+            "summary": {"cases": 1},
+            "cases": [{
+                "id": "TM-test", "question": "What is asked?",
+                "http_status": 200, "status": "answered", "reason": "supported",
+                "language_actual": "en", "validation_ok": True,
+                "evidence_status": "كافٍ", "retrieved": 2,
+                "terminal_stage": "answer_generation_and_citation_gate",
+                "retrieval_sufficiency_passes": [{
+                    "pass": "original", "requested_top_k": 5,
+                    "input_hit_count": 2, "retrieved_target_document_hit": True,
+                    "retrieved_target_document_ranks": {"Guide.docx": 2},
+                    "sufficiency": {"state": "كافٍ", "reason": "covered",
+                                    "requirements_missing": [],
+                                    "requirements": [],
+                                    "guided_rounds": [], "final_pool_count": 2},
+                    "hits": [{"rank": 1, "document": "Other.docx",
+                              "heading": "Other section", "chunk_id": "other::1"},
+                             {"rank": 2, "document": "Guide.docx",
+                              "heading": "Section 1", "chunk_id": "guide::2"}],
+                }],
+                "sources": [{"source_id": "S1", "document": "Guide.docx",
+                             "heading": "Section 1", "unit_id": None}],
+                "expected_documents": ["Guide.docx"],
+                "requirements_missing": ["definition_or_purpose_unit"],
+                "citation_target_document_hit": True,
+                "interrogation": {"classification": "definitional",
+                                  "topics": ["Topic"], "requirements": [],
+                                  "confidence": 0.8},
+                "interrogation_topic_hit": True,
+                "understood_as": "Explain the topic from the guide.",
+                "answer": "A grounded answer [S1]",
+                "claims": [{"text": "A grounded answer.", "evidence": [
+                    {"source_id": "S1", "document": "Guide.docx",
+                     "heading": "Section 1", "quote": "Verbatim evidence quote."}]}],
+                "expected_out_of_scope_refusal": False,
+                "out_of_scope_refusal_match": None,
+                "chat_call_counts": {"answer_generation": 1},
+            }],
+        }
+        import io
+        from contextlib import redirect_stdout
+        output = io.StringIO()
+        with redirect_stdout(output):
+            probe._emit_annotations(report)
+        rendered = []
+        for line in output.getvalue().splitlines():
+            prefix, encoded = line.split(" | ", 1)
+            rendered.append((prefix.rsplit("-", 1)[-1], json.loads(encoded)))
+        summary = next(value for kind, value in rendered if kind == "summary")
+        case = next(value for kind, value in rendered if kind == "case")
+        answer = next(value for kind, value in rendered if kind == "answer")
+        evidence = next(value for kind, value in rendered if kind == "evidence")
+        pass_event = next(value for kind, value in rendered if kind == "pass")
+        self.assertEqual(summary["max_logical_chat_calls"], 18)
+        self.assertEqual(case["id"], "TM-test")
+        self.assertEqual(case["expected_documents"], ["Guide.docx"])
+        self.assertEqual(case["requirements_missing"], ["definition_or_purpose_unit"])
+        self.assertEqual(case["terminal_stage"], "answer_generation_and_citation_gate")
+        self.assertTrue(case["retrieval_sufficiency_passes"][0]
+                        ["retrieved_target_document_hit"])
+        self.assertNotIn("hits", case["retrieval_sufficiency_passes"][0])
+        self.assertEqual(pass_event["pass"], "original")
+        self.assertEqual(pass_event["hits"][1]["input_position"], 2)
+        self.assertEqual(pass_event["hits"][1]["retrieval_rank"], 2)
+        self.assertEqual(answer["text"], "A grounded answer [S1]")
+        self.assertEqual(evidence["evidence"][0]["quote"],
+                         "Verbatim evidence quote.")
+        self.assertEqual(case["interrogation"]["understood_as"],
+                         "Explain the topic from the guide.")
+
+
+class ModelsProbeTest(unittest.TestCase):
+    """The read-only free-model probe (xKiro / NVIDIA / Google): honest
+    per-provider semantics, fail-closed free detection, bounded reads, and
+    no key material ever reaches the report."""
+
+    def _opener(self, payloads):
+        import json as _json
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+            def read(self, n):
+                return _json.dumps(self.payload).encode()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        class FakeOpener:
+            def __init__(self):
+                self.urls = []
+            def open(self, req, timeout=None):
+                self.urls.append(req.full_url)
+                for frag, payload in payloads.items():
+                    if frag in req.full_url:
+                        return FakeResponse(payload)
+                raise OSError("unexpected url")
+
+        return FakeOpener()
+
+    def test_missing_key_is_a_status_not_a_crash(self):
+        import models_probe
+        row = models_probe.probe_provider("nvidia", opener=self._opener({}))
+        self.assertEqual(row["status"], "missing_key")
+        self.assertIn("NVIDIA_API_KEY", row["hint"])
+
+    def test_xkiro_verified_free_requires_tier_and_zero_prices(self):
+        import models_probe
+        catalog = {"data": [
+            {"id": "qwen3.8-max", "access_tier": "free",
+             "pricing": {"currency": "USD", "input": 0, "output": 0,
+                         "cache_read": 0}},
+            {"id": "paid-sibling", "access_tier": "paid",
+             "pricing": {"currency": "USD", "input": 0.002, "output": 0.006}},
+            {"id": "free-tier-nonzero-price", "access_tier": "free",
+             "pricing": {"currency": "USD", "input": 0, "output": 0.001}}]}
+        opener = self._opener({"api.xkiro.com": catalog})
+        with patch.dict(os.environ, {"XKIRO_API_KEY": "secret-1"}):
+            row = models_probe.probe_provider("xkiro", opener=opener)
+        self.assertEqual(row["status"], "listed")
+        self.assertEqual(row["verified_free"], ["qwen3.8-max"])  # fail closed
+        self.assertNotIn("secret-1", str(row))
+
+    def test_nvidia_lists_visibility_only_never_free(self):
+        import models_probe
+        opener = self._opener({"integrate.api.nvidia.com":
+                               {"data": [{"id": "qwen/qwen3-235b-a22b-instruct"}]}})
+        with patch.dict(os.environ, {"NVIDIA_API_KEY": "secret-2"}):
+            row = models_probe.probe_provider("nvidia", opener=opener)
+        self.assertEqual(row["status"], "listed")
+        self.assertEqual(row["model_ids"], ["qwen/qwen3-235b-a22b-instruct"])
+        self.assertNotIn("verified_free", row)   # pricing is not in that catalog
+        self.assertIn("visibility only", row["free_note"])
+
+    def test_google_filters_chat_capable_models(self):
+        import models_probe
+        catalog = {"models": [
+            {"name": "models/gemini-3.1-flash-lite",
+             "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/text-embedding-004",
+             "supportedGenerationMethods": ["embedContent"]}]}
+        opener = self._opener({"generativelanguage": catalog})
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "secret-3"}):
+            row = models_probe.probe_provider("google", opener=opener)
+        self.assertEqual(row["status"], "listed")
+        self.assertEqual(row["chat_capable_models"], ["gemini-3.1-flash-lite"])
+        self.assertNotIn("verified_free", row)
+
+    def test_http_error_reported_without_body(self):
+        import urllib.error
+        import models_probe
+
+        class BoomOpener:
+            def open(self, req, timeout=None):
+                raise urllib.error.HTTPError(
+                    req.full_url, 401, "unauthorized", {}, None)
+
+        with patch.dict(os.environ, {"XKIRO_API_KEY": "secret-4"}):
+            row = models_probe.probe_provider("xkiro", opener=BoomOpener())
+        self.assertEqual(row["status"], "http_error")
+        self.assertEqual(row["error_type"], "HTTPError")
+        self.assertNotIn("secret-4", str(row))
+
+    def test_collect_covers_all_three_providers_read_only(self):
+        import models_probe
+        report = models_probe.collect(opener=self._opener({}))
+        self.assertEqual([r["provider"] for r in report["providers"]],
+                         ["xkiro", "nvidia", "google"])
+        self.assertEqual(report["inference_calls"], 0)
+        self.assertFalse(report["documents_sent"])
+
+
+class MicroRetrievalTest(unittest.TestCase):
+    """Experiment 3: per-micro retrieval & fusion behind
+    PER_MICRO_RETRIEVAL_ENABLED (default OFF). Fusion is reciprocal-rank
+    over the per-micro pools, deduplicated, deterministic, with per-micro
+    provenance (micro_ranks) attached additively."""
+
+    @staticmethod
+    def _pool(prefix, ids):
+        return [{"id": f"{prefix}{i}", "rank": r, "text": f"text {i}",
+                 "metadata": {"document": "Loi_2016-48.pdf"}}
+                for r, i in enumerate(ids, start=1)]
+
+    def test_fusion_rrf_order_and_dedup(self):
+        import micro_retrieval as M
+        a = self._pool("x", ["p1", "p2", "p3"])      # ranks 1,2,3
+        b = self._pool("x", ["p2", "p4", "p1"])      # ranks 1,2,3
+        fused = M.fuse_micro_pools([a, b], k=10)
+        # p1: 1/61 + 1/63 ; p2: 1/62 + 1/61 ; p3: 1/63 ; p4: 1/62
+        self.assertEqual([h["id"] for h in fused][:2], ["xp2", "xp1"])
+        self.assertEqual(len(fused), 4)               # deduplicated
+        self.assertEqual([h["rank"] for h in fused], [1, 2, 3, 4])
+        # deterministic: same pools, same output
+        self.assertEqual(fused, M.fuse_micro_pools([a, b], k=10))
+
+    def test_fusion_respects_k(self):
+        import micro_retrieval as M
+        pools = [self._pool("x", [f"p{i}" for i in range(1, 8)])]
+        self.assertEqual(len(M.fuse_micro_pools(pools, k=3)), 3)
+
+    def test_micro_questions_capped_and_ordered(self):
+        import micro_retrieval as M
+        q = ("ما قيمة غرامة التأخير اليومية عن عدم تقديم الوثائق المطلوبة، "
+             "ومن يحدد مبلغها النهائية؟")
+        micros = M.micro_questions(q)
+        self.assertGreaterEqual(len(micros), 3)       # main + 2 sub-plans
+        self.assertLessEqual(len(micros), M.MICROS_MAX)
+        # main micros first
+        self.assertTrue(all(m["source_kind"] == "main"
+                            for m in micros[:1]))
+        # every micro carries its intent + requirement + answerable surfaces
+        for m in micros:
+            self.assertTrue(m["intent_type"])
+            self.assertTrue(m["requirement"])
+            self.assertTrue(m["answerable_from"])
+
+    def test_gate_wiring_delegates_per_micro(self):
+        import micro_retrieval as M
+        from types import SimpleNamespace
+        calls = {"n": 0}
+
+        def fake_retrieve(cfg, embedder, collection, text, **kw):
+            calls["n"] += 1
+            ids = ["a1", "a2"] if "العقوبة" in text else ["b1", "b2"]
+            return self._pool("", ids), [{"label": "ar(original)", "lang": "ar",
+                                          "translated": False, "text": text}]
+
+        cfg = SimpleNamespace(PER_MICRO_RETRIEVAL_ENABLED=True)
+        q = "ما العقوبة على مخالفة أحكام القانون، وما قيمة الغرامة بالدينار؟"
+        micros = M.micro_questions(q)
+        with patch("retrieval.retrieve", side_effect=fake_retrieve):
+            hits, variants = M.retrieve_micro(cfg, None, None, q, top_k=5)
+        # one retrieve call per micro
+        self.assertEqual(calls["n"], len(micros))
+        # fused: hits from BOTH micro pools present, with provenance
+        ids = {h["id"] for h in hits}
+        self.assertTrue({"a1", "b1"} <= ids)
+        prov = [h for h in hits if h.get("metadata", {}).get("micro_ranks")]
+        self.assertTrue(prov)
+        # the main question's variants are the outer contract
+        self.assertEqual(variants[0]["lang"], "ar")
+
+    def test_single_micro_short_circuits_to_plain(self):
+        import micro_retrieval as M
+        from types import SimpleNamespace
+        calls = {"n": 0}
+
+        def fake_retrieve(cfg, embedder, collection, text, **kw):
+            calls["n"] += 1
+            return self._pool("", ["s1"]), []
+
+        cfg = SimpleNamespace(PER_MICRO_RETRIEVAL_ENABLED=True)
+        with patch("retrieval.retrieve", side_effect=fake_retrieve):
+            hits, _ = M.retrieve_micro(cfg, None, None,
+                                       "ما هي عملية المرابحة؟", top_k=5)
+        self.assertEqual(calls["n"], 1)               # plain path, no fusion
+        self.assertEqual(hits[0]["id"], "s1")
+
+    def test_gate_default_off(self):
+        import config
+        self.assertFalse(config.PER_MICRO_RETRIEVAL_ENABLED)
+
+
+class CitationGateExpansion(unittest.TestCase):
+    """Phase-6 item 1: stable unit ids on sources + the deterministic
+    expansion of the citation gate — a cited source must be actually
+    retrieved (by construction), ALLOWED (its document is in the deployed
+    corpus set, passed by the caller — never assumed) and IN FORCE
+    (gov_status == نافذ where the axis is registered; deferred documents
+    carry no status claim and pass unflagged)."""
+
+    @staticmethod
+    def _hit(doc="Loi_2016-48.pdf", heading="الفصل52", gov=None, hid="h1"):
+        meta = {"document": doc, "source": doc, "language": "ar",
+                "heading": heading}
+        if gov:
+            meta["gov_status"] = gov
+        return {"id": hid, "text": "نص الفصل 52 ينص على أحكام معينة",
+                "metadata": meta}
+
+    def test_resolve_unit_id_stable(self):
+        import answer
+        self.assertEqual(answer.resolve_unit_id("Loi_2016-48.pdf", "الفصل52"),
+                         "loi-2016-48:art052")
+        # untyped documents / unknown headings -> None (never invented)
+        self.assertIsNone(answer.resolve_unit_id("Guide_Interne_x.docx", "2.1-"))
+        self.assertIsNone(answer.resolve_unit_id("Loi_2016-48.pdf", "لا-فصل"))
+        self.assertIsNone(answer.resolve_unit_id(None, "الفصل52"))
+
+    def test_build_sources_carries_unit_id_and_status(self):
+        import answer
+        law = self._hit(gov="نافذ")
+        other = self._hit(doc="Guide_Interne_Operations_Bancaires_Islamiques.docx",
+                          heading="2.1- عملية التمويل بصيغة المرابحة", hid="h2")
+        sources = answer.build_sources([law, other], 3000)
+        by_doc = {s["document"]: s for s in sources}
+        self.assertEqual(by_doc["Loi_2016-48.pdf"]["unit_id"],
+                         "loi-2016-48:art052")
+        self.assertEqual(by_doc["Loi_2016-48.pdf"]["gov_status"], "نافذ")
+        self.assertNotIn("unit_id", by_doc[
+            "Guide_Interne_Operations_Bancaires_Islamiques.docx"])
+        self.assertNotIn("gov_status", by_doc[
+            "Guide_Interne_Operations_Bancaires_Islamiques.docx"])
+
+    def _validated(self, output, sources, allowed=None):
+        import answer
+        return answer.validate_answer(output, sources,
+                                      allowed_documents=allowed)
+
+    def test_gate_rejects_document_outside_the_corpus(self):
+        import answer
+        hit = self._hit(doc="Phantom_Doc.pdf", heading="")
+        sources = answer.build_sources([hit], 3000)
+        out = {"answerable": True, "claims": [
+            {"text": "claim", "evidence": [
+                {"source_id": "S1", "quote": sources[0]["text"][:40]}]}]}
+        # allowed corpus set does not contain Phantom_Doc.pdf -> refused
+        with self.assertRaises(ValueError):
+            self._validated(out, sources, allowed={"Loi_2016-48.pdf"})
+        # with the right allowlist it passes (quote membership still enforced)
+
+    def test_gate_rejects_document_not_in_force(self):
+        import answer
+        hit = self._hit(gov="ملغى")     # registered axis, not نافذ
+        sources = answer.build_sources([hit], 3000)
+        out = {"answerable": True, "claims": [
+            {"text": "claim", "evidence": [
+                {"source_id": "S1", "quote": sources[0]["text"][:40]}]}]}
+        with self.assertRaises(ValueError):
+            self._validated(out, sources, allowed={"Loi_2016-48.pdf"})
+        # نافذ passes; no axis (deferred doc) passes unflagged
+        ok = answer.build_sources([self._hit(gov="نافذ")], 3000)
+        self._validated(out, {**out, "claims": [{"text": "claim", "evidence": [
+            {"source_id": "S1", "quote": ok[0]["text"][:40]}]}]} and [
+            {"source_id": "S1", "chunk_id": "h1", "document": "Loi_2016-48.pdf",
+             "heading": "الفصل52", "text": ok[0]["text"], "gov_status": "نافذ"}],
+            allowed={"Loi_2016-48.pdf"})
+        deferred = answer.build_sources([
+            self._hit(doc="Madkhal_Sayrafa_Islamiya.docx", heading="ب-")], 3000)
+        self._validated(
+            {"answerable": True, "claims": [{"text": "claim", "evidence": [
+                {"source_id": "S1", "quote": deferred[0]["text"][:40]}]}]},
+            deferred, allowed={"Madkhal_Sayrafa_Islamiya.docx"})
+
+    def test_policy_declared(self):
+        import answer
+        self.assertEqual(answer.CITATION_GATE_POLICY["required_status"], "نافذ")
+        self.assertIn("registered", answer.CITATION_GATE_POLICY["status_check"])
+
+
+class AuditTrail(unittest.TestCase):
+    """Phase-6 item 3: bounded, PII-safe request audit trail (JSONL)."""
+
+    def test_record_recent_roundtrip_and_defaults(self):
+        import audit
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "audit_log.jsonl"
+            row = audit.record(path, {"endpoint": "/answer",
+                                      "question": "سؤال اختبار",
+                                      "status": "answered"})
+            self.assertEqual(len(row["trace_id"]), 12)
+            self.assertIn("T", row["ts"])
+            rows = audit.recent(path, 10)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["question"], "سؤال اختبار")
+
+    def test_retention_trims_oldest(self):
+        import audit
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "audit_log.jsonl"
+            saved = audit.RETENTION_MAX_ENTRIES
+            try:
+                audit.RETENTION_MAX_ENTRIES = 3
+                for i in range(5):
+                    audit.record(path, {"endpoint": "/answer",
+                                        "question": f"q{i}", "status": "ok"})
+                rows = audit.recent(path, 10)
+                self.assertEqual(len(rows), 3)
+                self.assertEqual([r["question"] for r in rows],
+                                 ["q4", "q3", "q2"])   # newest first
+            finally:
+                audit.RETENTION_MAX_ENTRIES = saved
+
+    def test_torn_line_tolerated_and_schema_bounded(self):
+        import audit
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "audit_log.jsonl"
+            path.write_text('{"trace_id": "abc", "endpoint": "/answer"\n'
+                            '{"trace_id": "def", "endpoint": "/answer"}\n',
+                            encoding="utf-8")
+            rows = audit.recent(path, 10)
+            self.assertEqual(len(rows), 1)      # the torn line is skipped
+            self.assertTrue(set(rows[0]) <= set(audit.ENTRY_FIELDS))
+
+
+class DecompositionCheck(unittest.TestCase):
+    """Phase-5 item 6 (owner directive 2026-10-01): the intermediate
+    decomposition layer — EVERY question becomes micro-questions, each with
+    its intent, its ONE requirement (from the item-2 plan), and the Phase-4
+    answerable surfaces (live counts); influential ambiguity generates
+    advisory clarifications. Read-only layer; INTENT_RULES and
+    DERIVATION_RULES consumed as-is."""
+
+    Q50 = "ما هي عملية التمويل بالمرابحة على معنى منشور البنك المركزي التونسي؟"
+    Q_PENALTY = "ما العقوبة الجزائية لممارسة العمليات البنكية خلافا لأحكام القانون عدد 48 لسنة 2016؟"
+    Q_COMPOUND = ("ما قيمة غرامة التأخير اليومية عن عدم تقديم الوثائق المطلوبة، "
+                  "ومن يحدد مبلغها النهائية؟")
+    Q_COMPARE = ("قارن بين صيغتي المضاربة من حيث حرية البنك في استثمار أموال "
+                 "الحريف وعائد الحريف")
+
+    def test_subject_extraction_declared_rules(self):
+        import decompose as D
+        self.assertEqual(D.extract_subject(self.Q50), "عملية التمويل بالمرابحة")
+        # scope clause (خلافا لأحكام القانون...) stripped
+        subj = D.extract_subject(self.Q_PENALTY)
+        self.assertTrue(subj.startswith("العقوبة الجزائية"))
+        self.assertNotIn("القانون", subj)
+        # never empty — fallback keeps the text minus the question mark
+        self.assertTrue(D.extract_subject("كيف؟").strip())
+
+    def test_simple_question_one_micro_with_live_surfaces(self):
+        import decompose as D
+        d = D.decompose(self.Q50)
+        self.assertEqual(d["intent_type"], "تعريفي")
+        self.assertEqual(len(d["micro_questions"]), 1)
+        m = d["micro_questions"][0]
+        self.assertEqual(m["requirement"], "definition_or_purpose_unit")
+        self.assertIn("عملية التمويل بالمرابحة", m["text"])   # faithful subject
+        # the answerable surface carries the LIVE catalog count (28 definitions)
+        self.assertTrue(any("definition (28)" in s for s in m["answerable_from"]))
+
+    def test_penalty_question_two_micros_bijection(self):
+        import decompose as D
+        d = D.decompose(self.Q_PENALTY)
+        reqs = [m["requirement"] for m in d["micro_questions"]]
+        self.assertEqual(reqs, ["penalty_unit", "with_governing_rule"])
+        self.assertTrue(all(m["answerable_from"] for m in d["micro_questions"]))
+        self.assertTrue(any("penalty (7)" in s for m in d["micro_questions"]
+                            for s in m["answerable_from"]))
+
+    def test_compound_decomposition_per_sub_question(self):
+        import decompose as D
+        d = D.decompose(self.Q_COMPOUND)
+        self.assertGreaterEqual(len(d["micro_questions"]), 4)
+        subs = {m["sub_question_index"] for m in d["micro_questions"]}
+        self.assertIn(1, subs)
+        self.assertIn(2, subs)
+        # the numeric sub-question asks for the structured-numbers surface
+        numeric = [m for m in d["micro_questions"]
+                   if m["requirement"] == "numeric_evidence"]
+        self.assertTrue(numeric)
+        self.assertTrue(any("53" in s for s in numeric[0]["answerable_from"]))
+
+    def test_comparison_decomposes_by_aspect(self):
+        import decompose as D
+        d = D.decompose(self.Q_COMPARE)
+        aspect_micros = [m for m in d["micro_questions"] if m.get("aspect")]
+        self.assertEqual(len(aspect_micros), 2)
+        self.assertEqual({m["aspect"] for m in aspect_micros},
+                         {"حرية البنك في استثمار أموال الحريف", "عائد الحريف"})
+        self.assertTrue(all(m["requirement"] == "both_sides_evidence"
+                            for m in aspect_micros))
+        self.assertTrue(all("صيغتي المضاربة" in m["text"] for m in aspect_micros))
+
+    def test_ambiguity_generates_advisory_clarification(self):
+        import decompose as D
+        d = D.decompose(self.Q_COMPARE)
+        self.assertIn("المضاربة", d["ambiguous_concepts"])
+        self.assertTrue(d["clarifications"])
+        self.assertIn("المضاربة", d["clarifications"][0])
+        # advisory: the decomposition still proceeds
+        self.assertTrue(d["micro_questions"])
+
+    def test_oos_question_still_decomposes(self):
+        # understanding does not need evidence: an OOS question decomposes,
+        # its requirements carry the answerable surfaces, and the EVIDENCE
+        # layer (sufficiency) is what reports absence
+        import decompose as D
+        d = D.decompose("ما هو سعر سهم شركة تسلا اليوم في بورصة نيويورك؟")
+        self.assertTrue(d["micro_questions"])
+        self.assertTrue(all(m["answerable_from"] for m in d["micro_questions"]))
+
+    def test_determinism_same_input_same_output(self):
+        import decompose as D
+        a = D.decompose(self.Q_COMPOUND)
+        b = D.decompose(self.Q_COMPOUND)
+        self.assertEqual(a, b)
+
+    def test_measure_contract_on_adopted_sets(self):
+        import decompose as D
+        for name in ("questions_50.json", "questions_targets.json"):
+            cases = json.loads((Path(__file__).parent / name)
+                               .read_text(encoding="utf-8"))["cases"]
+            m = D.measure(cases)
+            self.assertEqual(m["decomposed"], m["n"], name)
+            self.assertEqual(m["bijection_violations"], 0, name)
+            self.assertEqual(m["empty_surface_micros"], 0, name)
+            self.assertEqual(m["ambiguous_without_clarification"], 0, name)
+
+    def test_inert_layer_no_deployed_execution(self):
+        """decompose executes in the deployed path ONLY inside the
+        ANSWER_SUFFICIENCY_COMMITMENT gate (Phase-6 item 2 — the partial
+        regeneration and the referral are built from its micro-questions);
+        never on the default path."""
+        import subprocess
+        for f in ["main.py", "retrieval.py", "store.py", "answer.py",
+                  "answer_ab.py", "chat.py"]:
+            out = subprocess.run(
+                ["grep", "-nE", "import decompose|decompose\.", f],
+                capture_output=True, text=True)
+            self.assertEqual(out.returncode, 1,
+                             f"{f} executes decompose in the deployed path")
+        # service.py: every reference is inside the gated callback (the
+        # commitment branches — indented deeper than any top-level code)
+        out = subprocess.run(
+            ["grep", "-nE", "import decompose|decompose\.", "service.py"],
+            capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, "service.py lost its gated use")
+        refs = [l for l in out.stdout.splitlines() if l.strip()]
+        self.assertGreaterEqual(len(refs), 2)
+        for line in refs:
+            code = line.split(":", 1)[1]
+            self.assertGreaterEqual(len(code) - len(code.lstrip()), 12,
+                                    "decompose reference outside the gate: " + line)
+
+
+class SufficiencyCheck(unittest.TestCase):
+    """Phase-5 item 4: deterministic sufficiency & conflict — coverage of the
+    item-2 evidence plan against the RETRIEVED pool (requirement by
+    requirement), declared adjustable precedence, the four explicit states
+    (كافٍ/غير كافٍ/متعارض/غير محسوم), bounded guided rounds, and refusal tied
+    to evidence absence (never classification failure). Read-only layer."""
+
+    @staticmethod
+    def _hit(text, doc="Guide_Interne_Operations_Bancaires_Islamiques.docx",
+             heading="", hid="h1"):
+        return {"id": hid, "text": text, "keyword_score": 1.0, "rank": 1,
+                "metadata": {"document": doc, "source": doc, "language": "ar",
+                             "heading": heading}}
+
+    def test_anchor_bar_relative_and_junk_excluded(self):
+        import sufficiency as S
+        # long question: the bar caps at AR_ANCHOR_MIN
+        q = ("ما الصيغة التي يشارك فيها العميل بخبرته وإدارته فقط دون أن "
+             "يدفع رأس مال")
+        self.assertEqual(S._anchor_bar(q), S.AR_ANCHOR_MIN)
+        # two-term question: ceil(0.6*2)=2
+        self.assertEqual(S._anchor_bar("من يتحمل الخسائر؟"), 2)
+        # «يها» residue (فيها minus ف) is junk — never a question term
+        self.assertNotIn("يها", S.question_terms("كيف ينظر إلى النقد فيها؟"))
+
+    def test_cross_anchor_df_checked_digits(self):
+        import sufficiency as S
+        df = {"48": 240, "2016": 240, "2019": 13, "مرابحة": 16}
+        q = "According to BCT circular 80/2019, who gives the order to purchase?"
+        self.assertTrue(S._is_cross_script(q))
+        # header digits (df=240) carry no signal — no anchor
+        header = "الفصل 1 من القانون عدد 48 لسنة 2016"
+        self.assertFalse(S._anchors(q, header, df))
+        # specific rare terms anchor (>= CROSS_ANCHOR_MIN distinctive)
+        good = "يتولى البنك الشراء بمقتضى المنشور عدد 80 لسنة 2019"
+        self.assertTrue(S._anchors(q, good, df))
+
+    def test_mixed_script_question_uses_cross_rules(self):
+        import sufficiency as S
+        q = "Under the BCT circular, the investment-deposit mudaraba (المضاربة)"
+        self.assertTrue(S._is_cross_script(q))   # 1 Arabic token <= MIXED_AR_MAX
+
+    def test_sufficient_and_insufficient_states(self):
+        import sufficiency as S
+        # covered definition question -> كافٍ
+        q = "ما هي عملية التمويل بالمرابحة على معنى منشور البنك المركزي التونسي؟"
+        hit = self._hit("تعتبر عملية التمويل بالمرابحة على معنى منشور البنك "
+                        "المركزي التونسي عملية تمويل حيث يشتري البنك المرابحة",
+                        doc="Circulaire_BCT_2019-08.pdf")
+        res = S.check(q, [hit])
+        self.assertEqual(res["state"], "كافٍ")
+        self.assertTrue(all(r["covered"] for r in res["requirements"]))
+        # nothing anchors -> غير كافٍ, refusal names the missing requirement
+        oos = "ما هو سعر سهم شركة تسلا اليوم في بورصة نيويورك؟"
+        res2 = S.check(oos, [hit])
+        self.assertEqual(res2["state"], "غير كافٍ")
+        self.assertTrue(res2["reason"].startswith("evidence absent"))
+        self.assertIn(res2["missing"][0], res2["reason"])
+        # refusal is tied to evidence absence, never to the intent label
+        self.assertNotIn(res2["intent_type"], res2["reason"])
+
+    def test_conflict_resolved_by_precedence_and_adjustable(self):
+        import sufficiency as S
+        import legal_numbers
+        row = legal_numbers.CIRCULAIRE_CORRECTIONS[3]   # القانون 48-2016 topic
+        q = "ما القانون عدد 48 لسنة 2016 والمنشور حول الاعتمادات الاسلامية؟"
+        circ = self._hit("القانون عدد 19 لسنة6142 المؤرخ في 44 جويلية 6142 "
+                         "الاعتمادات الاسلامية",
+                         doc="Circulaire_BCT_2019-08.pdf", hid="c1")
+        loi = self._hit("القانون عدد 48 لسنة 2016 المؤرخ في 11 جويلية 2016 "
+                        "الاعتمادات الاسلامية",
+                        doc="Loi_2016-48.pdf", hid="l1")
+        self.assertTrue(S._anchors(q, circ["text"], None))
+        self.assertTrue(S._anchors(q, loi["text"], None))
+        conflicts = S.detect_conflicts([circ, loi])
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["resolution"], S._CONFLICT_RESOLVED)
+        # declared order: the law (rank 1) wins — official evidence
+        self.assertEqual(conflicts[0]["winning_text"], "official_evidence")
+        # the table is ADJUSTABLE: flip the two levels and the winner flips
+        saved = dict(S.PRECEDENCE)
+        try:
+            S.PRECEDENCE["Circulaire_BCT_2019-08.pdf"] = 1
+            S.PRECEDENCE["Loi_2016-48.pdf"] = 2
+            flipped = S.detect_conflicts([circ, loi])
+            self.assertEqual(flipped[0]["winning_text"], "raw_form")
+        finally:
+            S.PRECEDENCE.clear()
+            S.PRECEDENCE.update(saved)
+        # an unranked document -> unresolvable -> غير محسوم at check level
+        unknown = self._hit(circ["text"], doc="Unknown_Doc.pdf", hid="u1")
+        res = S.check(q, [loi, unknown])
+        self.assertEqual(res["state"], "غير محسوم")
+
+    def test_guided_rounds_bounded_and_rescuing(self):
+        import sufficiency as S
+        q = "ما هي شروط التمويل بالمشاركة حسب الدليل الداخلي للبنك؟"
+        weak = self._hit("البنك يقدم خدمات مالية للحرفاء داخل الفرع",
+                         hid="w1")
+        # gold evidence carries the rare term the first pool lacks
+        gold = self._hit("التمويل بالمشاركة تعني حسب الدليل الداخلي للبنك "
+                         "اتفاق الطرفين على حصص المشاركة ونسبتها",
+                         hid="g1")
+        calls = {"n": 0}
+
+        def search_fn(query, k):
+            calls["n"] += 1
+            return [dict(gold)] if "مشاركة" in query else []
+
+        res = S.check(q, [weak], search_fn=search_fn)
+        self.assertEqual(res["state"], "كافٍ")
+        self.assertEqual(len(res["guided_rounds"]), 1)
+        self.assertLessEqual(calls["n"], S.MAX_GUIDED_ROUNDS)
+
+        # junk rounds only: bounded by the declared cap, state stays insufficient
+        def junk_fn(query, k):
+            return [{"id": f"j{calls['n']}", "text": "نص آخر مختلف تمامًا",
+                     "metadata": {"document": "Guide_Interne_Operations_"
+                                              "Bancaires_Islamiques.docx"}}]
+
+        res2 = S.check(q, [weak], search_fn=junk_fn)
+        self.assertEqual(res2["state"], "غير كافٍ")
+        # Bounded by the declared cap — and it now stops as soon as there is
+        # no UNSEARCHED term left, instead of re-issuing the same query. The
+        # owner's 2026-10-05 run measured the old waste directly: two rounds,
+        # both «صرف عمليات», the second retrieving nothing new. Pinning the
+        # exact round count would pin that accident; pin that it is bounded
+        # and that no two rounds search the same terms.
+        self.assertLessEqual(len(res2["guided_rounds"]), S.MAX_GUIDED_ROUNDS)
+        queries = [r["query"] for r in res2["guided_rounds"]]
+        self.assertEqual(len(set(queries)), len(queries), queries)
+
+    def test_multi_requirement_differentiation(self):
+        import sufficiency as S
+        # compound question: sub-question 2 (numeric) missing from the pool
+        q = "في المضاربة المقيدة: من يتحمل مخاطر الاستثمار، وكم تبلغ نسبة عائد الحريف؟"
+        base = self._hit("المضاربة المقيدة يتحمل فيها البنك مخاطر الاستثمار "
+                         "في حدود معينة",
+                         doc="Circulaire_BCT_2019-08.pdf", hid="a")
+        res = S.check(q, [base])
+        subs = {r["sub_question"] for r in res["requirements"]}
+        self.assertIn(1, subs)
+        self.assertIn(2, subs)
+        self.assertEqual(res["state"], "غير كافٍ")
+        # the refusal names WHICH requirement is missing (differentiation)
+        self.assertTrue(res["missing"])
+
+    def test_precedence_table_declared(self):
+        import sufficiency as S
+        self.assertEqual(list(S.PRECEDENCE.values()), [1, 2, 3, 4])
+        self.assertEqual(S.PRECEDENCE["Loi_2016-48.pdf"], 1)
+
+    def test_inert_layer_no_deployed_imports(self):
+        """Read-only layer: sufficiency executes in the deployed path ONLY
+        inside the SUFFICIENCY_FIELDS_ENABLED gate (item 5) — never on the
+        default path. service.py may reference it nowhere else; every other
+        deployed module must not reference it at all."""
+        import subprocess
+        for f in ["main.py", "retrieval.py", "store.py", "answer.py",
+                  "answer_ab.py", "chat.py"]:
+            out = subprocess.run(
+                ["grep", "-nE", "import sufficiency|sufficiency\.", f],
+                capture_output=True, text=True)
+            self.assertEqual(out.returncode, 1,
+                             f"{f} executes sufficiency outside the gate")
+        # service.py: exactly ONE reference, and it is the gated import
+        # (indented inside `if want_sufficiency and ...`)
+        out = subprocess.run(["grep", "-n", "import sufficiency", "service.py"],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, "service.py lost its gated import")
+        lines = [l for l in out.stdout.splitlines() if "import sufficiency" in l]
+        self.assertEqual(len(lines), 1)
+        code = lines[0].split(":", 1)[1]      # drop grep's line-number prefix
+        self.assertTrue(code.startswith("            import sufficiency"),
+                        "the sufficiency import is not inside the gate branch")
+
+
+class RelationalExpansion(unittest.TestCase):
+    """Phase-5 item 3: retrieval expansion along the Phase-4 relations under
+    the DECLARED intent policy — internal edges only for إجرائي (from) and
+    استثناء (both directions), the grounding edge only when the request names
+    BOTH the Circulaire and the law; depth <= 2, node cap; extras occupy the
+    TAIL of the top-k window (head vector hits keep their ranks); env-gated
+    default OFF."""
+
+    @staticmethod
+    def _cfg():
+        return SimpleNamespace(RELATIONAL_EXPANSION_ENABLED=True)
+
+    @staticmethod
+    def _law_hit(heading="الفصل52", rank=1, score=5.0):
+        return {"id": f"Loi_2016-48.pdf::chunk_{rank:04d}", "rank": rank,
+                "text": "chunk text", "score": score,
+                "metadata": {"document": "Loi_2016-48.pdf",
+                             "source": "Loi_2016-48.pdf", "language": "ar",
+                             "heading": heading}}
+
+    def test_procedural_query_expands_with_documented_edges(self):
+        import relational_expansion as rex
+        hits = [self._law_hit(rank=i, score=5.0 - i * 0.1) for i in range(1, 6)]
+        out = rex.expand(self._cfg(), "كيف تُمنح التراخيص للبنوك؟", hits, top_k=5)
+        extras = [h for h in out if h["metadata"].get("via_relation")]
+        self.assertTrue(extras)
+        self.assertLessEqual(len(extras), rex.NODE_CAP)
+        # art 52 references الفصول 49-51 — those units ride along, documented
+        self.assertIn("loi-2016-48:art049", [h["id"] for h in extras])
+        self.assertTrue(all(h["metadata"]["via_relation"].startswith("internal")
+                            for h in extras))
+
+    def test_tail_slots_only_head_preserved(self):
+        import relational_expansion as rex
+        hits = [self._law_hit(rank=i, score=5.0 - i * 0.1) for i in range(1, 6)]
+        out = rex.expand(self._cfg(), "كيف تُمنح التراخيص للبنوك؟", hits, top_k=5)
+        extras = [h for h in out if h["metadata"].get("via_relation")]
+        head = out[:len(out) - len(extras)]
+        self.assertEqual([h["id"] for h in head],
+                         [h["id"] for h in hits[:len(head)]])   # head untouched
+        self.assertEqual([h["rank"] for h in out], list(range(1, len(out) + 1)))
+        self.assertLessEqual(len(out), 5)                        # top_k respected
+
+    def test_expansion_rescues_missing_evidence(self):
+        """The mechanism proof: a case whose expected evidence lives in a
+        REFERENCED article's verbatim text is served by the expansion."""
+        import relational_expansion as rex
+        import evaluate
+        hits = [self._law_hit(rank=i, score=5.0 - i * 0.1) for i in range(1, 6)]
+        out = rex.expand(self._cfg(), "كيف تُمنح التراخيص للبنوك؟", hits, top_k=5)
+        law_units = rex._law_context()[0]
+        art49 = next(u for u in law_units if u["unit_id"].endswith("art049"))
+        case = {"expected_document": "Loi_2016-48.pdf", "expected_lang": "ar",
+                "expected_substring": art49["text"][100:220]}
+        ch = evaluate.find_correct_hit(case, out)
+        self.assertIsNotNone(ch)
+        self.assertLessEqual(ch["rank"], 5)
+
+    def test_policy_is_narrow(self):
+        import relational_expansion as rex
+        # definitional / numeric / comparison requests: no expansion at all
+        for q in ("ما هي المرابحة؟", "ما الحد الأقصى لرأس المال؟",
+                  "قارن بين صيغتي المضاربة"):
+            out = rex.expand(self._cfg(), q, [self._law_hit()], top_k=5)
+            self.assertEqual([h for h in out if h.get("metadata", {}).get("via_relation")],
+                             [], q)
+        # grounding fires only when BOTH document families are named AND
+        # Circulaire evidence was retrieved (the edge is Circulaire→art011)
+        circ_hit = {"id": "Circulaire_BCT_2019-08.pdf::chunk_0002", "rank": 1,
+                    "text": "منشور", "score": 4.0,
+                    "metadata": {"document": "Circulaire_BCT_2019-08.pdf",
+                                 "source": "Circulaire_BCT_2019-08.pdf",
+                                 "language": "ar", "heading": "الفصل 2"}}
+        both = rex.expand(self._cfg(),
+                          "ماذا يقول المنشور وقانون عدد 48 عن المضاربة؟",
+                          [circ_hit, self._law_hit(rank=2, score=3.0)], top_k=5)
+        self.assertIn("loi-2016-48:art011",
+                      [h["id"] for h in both])
+        # the law alone (no Circulaire hit) does not trigger the grounding
+        law_only = rex.expand(self._cfg(), "ماذا يقول قانون عدد 48 عن المضاربة؟",
+                              [self._law_hit()], top_k=5)
+        self.assertNotIn("loi-2016-48:art011",
+                         [h["id"] for h in law_only
+                          if h.get("metadata", {}).get("via_relation")])
+
+    def test_default_off_and_inert_when_disabled(self):
+        import config
+        self.assertFalse(config.RELATIONAL_EXPANSION_ENABLED)   # default OFF
+        # the retrieval wiring is guarded: disabled flag → retrieve untouched
+        src = (Path(__file__).resolve().parent / "retrieval.py").read_text(encoding="utf-8")
+        self.assertIn('getattr(cfg, "RELATIONAL_EXPANSION_ENABLED", False)', src)
+
+
+    def test_extras_carry_mode_score_key_regression(self):
+        """Live-run regression (run 36868987998): extras without the active
+        mode's ranking key left score=None in the evaluate record and the
+        separation block crashed on max(None, float). Extras must carry the
+        mode key at 0.0 so downstream score math never sees None."""
+        import relational_expansion as rex
+        hits = [self._law_hit(rank=i, score=5.0 - i * 0.1) for i in range(1, 6)]
+        for key in ("similarity", "rrf_score", "blend_score"):
+            # live head hits carry the mode key (from query_vector / fusion)
+            live = [dict(h, **{key: h["score"]}) for h in hits]
+            out = rex.expand(self._cfg(), "كيف تُمنح التراخيص للبنوك؟",
+                             live, top_k=5, score_key=key)
+            extras = [h for h in out if h["metadata"].get("via_relation")]
+            self.assertTrue(extras)
+            # every hit has a non-None score under the active mode's key —
+            # the evaluate separation max() is safe on the full window
+            scores = [h.get(key) for h in out]
+            self.assertTrue(all(s is not None for s in scores))
+            self.assertTrue(all(h[key] == 0.0 for h in extras))  # tail rank
+            self.assertEqual(max(scores), max(5.0 - i * 0.1 for i in range(1, 6)))
+
+
+class UnitsExtraction(unittest.TestCase):
+    """Phase-4 item 1: Loi 2016-48 knowledge units — article-level split from
+    the adopted codex through the SHARED marker machinery (restructure.
+    _extract_markers), verbatim bodies (paragraph breaks preserved), stable
+    article-based ids, governed functional types."""
+
+    @staticmethod
+    def _units():
+        import restructure, units
+        codex = restructure._adopted_codex_text("Loi_2016-48.pdf")
+        return units.extract_law_units(codex), codex
+
+    def test_full_coverage_and_verbatim(self):
+        import units
+        uls, codex = self._units()
+        cov = units.coverage_report(uls, codex)
+        self.assertEqual(cov["n_units"], 198)
+        self.assertEqual(cov["first_article"], 1)
+        self.assertEqual(cov["last_article"], 198)
+        self.assertEqual(cov["missing_numbers"], [])
+        self.assertEqual(cov["duplicate_ids"], 0)
+        self.assertEqual(cov["empty_bodies"], 0)
+        self.assertEqual(cov["empty_descriptions"], 0)
+        self.assertTrue(cov["all_text_verbatim_in_codex"])
+
+    def test_stable_ids_and_determinism(self):
+        uls, _ = self._units()
+        again, _ = self._units()
+        self.assertEqual(uls, again)
+        self.assertEqual([u["unit_id"] for u in uls],
+                         [f"loi-2016-48:art{i:03d}" for i in range(1, 199)])
+
+    def test_ordinal_first_article_and_heading_paths(self):
+        uls, _ = self._units()
+        first = uls[0]
+        self.assertEqual(first["heading"], "الفصل الاول")
+        self.assertIn("الفصل الاول", first["path"])
+        self.assertIn(">", first["path"])          # العنوان > الباب > الفصل
+        art183 = next(u for u in uls if u["unit_id"].endswith("art183"))
+        self.assertEqual(art183["path"],
+                         "العنوان التاسع > الباب الثاني > الفصل183")
+
+    def test_governed_types_on_known_articles(self):
+        uls, _ = self._units()
+        by_id = {u["unit_id"]: u for u in uls}
+        self.assertEqual(by_id["loi-2016-48:art183"]["type"], "penalty")
+        self.assertTrue(by_id["loi-2016-48:art183"]["numeric"])
+        self.assertEqual(by_id["loi-2016-48:art010"]["type"], "definition")
+        # the type table's declared order is the governance: first match wins
+        import units
+        self.assertEqual(units._classify("يعاقب بالسجن...")[0], "penalty")
+        self.assertEqual(units._classify("تعتبر خدمات دفع على معنى")[0], "definition")
+        self.assertEqual(units._classify("نص عام لا قواعد له")[0], "general")
+
+    def test_description_is_the_body_head(self):
+        import re
+        uls, _ = self._units()
+        for u in uls[::37]:               # deterministic sample
+            flat = re.sub(r"\s+", " ", u["text"]).strip()
+            self.assertTrue(flat.startswith(u["description"][:40]))
+            self.assertLessEqual(len(u["description"]), 181)
+
+    def test_emitted_data_file_matches_extraction(self):
+        import json as _json
+        from pathlib import Path as _Path
+        uls, _ = self._units()
+        data = _json.loads((_Path(__file__).resolve().parent
+                            / "units_loi_2016_48.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["units"], uls)
+
+
+class TargetSetIntegrity(unittest.TestCase):
+    """Phase-3 authoring round: the target-category set (questions_targets.json)
+    stays schema-valid, balanced (2 per target category) and evidence-anchored
+    to the four adopted documents. PRESENTED-FOR-ADOPTION state is part of the
+    file's _comment; adoption flips it in this test's expectations."""
+
+    def test_target_set_loads_balanced_and_anchored(self):
+        import evaluate
+        cases = evaluate.load_question_set(
+            Path(__file__).resolve().parent / "questions_targets.json")
+        self.assertEqual(len(cases), 10)
+        cats = {}
+        for c in cases:
+            cats[c["category"]] = cats.get(c["category"], 0) + 1
+            self.assertIn(c["expected_document"], (
+                "Circulaire_BCT_2019-08.pdf",
+                "Guide_Interne_Operations_Bancaires_Islamiques.docx",
+                "Loi_2016-48.pdf", "Madkhal_Sayrafa_Islamiya.docx"))
+            self.assertEqual(c["language"], "ar")
+            if c["category"] == "ambiguous":
+                self.assertTrue((c.get("ambiguity_note") or "").strip())
+            if c["category"] in ("implicit", "compound"):
+                self.assertEqual(len(c["expected_substrings"]), 2)
+        self.assertEqual(cats, {"colloquial": 2, "synonyms": 2, "implicit": 2,
+                                "compound": 2, "ambiguous": 2})
+        # ids are unique and namespaced away from the adopted 50-set
+        self.assertEqual(len({c["id"] for c in cases}), 10)
+        self.assertTrue(all(c["id"].startswith("t") for c in cases))
+
+
+class RealReportModes(unittest.TestCase):
+    """Phase 2 step 3.2: real_report.py builds the retrieval-mode comparison
+    (vector vs rrf vs blend on the restructure arm) and carries it into the
+    ANNO annotation line the workflow reads from the sandbox."""
+
+    @staticmethod
+    def _run(mode, ranks, generated_at="2026-10-01T00:00:00+00:00"):
+        """Minimal evaluate.save_run-shaped JSON: ranks maps qid -> correct_rank
+        (None = miss). Two answerable questions (ar + fr) and one OOS."""
+        questions = []
+        for qid, lang, rank in (("q1", "ar", ranks["q1"]),
+                                ("q2", "fr", ranks["q2"])):
+            hit = None if rank is None else {"id": f"{qid}::chunk_0001",
+                                             "score": 0.5, "text": "نص",
+                                             "document": "D", "heading": "H"}
+            questions.append({"id": qid, "question": "س", "language": lang,
+                              "category": "verbatim", "is_out_of_scope": False,
+                              "correct_rank": rank,
+                              "correct_any_lang_rank": None,
+                              "hits": [hit] if hit else []})
+        questions.append({"id": "q3", "question": "خارج", "language": "ar",
+                          "category": "out-of-scope", "is_out_of_scope": True,
+                          "correct_rank": None, "correct_any_lang_rank": None,
+                          "hits": [{"id": "x", "score": 0.2, "text": "t",
+                                    "document": "D", "heading": "H"}]})
+        n_ans = 2
+        hit1 = sum(1 for r in ranks.values() if r == 1) / n_ans
+        hit3 = sum(1 for r in ranks.values() if r is not None and r <= 3) / n_ans
+        hit5 = sum(1 for r in ranks.values() if r is not None and r <= 5) / n_ans
+        fr_rank = ranks["q2"]
+        return {
+            "generated_at": generated_at,
+            "config": {"provider": "nvidia", "embedding_model": "m",
+                       "retrieval_mode": mode, "retrieval_top_k": 20,
+                       "chunk_size_tokens": 220, "chunk_overlap_tokens": 40,
+                       "hybrid_blend_lambda": 0.7 if mode == "blend" else None},
+            "metrics": {
+                "overall": {"n": n_ans, "hit@1": hit1, "hit@3": hit3,
+                            "hit@5": hit5},
+                "by_category": {"verbatim": {"n": n_ans, "hit@1": hit1,
+                                             "hit@3": hit3, "hit@5": hit5}},
+                "by_language": {
+                    "ar": {"n": 1, "hit@1": 1.0 if ranks["q1"] == 1 else 0.0,
+                           "hit@3": 1.0 if ranks["q1"] else 0.0,
+                           "hit@5": 1.0 if ranks["q1"] else 0.0},
+                    "fr": {"n": 1, "hit@1": 1.0 if fr_rank == 1 else 0.0,
+                           "hit@3": 1.0 if fr_rank else 0.0,
+                           "hit@5": 1.0 if fr_rank else 0.0}},
+                "separation": {"n_correct_retrieved": n_ans,
+                               "mean_correct_score": 0.5,
+                               "n_with_best_incorrect": 1,
+                               "mean_best_incorrect_score": 0.4,
+                               "gap_mean_correct_minus_best_incorrect": 0.1},
+                "out_of_scope": {"n": 1, "max_top1_score": 0.2,
+                                 "mean_top1_score": 0.2},
+            },
+            "questions": questions,
+        }
+
+    def test_modes_section_and_anno(self):
+        import real_report as rr
+        size = self._run("vector", {"q1": 3, "q2": None})
+        vector = self._run("vector", {"q1": 1, "q2": None})
+        rrf = self._run("rrf", {"q1": 1, "q2": 2})
+        blend = self._run("blend", {"q1": 2, "q2": 2})
+        runs = {"size": size, "restructure": vector}
+        modes = {"vector": vector, "rrf": rrf, "blend": blend}
+        md = rr.build_md(runs, None, top_k=20, modes=modes)
+        self.assertIn("Retrieval modes on the restructure arm", md)
+        self.assertIn("rrf (vector + BM25, reciprocal rank fusion)", md)
+        self.assertIn("blend (LAMBDA*cosine + BM25 score)", md)
+        # misses lists per mode: q2 misses in vector, hits everywhere else
+        self.assertIn("**misses vector (cosine only)** (1): q2 (fr/verbatim)", md)
+        self.assertIn("**misses rrf (vector + BM25, reciprocal rank fusion)** (0): none", md)
+        # flips between modes
+        self.assertIn("**flips vector → rrf:** +1 (q2) −0 (none)", md)
+        self.assertIn("Blend λ = 0.7", md)
+        anno = rr.build_anno(runs, None, modes=modes)
+        # q1: vector rank1, rrf rank1, blend rank2; q2: vector miss, rrf rank2,
+        # blend rank2 -> overall 50/50/50, 50/100/100, 0/100/100
+        self.assertIn("modes vector=50/50/50 rrf=50/100/100 blend=0/100/100",
+                      anno)
+        self.assertIn("modes_fr vector=0/0/0 rrf=0/100/100 blend=0/100/100",
+                      anno)
+        self.assertIn("mode_misses vector=[q2]", anno)
+        self.assertIn("mode_misses rrf=[]", anno)
+        # a rerank run joins the table as a fourth labeled row (Phase-3 int. 3)
+        rerank_run = self._run("vector", {"q1": 1, "q2": 1})
+        modes["rerank"] = rerank_run
+        md3 = rr.build_md(runs, None, top_k=20, modes=modes)
+        self.assertIn("vector + deterministic rerank (Phase-3 intervention 3)", md3)
+        self.assertIn("| key | n | vector | rrf | blend | rerank |", md3)
+        self.assertIn("**flips vector → rerank:**", md3)
+        anno3 = rr.build_anno(runs, None, modes=modes)
+        self.assertIn("rerank=100/100/100", anno3)
+        self.assertIn("mode_misses rerank=[]", anno3)
+        # without modes the section and the segments disappear
+        md2 = rr.build_md(runs, None, top_k=20)
+        self.assertNotIn("Retrieval modes on the restructure arm", md2)
+        anno2 = rr.build_anno(runs, None)
+        self.assertNotIn("modes_fr", anno2)
+
+
+if __name__ == '__main__':
+    unittest.main()

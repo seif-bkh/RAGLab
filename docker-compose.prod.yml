@@ -1,0 +1,40 @@
+# RAGLab production image runner — references a prebuilt image, NEVER builds.
+# The image comes from one of two places (raglab/PROD_IMAGE.md covers both):
+#   A) a registry pull:  docker pull ghcr.io/seif-bkh/raglab-service:<version>
+#      (internet needed once, at pull time only)
+#   B) a tarball on an offline machine:  gunzip -c raglab-service-*.tar.gz | docker load
+#      (zero internet — then set RAGLAB_PULL_POLICY=never below so compose
+#      never even tries to reach a registry)
+#
+#   cp raglab/.env.example raglab/.env   # keys; SET RAGLAB_SERVICE_TOKEN for prod
+#   RAGLAB_VERSION=1.2.5 docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml logs -f
+#
+# Health is reported by the image's own HEALTHCHECK (docker ps / inspect);
+# /health answers 200 open or 401 behind the token — both mean alive.
+services:
+  raglab:
+    image: ghcr.io/seif-bkh/raglab-service:${RAGLAB_VERSION:-latest}
+    pull_policy: ${RAGLAB_PULL_POLICY:-missing}    # 'never' on air-gapped machines
+    ports:
+      - "${RAGLAB_PORT:-8000}:8000"
+    env_file:
+      - raglab/.env          # NVIDIA_API_KEY / XKIRO_API_KEY / RAGLAB_SERVICE_TOKEN
+    environment:
+      # The app console + integrations need POST /profile at runtime; pin to 0
+      # for a fully frozen deployment (then the running profile is final):
+      RAGLAB_ALLOW_PROFILE_SWITCH: ${RAGLAB_ALLOW_PROFILE_SWITCH:-1}
+      # PRODUCTION RULE: RAGLAB_SERVICE_TOKEN must be set (in raglab/.env or
+      # here) and handed to the integrating app — without it /ingest,
+      # /profile and /keys are reachable by anyone who can reach the port.
+      # (the dev compose file carries the same warning; keep it honored)
+    volumes:
+      - raglab-prod-index:/app/raglab/chroma_db
+      - raglab-prod-embed-cache:/app/raglab/caches
+      - raglab-prod-documents:/app/raglab/documents
+    restart: unless-stopped
+
+volumes:
+  raglab-prod-index:
+  raglab-prod-embed-cache:
+  raglab-prod-documents:

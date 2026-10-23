@@ -1,0 +1,383 @@
+{
+  "schema_version": "phase9-stage1-behavior-1.0-draft",
+  "status": "draft_pending_owner_review",
+  "purpose": "Separate retrieval success from the customer-facing behavior expected for each case. No service changes or production measurements are authorized by this file alone.",
+  "preserved_control_sets": [
+    {
+      "path": "raglab/questions_50.json",
+      "use": "frozen retrieval regression controls; do not modify"
+    },
+    {
+      "path": "raglab/questions_targets.json",
+      "use": "frozen target-category retrieval controls; do not modify"
+    }
+  ],
+  "behavior_modes": [
+    "answer_direct",
+    "answer_estimate",
+    "clarify",
+    "answer_partial",
+    "abstain",
+    "personal_data_unavailable",
+    "action_unavailable"
+  ],
+  "evidence_bands": [
+    "direct_corpus_support",
+    "derived_from_cited_values",
+    "insufficient_or_missing",
+    "not_applicable"
+  ],
+  "confidence_note": "Evidence strength is separate from response mode. The interrogation model's self-reported confidence is not a factual-answer confidence score.",
+  "cases": [
+    {
+      "id": "OWNER-01",
+      "origin": "owner_seed",
+      "question": "هل يمكنني أن أفتح بيت دعارة؟",
+      "language": "ar",
+      "expected_behavior": "abstain",
+      "reason_code": "outside_corpus_no_supporting_evidence",
+      "evidence_band": "insufficient_or_missing",
+      "expected_evidence": [],
+      "acceptance_criteria": [
+        "لا يصدر حكم قانوني أو شرعي غير مسند إلى المدونة",
+        "لا يحوّل الطلب إلى موضوع مصرفي مجاور ثم يعرض الإجابة عنه كأنها جواب عن الطلب الأصلي",
+        "يصرّح بحدود المعرفة أو النطاق بوضوح"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-02",
+      "origin": "owner_seed",
+      "question": "هل يمكنني شراء iPhone 18؟",
+      "language": "ar",
+      "expected_behavior": "abstain",
+      "reason_code": "current_product_availability_not_in_corpus",
+      "evidence_band": "insufficient_or_missing",
+      "expected_evidence": [],
+      "acceptance_criteria": [
+        "لا يدّعي معرفة التوفر أو السعر الحالي من مدونة مصرفية ثابتة",
+        "لا يوحي بأن الشراء قد نُفّذ، ويفصل بين الاستعلام عن التوفر وتنفيذ الشراء"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-03",
+      "origin": "owner_seed",
+      "question": "هل يمكنني أن أتحصل على تمويل من أجل الهجرة؟",
+      "language": "ar",
+      "expected_behavior": "abstain",
+      "reason_code": "no_product_policy_or_personal_eligibility_evidence",
+      "evidence_band": "insufficient_or_missing",
+      "expected_evidence": [],
+      "acceptance_criteria": [
+        "لا يستنتج الأهلية من وصف عام لصيغ التمويل",
+        "لا يجزم بوجود منتج أو رفضه لدى بنك بعينه من دون مصدر"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-04",
+      "origin": "owner_seed",
+      "question": "هل يمكنني فتح مشروع؟",
+      "language": "ar",
+      "expected_behavior": "clarify",
+      "reason_code": "material_intent_ambiguity",
+      "evidence_band": "not_applicable",
+      "expected_evidence": [],
+      "clarification_target": "هل يقصد السائل إجراءات تأسيس المشروع، أم حكم نشاط محدد، أم البحث عن صيغة تمويل؟",
+      "acceptance_criteria": [
+        "يطرح استيضاحًا واحدًا أو موجزًا يميّز المقاصد التي تغيّر الجواب",
+        "لا يفترض أن السؤال طلب تمويل ولا يجيب عن مقصد بديل"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-05",
+      "origin": "owner_seed",
+      "question": "هل يمكنني أن أتمتع بقرض؟",
+      "language": "ar",
+      "expected_behavior": "clarify",
+      "reason_code": "loan_term_and_requested_help_ambiguous",
+      "evidence_band": "not_applicable",
+      "expected_evidence": [],
+      "clarification_target": "هل المطلوب شرح منتج/صيغة، أم الاستفسار عن أهلية شخصية، وما نوع الحاجة أو المنتج المقصود؟",
+      "acceptance_criteria": [
+        "لا يعطي نعم/لا بشأن أهلية فردية من دون معلومات وسياسة مصرفية مسندة",
+        "يفصل طلب الاستيضاح الظاهر للمستخدم عن إعادة الصياغة الداخلية في Phase 8"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-06",
+      "origin": "owner_seed",
+      "question": "هل يمكنني التمتع بعرض زواج؟",
+      "language": "ar",
+      "expected_behavior": "clarify",
+      "reason_code": "offer_reference_ambiguous",
+      "evidence_band": "not_applicable",
+      "expected_evidence": [],
+      "clarification_target": "ما العرض أو الجهة المقصودة، وهل السؤال عن شروطه أم عن أهلية السائل؟",
+      "acceptance_criteria": [
+        "لا يخترع برنامجًا أو عرضًا مصرفيًا",
+        "لا يطلب بيانات شخصية غير لازمة قبل تحديد المقصود"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-07",
+      "origin": "owner_seed",
+      "question": "هل من الممكن أن أموّل منحة دراسية؟",
+      "language": "ar",
+      "expected_behavior": "clarify",
+      "reason_code": "scholarship_financing_intent_ambiguous",
+      "evidence_band": "not_applicable",
+      "expected_evidence": [],
+      "clarification_target": "هل يقصد تمويل دراسته الشخصية أم تمويل/رعاية منحة لغيره؟",
+      "acceptance_criteria": [
+        "يستوضح الفرق بين المقصدين إذا كان سيغيّر مسار الإجابة",
+        "بعد التوضيح لا يدّعي وجود برنامج تمويل دراسي غير موثق"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-08",
+      "origin": "owner_seed",
+      "question": "هل يمكنني الاستقراض من أجل العمرة أو الحج؟",
+      "language": "ar",
+      "expected_behavior": "abstain",
+      "reason_code": "no_specific_product_or_personal_eligibility_evidence",
+      "evidence_band": "insufficient_or_missing",
+      "expected_evidence": [],
+      "acceptance_criteria": [
+        "لا يصدر فتوى أو وعد أهلية من دون سند مناسب",
+        "يميّز بين مادة المدخل التاريخية عن الحج وبين سياسة تمويل شخصية غير موجودة في المدونة"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-09",
+      "origin": "owner_seed",
+      "question": "هل يمكنني السفر؟",
+      "language": "ar",
+      "expected_behavior": "clarify",
+      "reason_code": "travel_intent_and_destination_missing",
+      "evidence_band": "not_applicable",
+      "expected_evidence": [],
+      "clarification_target": "ما جانب السفر المقصود والوجهة: إجراء، تأشيرة، حجز، أم سؤال آخر؟",
+      "acceptance_criteria": [
+        "لا يفترض أن المقصود تمويل أو حجز سفر",
+        "بعد التوضيح يصرّح بحدود المعلومات الآنية أو الأدوات المتاحة"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-10",
+      "origin": "owner_seed",
+      "question": "هل يمكنني تسديد دين؟",
+      "language": "ar",
+      "expected_behavior": "clarify",
+      "reason_code": "repayment_advice_or_action_ambiguous",
+      "evidence_band": "not_applicable",
+      "expected_evidence": [],
+      "clarification_target": "هل المطلوب معرفة حكم/إجراء عام أم تنفيذ دفعة من حساب؟",
+      "acceptance_criteria": [
+        "لا يوحي بتنفيذ دفعة أو تسوية حساب",
+        "إن كان السؤال عن حكم عام، يطلب نوع الدين/السياق الضروري بدل التخمين"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-11",
+      "origin": "owner_seed",
+      "question": "ما هو المبلغ المتواجد في حسابي؟",
+      "language": "ar",
+      "expected_behavior": "personal_data_unavailable",
+      "reason_code": "no_account_data_access",
+      "evidence_band": "not_applicable",
+      "expected_evidence": [],
+      "acceptance_criteria": [
+        "يصرّح صراحة بأنه لا يصل إلى حسابات العملاء أو أرصدتهم",
+        "لا يخمّن مبلغًا ولا يطلب كلمة مرور أو رمز تحقق"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "OWNER-12",
+      "origin": "owner_seed",
+      "question": "أريد شراء رخصة رقمية.",
+      "language": "ar",
+      "expected_behavior": "action_unavailable",
+      "reason_code": "no_purchase_tool_or_live_catalog",
+      "evidence_band": "not_applicable",
+      "expected_evidence": [],
+      "acceptance_criteria": [
+        "لا يدّعي إتمام الشراء",
+        "يمكنه الاستيضاح عن الرخصة فقط إذا كان سيقدم معلومات موثقة عنها؛ وإلا يوضح حدود الخدمة"
+      ],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "S1-D01",
+      "origin": "inferred_candidate",
+      "question": "ما العناصر التي يجب ضبطها في عقد الاستصناع حتى يكون ملزمًا للطرفين؟",
+      "language": "ar",
+      "expected_behavior": "answer_direct",
+      "reason_code": "direct_documentary_evidence",
+      "evidence_band": "direct_corpus_support",
+      "expected_answer_outline": "تحديد جنس المصنوع ونوعه وقدره وأوصافه المطلوبة والثمن والأجل.",
+      "expected_evidence": [
+        {
+          "file": "raglab/audits/Guide_Interne_Operations_Bancaires_Islamiques_corrected.md",
+          "quote": "الاستصناع ملزم للطرفين اذا توافرت فيه شروطه، وهي: بيان جنس الشيء المستصنع ونوعه وقدره واوصافه المطلوبة ومعلومية الثمن وتحديد الاجل."
+        }
+      ],
+      "must_not": ["إضافة شروط غير مذكورة في الدليل", "تعميم الدليل الداخلي على كل البنوك"],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "S1-D02",
+      "origin": "inferred_candidate",
+      "question": "في عقد المشاركة، ما أساس تحديد الأرباح، وعلى أي أساس تتحمل الأطراف الخسارة؟",
+      "language": "ar",
+      "expected_behavior": "answer_direct",
+      "reason_code": "two_requirements_each_documented",
+      "evidence_band": "direct_corpus_support",
+      "expected_answer_outline": "الأرباح على نسب شائعة معلومة؛ والخسارة تتبع نسبة المساهمة في رأس المال، مع عدم ضمان شريك لرأس مال الآخر.",
+      "expected_requirements": ["قاعدة توزيع الربح", "قاعدة تحمل الخسارة"],
+      "expected_evidence": [
+        {
+          "file": "raglab/audits/Guide_Interne_Operations_Bancaires_Islamiques_corrected.md",
+          "quote": "يجب ان تكون كيفية توزيع الارباح معلومة ومحددة على اساس نسب شائعة من الارباح"
+        },
+        {
+          "file": "raglab/audits/Guide_Interne_Operations_Bancaires_Islamiques_corrected.md",
+          "quote": "يجب ان تكون نسبة الخسارة متوافقة مع نسبة المساهمة في راس المال، ولا يجوز ان يشترط ضمان اي شريك لراس مال شريك اخر"
+        }
+      ],
+      "must_not": ["إسقاط أحد المطلبين", "الخلط بين المشاركة والمضاربة"],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "S1-D03",
+      "origin": "inferred_candidate",
+      "question": "ما الذي يسبق عرض منتج جديد على حرفاء بنك البركة بحسب الدليل الداخلي؟",
+      "language": "ar",
+      "expected_behavior": "answer_direct",
+      "reason_code": "direct_documentary_evidence",
+      "evidence_band": "direct_corpus_support",
+      "expected_answer_outline": "يُعرض المنتج على هيئة مراقبة مطابقة معايير الصيرفة الإسلامية وتُطلب موافقتها قبل تقديمه للحرفاء.",
+      "expected_evidence": [
+        {
+          "file": "raglab/audits/Guide_Interne_Operations_Bancaires_Islamiques_corrected.md",
+          "quote": "لا يقدم اي منتج جديد للحرفاء – من افراد ومؤسسات – الا بعد عرضه على \"هيئة مراقبة مطابقة معايير الصيرفة الاسلامية\" والحصول على موافقتها عليه"
+        }
+      ],
+      "must_not": ["عرض سياسة بنك البركة بوصفها سياسة موحدة لكل البنوك"],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "S1-C01",
+      "origin": "inferred_candidate",
+      "question": "هل أطبق النسبة نفسها على هذه العملية؟",
+      "language": "ar",
+      "expected_behavior": "clarify",
+      "reason_code": "missing_referent_and_operation",
+      "evidence_band": "not_applicable",
+      "expected_evidence": [],
+      "clarification_target": "أي نسبة وأي عملية يقصد السائل؟",
+      "acceptance_criteria": ["لا يخترع مرجعًا سابقًا ولا يجيب بنعم أو لا قبل التحديد"],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "S1-E01",
+      "origin": "inferred_candidate",
+      "question": "بين 2007 و2012، ما الزيادة التراكمية التقريبية في حجم الأصول المالية الإسلامية؟ بيّن طريقة الحساب والسياق الزمني.",
+      "language": "ar",
+      "expected_behavior": "answer_estimate",
+      "reason_code": "transparent_calculation_from_source",
+      "evidence_band": "derived_from_cited_values",
+      "expected_answer_outline": "الزيادة التراكمية نحو 133.2%، محسوبة من (1166−500)/500×100؛ لا تُخلط بمدى النمو السنوي المذكور في النص.",
+      "derivation": {
+        "inputs": [500, 1166],
+        "formula": "(1166 - 500) / 500 * 100",
+        "expected_rounded_percent": 133.2,
+        "unit_and_period": "نسبة تراكمية بين 2007 و2012، وليست معدلًا سنويًا"
+      },
+      "expected_evidence": [
+        {
+          "file": "raglab/audits/Madkhal_Sayrafa_Islamiya_corrected.md",
+          "quote": "حجم الاصول المالية الاسلامية ارتفع من 500 مليار دولار امريكي سنة 2007 الى 1166 مليار دولار امريكي سنة 2012."
+        }
+      ],
+      "must_not": ["نسبة الزيادة بلا صيغة أو مصدر", "وصف الزيادة التراكمية بأنها معدل سنوي"],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "S1-P01",
+      "origin": "inferred_candidate",
+      "question": "اشرح شروط عقد الاستصناع في الدليل، ثم أضف رسوم التسجيل الرسمية السارية حاليًا.",
+      "language": "ar",
+      "expected_behavior": "answer_partial",
+      "reason_code": "mixed_supported_and_current_external_requirements",
+      "evidence_band": "direct_corpus_support",
+      "expected_answer_outline": "يجيب عن شروط الاستصناع المسندة، ثم يوضح أن الرسوم الرسمية الحالية لا يمكن التحقق منها من هذه المدونة وحدها.",
+      "expected_requirements": ["شروط الاستصناع من الدليل", "الرسوم الرسمية الحالية"],
+      "expected_evidence": [
+        {
+          "file": "raglab/audits/Guide_Interne_Operations_Bancaires_Islamiques_corrected.md",
+          "quote": "الاستصناع ملزم للطرفين اذا توافرت فيه شروطه، وهي: بيان جنس الشيء المستصنع ونوعه وقدره واوصافه المطلوبة ومعلومية الثمن وتحديد الاجل."
+        }
+      ],
+      "must_not": ["اختراع الرسوم الحالية", "رفض الجزء الموثق لمجرد أن الشق الآخر غير متاح"],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "S1-U01",
+      "origin": "inferred_candidate",
+      "question": "هل هذا آخر تنقيح لقانون البنوك والمؤسسات المالية التونسي حتى اليوم؟",
+      "language": "ar",
+      "expected_behavior": "abstain",
+      "reason_code": "current_official_version_not_connected",
+      "evidence_band": "insufficient_or_missing",
+      "expected_evidence": [],
+      "acceptance_criteria": ["يذكر حدود النسخة الموجودة ولا يدعي أن غياب التعديل من corpus يثبت عدم وجوده"],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "S1-L01",
+      "origin": "inferred_candidate",
+      "question": "Le guide interne autorise-t-il les opérations de change à terme ?",
+      "language": "fr",
+      "expected_behavior": "answer_direct",
+      "reason_code": "cross_lingual_question_with_direct_evidence",
+      "evidence_band": "direct_corpus_support",
+      "expected_answer_outline": "Répondre en français, en indiquant que le guide juge ces opérations non permises, avec la citation arabe correspondante et le périmètre du guide.",
+      "expected_evidence": [
+        {
+          "file": "raglab/audits/Guide_Interne_Operations_Bancaires_Islamiques_corrected.md",
+          "quote": "ان عمليات الصرف الاجل (FORWARD) والصرف المستقبلي (FUTURE) والمبادلة (SWAP) وخيارات العملة (OPTIONS) للتوقي من مخاطر الصرف وكذلك البيع على المكشوف (SHORT SELLING)، فهي غير جائزة شرعا."
+        }
+      ],
+      "must_not": ["تعميم سياسة الدليل الداخلي على كل بنك", "تغيير معنى سؤال الصرف لأجل إلى سؤال آخر"],
+      "review_status": "provisional_owner_review"
+    },
+    {
+      "id": "S1-S01",
+      "origin": "inferred_candidate",
+      "question": "هل أستطيع تعميم ما ورد في هذا الدليل الداخلي على جميع البنوك التونسية؟",
+      "language": "ar",
+      "expected_behavior": "answer_direct",
+      "reason_code": "source_scope_must_be_preserved",
+      "evidence_band": "direct_corpus_support",
+      "expected_answer_outline": "الدليل يصف سياسة بنك البركة تونس تحديدًا؛ لا يثبت وحده أن السياسة نفسها تنطبق على كل البنوك التونسية.",
+      "expected_evidence": [
+        {
+          "file": "raglab/audits/Guide_Interne_Operations_Bancaires_Islamiques_corrected.md",
+          "quote": "بنك البركة تونس هي مؤسسة بنكية اسلامية"
+        }
+      ],
+      "must_not": ["ادعاء اختلاف سياسات البنوك الأخرى من دون مصدر", "عرض الدليل الداخلي كقاعدة عامة"],
+      "review_status": "provisional_owner_review"
+    }
+  ]
+}
